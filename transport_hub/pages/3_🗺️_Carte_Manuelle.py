@@ -10,7 +10,7 @@ from pathlib import Path
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://ton-service.onrender.com")
+MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://cartes-bot.onrender.com")
 
 st.set_page_config(page_title="Carte Manuelle", page_icon="🗺️", layout="wide")
 st.write(f"DEBUG URL: {MAP_SERVER_URL}")  # ← garde le debug pour vérifier
