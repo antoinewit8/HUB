@@ -34,7 +34,6 @@ if "server_ready" not in st.session_state:
 
 if not st.session_state["server_ready"]:
     st.error("❌ Serveur de cartes inaccessible.")
-    st.info(f"💡 Vérifie : `{MAP_SERVER_URL}`")
     st.stop()
 
 # ─── INIT STATE ───────────────────────────────────────────────────────────────
@@ -45,7 +44,7 @@ if "map_url" not in st.session_state:
 # ─── LAYOUT ───────────────────────────────────────────────────────────────────
 col_form, col_map = st.columns([1, 2])
 
-# ───────────────── FORMULAIRE ─────────────────
+# ───────────────── FORMULAIRE (Colonne Gauche) ─────────────────
 with col_form:
     st.subheader("📋 Paramètres")
 
@@ -58,7 +57,7 @@ with col_form:
 
         submitted = st.form_submit_button("🗺️ Calculer", use_container_width=True)
 
-    # ─── AFFICHAGE DES RÉSULTATS ───
+    # ─── AFFICHAGE DES RÉSULTATS (Sous le formulaire) ───
     if st.session_state["calc"]:
         calc = st.session_state["calc"]
 
@@ -77,13 +76,30 @@ with col_form:
         st.rerun()
 
 
-# ───────────────── CARTE ─────────────────
+# ───────────────── CARTE (Colonne Droite) ─────────────────
 with col_map:
     st.subheader("🗺️ Carte interactive")
-    components.iframe(src=st.session_state["map_url"], height=650)
+    
+    # Si on a déjà un calcul, on affiche le HTML local
+    if st.session_state["calc"]:
+        try:
+            with open("map.html", "r", encoding="utf-8") as f:
+                html_template = f.read()
+            
+            # Injection des noms de villes dans le template HTML
+            html_ready = html_template.replace("{{ route.origin }}", origine if origine else "")\
+                                      .replace("{{ route.dest }}", destination if destination else "")
+            
+            # Affichage DIRECT du code HTML
+            components.html(html_ready, height=650, scrolling=False)
+        except FileNotFoundError:
+            st.error("⚠️ Fichier map.html introuvable.")
+    else:
+        # Affichage par défaut (iframe vide ou message)
+        components.iframe(src=st.session_state["map_url"], height=650)
 
 
-# ───────────────── TRAITEMENT ─────────────────
+# ───────────────── TRAITEMENT (Logique après clic) ─────────────────
 if submitted:
 
     if not origine.strip() or not destination.strip():
@@ -110,16 +126,11 @@ if submitted:
 
             calc = resp_calc.json()
 
-        except requests.exceptions.Timeout:
-            st.warning("⏳ Timeout serveur → retry...")
-            st.session_state["server_ready"] = False
-            st.rerun()
-
-        except requests.exceptions.ConnectionError:
-            st.error("❌ Connexion serveur impossible")
+        except Exception as e:
+            st.error(f"❌ Connexion impossible : {e}")
             st.stop()
 
-    # ─── 2. CRÉATION CARTE ───
+    # ─── 2. CRÉATION ROUTE SUR SERVEUR ───
     with st.spinner("🗺️ Génération carte..."):
         try:
             resp_map = requests.post(
@@ -136,52 +147,22 @@ if submitted:
                 timeout=30
             )
 
-            if resp_map.status_code != 200:
-                st.error("❌ Erreur création carte")
-                st.stop()
+            if resp_map.status_code == 200:
+                map_data = resp_map.json()
+                route_id = map_data["id"]
 
-            map_data = resp_map.json()
-            route_id = map_data["id"]
-
-            # ✅ UPDATE STATE (clé du fonctionnement)
-            st.session_state["map_url"] = f"{MAP_SERVER_URL}/carte?id={route_id}"
-            st.session_state["calc"] = calc
-
-            st.rerun()
+                # Mise à jour de l'état
+                st.session_state["map_url"] = f"{MAP_SERVER_URL}/carte?id={route_id}"
+                st.session_state["calc"] = calc
+                st.rerun()
 
         except Exception as e:
-            st.error(f"❌ Erreur : {e}")
-            st.stop()
+            st.error(f"❌ Erreur map : {e}")
 
-    # ── Métriques ─────────────────────────────────────────────
-    st.success("✅ Itinéraire calculé !")
-
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("📏 Distance", f"{calc['distance_km']} km")
-    col_b.metric("⏱️ Durée",    f"{calc['duration_h']} h")
-    col_c.metric("💶 Péages",   f"{calc.get('prix_peage', 0.0)} €")
-
-    # ── Carte iframe ──────────────────────────────────────────
-    st.markdown("---")
-    st.subheader("🗺️ Carte interactive")
-
-    col_link, col_reset = st.columns([4, 1])
-    with col_link:
-        st.caption(f"🔗 [Ouvrir en plein écran]({map_url})")
-    with col_reset:
-        if st.button("🔄 Réinitialiser le serveur"):
-            st.session_state["server_ready"] = False
-            st.rerun()
-
-    components.iframe(src=map_url, height=650, scrolling=False)
-
-    # ── Debug ─────────────────────────────────────────────────
-    with st.expander("🔧 Détails techniques"):
+# ── DEBUG (En bas de page) ─────────────────────────────────────────────────
+if st.session_state["calc"]:
+    with st.expander("🔧 Détails techniques & JSON"):
         st.json({
-            "route_id":       route_id,
-            "map_url":        map_url,
-            "origin":         origine,
-            "destination":    destination,
-            "avoid_tolls":    avoid_tolls,
-            "avoid_highways": avoid_highways,
+            "map_url": st.session_state["map_url"],
+            "donnees_calcul": st.session_state["calc"]
         })
