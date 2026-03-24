@@ -121,23 +121,32 @@ with col_map:
     if st.session_state["calc"]:
         calc = st.session_state["calc"]
         try:
-            # 1. On lit ton fichier map.html qui est sur ton ordinateur
+            # 1. Lire le fichier map.html local
             with open("map.html", "r", encoding="utf-8") as f:
                 html_template = f.read()
             
-            # 2. On injecte les données du calcul directement dans le code HTML
-            # On remplace les balises {{ ... }} par les vraies valeurs du calcul
-            html_final = html_template.replace("{{ route.origin }}", origine if origine else "Départ")\
-                                      .replace("{{ route.dest }}", destination if destination else "Arrivée")\
-                                      .replace("{{ route.polyline }}", calc.get("polyline", "")) # Très important pour dessiner la route
+            # 2. Remplacer les balises par les vraies valeurs
+            # ATTENTION : Les noms doivent correspondre exactement à ceux dans ton map.html
+            html_final = html_template.replace("{{ route.origin }}", origine if origine else "Départ")
+            html_final = html_final.replace("{{ route.dest }}", destination if destination else "Arrivée")
             
-            # 3. On affiche le HTML directement (SANS passer par l'URL Render)
+            # Injection de la Polyline (le tracé GPS) - TRÈS IMPORTANT
+            if "polyline" in calc:
+                html_final = html_final.replace("{{ route.polyline }}", calc["polyline"])
+            
+            # Injection des stats pour l'infobox de la carte
+            html_final = html_final.replace("{{ route.distance_km }}", str(calc.get("distance_km", 0)))
+            html_final = html_final.replace("{{ route.duration_h }}", str(calc.get("duration_h", 0)))
+
+            # 3. Affichage direct du code HTML injecté
             components.html(html_final, height=700, scrolling=False)
             
         except FileNotFoundError:
-            st.error("❌ Le fichier 'map.html' est introuvable. Place-le dans le même dossier que ce script.")
+            st.error("❌ Fichier 'map.html' non trouvé dans le dossier du script.")
+        except Exception as e:
+            st.error(f"❌ Erreur lors de l'affichage de la carte : {e}")
     else:
-        st.info("💡 Saisissez un itinéraire et cliquez sur Calculer pour afficher la carte.")
+        st.info("💡 Calculez un itinéraire pour afficher la carte ici.")
 # ── DEBUG (Bas) ─────────────────────────────────────────────────────────────
 if st.session_state["calc"]:
     with st.expander("🔧 Détails techniques"):
