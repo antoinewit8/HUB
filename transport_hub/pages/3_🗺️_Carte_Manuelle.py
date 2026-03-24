@@ -6,22 +6,18 @@ import os
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Chargement explicite du .env
+# ─── Config ───────────────────────────────────────────────────────────────────
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://cartes-bot.onrender.com")
 
 st.set_page_config(page_title="Carte Manuelle", page_icon="🗺️", layout="wide")
-st.write(f"DEBUG URL: {MAP_SERVER_URL}")  # ← garde le debug pour vérifier
 st.title("🗺️ Carte de trajet manuelle")
 st.caption("Calcule et visualise un itinéraire PTV interactif")
 
-# ─────────────────────────────────────────────
-# WARM UP (Render free tier)
-# ─────────────────────────────────────────────
+# ─── Warm Up ──────────────────────────────────────────────────────────────────
 def warm_up_server() -> bool:
-    """Réveille le serveur Render si endormi."""
     for attempt in range(1, 7):
         try:
             r = requests.get(f"{MAP_SERVER_URL}/health", timeout=10)
@@ -32,100 +28,129 @@ def warm_up_server() -> bool:
         time.sleep(10)
     return False
 
-# ── Warm up au chargement de la page (1 seule fois par session) ──
 if "server_ready" not in st.session_state:
     with st.spinner("🔌 Démarrage du serveur... (30-60 sec si inactif)"):
-        ok = warm_up_server()
-        st.session_state["server_ready"] = ok
+        st.session_state["server_ready"] = warm_up_server()
 
 if not st.session_state["server_ready"]:
     st.error("❌ Serveur de cartes inaccessible.")
-    st.info(f"💡 Vérifie que le service Render est bien déployé : `{MAP_SERVER_URL}`")
+    st.info(f"💡 Vérifie : `{MAP_SERVER_URL}`")
     st.stop()
 
-# ─────────────────────────────────────────────
-# FORMULAIRE
-# ─────────────────────────────────────────────
-with st.form("form_carte"):
-    col1, col2 = st.columns(2)
-    with col1:
-        origine = st.text_input("📍 Départ", placeholder="Ex : Dunkerque, France")
-    with col2:
+# ─── INIT STATE ───────────────────────────────────────────────────────────────
+if "map_url" not in st.session_state:
+    st.session_state["map_url"] = f"{MAP_SERVER_URL}/carte/default"
+    st.session_state["calc"] = None
+
+# ─── LAYOUT ───────────────────────────────────────────────────────────────────
+col_form, col_map = st.columns([1, 2])
+
+# ───────────────── FORMULAIRE ─────────────────
+with col_form:
+    st.subheader("📋 Paramètres")
+
+    with st.form("form_carte"):
+        origine     = st.text_input("📍 Départ", placeholder="Ex : Dunkerque, France")
         destination = st.text_input("🏁 Arrivée", placeholder="Ex : Lyon, France")
 
-    col3, col4 = st.columns(2)
-    with col3:
-        avoid_tolls    = st.checkbox("🚫 Éviter les péages",     value=False)
-    with col4:
-        avoid_highways = st.checkbox("🚫 Éviter les autoroutes", value=False)
+        avoid_tolls    = st.checkbox("🚫 Éviter les péages")
+        avoid_highways = st.checkbox("🚫 Éviter les autoroutes")
 
-    submitted = st.form_submit_button("🗺️ Calculer et afficher", use_container_width=True)
+        submitted = st.form_submit_button("🗺️ Calculer", use_container_width=True)
 
-# ─────────────────────────────────────────────
-# TRAITEMENT
-# ─────────────────────────────────────────────
+    # ─── AFFICHAGE DES RÉSULTATS ───
+    if st.session_state["calc"]:
+        calc = st.session_state["calc"]
+
+        st.markdown("---")
+        st.success("✅ Itinéraire calculé")
+
+        st.metric("📏 Distance", f"{calc['distance_km']} km")
+        st.metric("⏱️ Durée",    f"{calc['duration_h']} h")
+        st.metric("💶 Péages",   f"{calc.get('prix_peage', 0.0)} €")
+
+        st.caption(f"🔗 [Ouvrir en plein écran]({st.session_state['map_url']})")
+
+    # Reset serveur
+    if st.button("🔄 Reset serveur"):
+        st.session_state["server_ready"] = False
+        st.rerun()
+
+
+# ───────────────── CARTE ─────────────────
+with col_map:
+    st.subheader("🗺️ Carte interactive")
+    components.iframe(src=st.session_state["map_url"], height=650)
+
+
+# ───────────────── TRAITEMENT ─────────────────
 if submitted:
+
     if not origine.strip() or not destination.strip():
         st.error("❌ Merci de renseigner le départ et l'arrivée.")
         st.stop()
 
-    # ── Étape 1 : recalculate ─────────────────────────────────
-    with st.spinner("⏳ Calcul de l'itinéraire via PTV..."):
+    # ─── 1. CALCUL ITINÉRAIRE ───
+    with st.spinner("⏳ Calcul itinéraire..."):
         try:
             resp_calc = requests.post(
                 f"{MAP_SERVER_URL}/api/recalculate",
                 json={
-                    "origin":         origine.strip(),
-                    "dest":           destination.strip(),
-                    "avoid_tolls":    avoid_tolls,
+                    "origin": origine.strip(),
+                    "dest": destination.strip(),
+                    "avoid_tolls": avoid_tolls,
                     "avoid_highways": avoid_highways,
                 },
-                timeout=60   # 60s car Render peut être lent
+                timeout=60
             )
 
             if resp_calc.status_code != 200:
-                st.error(f"❌ Erreur calcul ({resp_calc.status_code}) : {resp_calc.text}")
+                st.error(f"❌ Erreur calcul : {resp_calc.text}")
                 st.stop()
 
             calc = resp_calc.json()
 
         except requests.exceptions.Timeout:
-            # Render s'est rendormi entre le warm_up et le calcul
-            st.warning("⏳ Serveur lent, nouvelle tentative...")
+            st.warning("⏳ Timeout serveur → retry...")
             st.session_state["server_ready"] = False
             st.rerun()
 
         except requests.exceptions.ConnectionError:
-            st.error(f"❌ Connexion perdue : `{MAP_SERVER_URL}`")
+            st.error("❌ Connexion serveur impossible")
             st.stop()
 
-    # ── Étape 2 : create_route ────────────────────────────────
-    with st.spinner("🗺️ Génération de la carte..."):
+    # ─── 2. CRÉATION CARTE ───
+    with st.spinner("🗺️ Génération carte..."):
         try:
             resp_map = requests.post(
                 f"{MAP_SERVER_URL}/api/create_route",
                 json={
-                    "origin":         origine.strip(),
-                    "dest":           destination.strip(),
-                    "distance_km":    calc["distance_km"],
-                    "duration_h":     calc["duration_h"],
-                    "polyline":       calc["polyline"],
-                    "prix_peage":     calc.get("prix_peage", 0.0),
+                    "origin": origine.strip(),
+                    "dest": destination.strip(),
+                    "distance_km": calc["distance_km"],
+                    "duration_h": calc["duration_h"],
+                    "polyline": calc["polyline"],
+                    "prix_peage": calc.get("prix_peage", 0.0),
                     "pref_waypoints": calc.get("pref_waypoints", []),
                 },
                 timeout=30
             )
 
             if resp_map.status_code != 200:
-                st.error(f"❌ Erreur création carte ({resp_map.status_code})")
+                st.error("❌ Erreur création carte")
                 st.stop()
 
             map_data = resp_map.json()
             route_id = map_data["id"]
-            map_url  = f"{MAP_SERVER_URL}/carte?id={route_id}"
+
+            # ✅ UPDATE STATE (clé du fonctionnement)
+            st.session_state["map_url"] = f"{MAP_SERVER_URL}/carte?id={route_id}"
+            st.session_state["calc"] = calc
+
+            st.rerun()
 
         except Exception as e:
-            st.error(f"❌ Erreur génération carte : {e}")
+            st.error(f"❌ Erreur : {e}")
             st.stop()
 
     # ── Métriques ─────────────────────────────────────────────
