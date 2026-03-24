@@ -1,17 +1,19 @@
-# pages/3_🗺️_Carte_Manuelle.py
-
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
 import time
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
-load_dotenv()
+# Chargement explicite du .env
+env_path = Path(__file__).parent.parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
-MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "http://localhost:8000")
+MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://ton-service.onrender.com")
 
 st.set_page_config(page_title="Carte Manuelle", page_icon="🗺️", layout="wide")
+st.write(f"DEBUG URL: {MAP_SERVER_URL}")  # ← garde le debug pour vérifier
 st.title("🗺️ Carte de trajet manuelle")
 st.caption("Calcule et visualise un itinéraire PTV interactif")
 
