@@ -114,12 +114,30 @@ if submitted:
                 st.error(f"Erreur : {e}")
 
 # ───────────────── CARTE (Droite) ─────────────────
+# ───────────────── CARTE (Droite) ─────────────────
 with col_map:
     st.subheader("🗺️ Carte interactive")
-    # On utilise l'URL stockée en session state
-    # C'est cette URL qui doit pointer vers la page HTML du serveur
-    components.iframe(src=st.session_state["map_url"], height=700, scrolling=False)
-
+    
+    if st.session_state["calc"]:
+        calc = st.session_state["calc"]
+        try:
+            # 1. On lit ton fichier map.html qui est sur ton ordinateur
+            with open("map.html", "r", encoding="utf-8") as f:
+                html_template = f.read()
+            
+            # 2. On injecte les données du calcul directement dans le code HTML
+            # On remplace les balises {{ ... }} par les vraies valeurs du calcul
+            html_final = html_template.replace("{{ route.origin }}", origine if origine else "Départ")\
+                                      .replace("{{ route.dest }}", destination if destination else "Arrivée")\
+                                      .replace("{{ route.polyline }}", calc.get("polyline", "")) # Très important pour dessiner la route
+            
+            # 3. On affiche le HTML directement (SANS passer par l'URL Render)
+            components.html(html_final, height=700, scrolling=False)
+            
+        except FileNotFoundError:
+            st.error("❌ Le fichier 'map.html' est introuvable. Place-le dans le même dossier que ce script.")
+    else:
+        st.info("💡 Saisissez un itinéraire et cliquez sur Calculer pour afficher la carte.")
 # ── DEBUG (Bas) ─────────────────────────────────────────────────────────────
 if st.session_state["calc"]:
     with st.expander("🔧 Détails techniques"):
