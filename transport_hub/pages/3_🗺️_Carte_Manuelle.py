@@ -32,7 +32,7 @@ def warm_up_server() -> bool:
 
 # ── Warm up au chargement de la page (1 seule fois par session) ──
 if "server_ready" not in st.session_state:
-    with st.spinner("🔌 Connexion au serveur de cartes (Render)..."):
+    with st.spinner("🔌 Démarrage du serveur... (30-60 sec si inactif)"):
         ok = warm_up_server()
         st.session_state["server_ready"] = ok
 
