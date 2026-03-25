@@ -112,14 +112,26 @@ if st.session_state["calc"]:
         </script>
         """
 
-        components.html(html_final, height=950, scrolling=False)
+        components.html(html_final, height=2000, scrolling=False)
 
     except Exception as e:
         st.error(f"❌ Erreur chargement map.html : {e}")
 
 else:
     # ─── Formulaire centré quand pas encore de carte ──────────────────────────
-    st.markdown("<div style='height:30vh'></div>", unsafe_allow_html=True)
+   st.markdown("""
+    <style>
+        /* ... ton CSS existant ... */
+        
+        /* Force l'iframe carte à remplir toute la hauteur visible */
+        iframe[title="components.html"] {
+            height: 100vh !important;
+            min-height: 100vh !important;
+            width: 100% !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
     
     with st.form("form_carte", clear_on_submit=False):
         st.markdown("### 🗺️ Calculer un itinéraire")
