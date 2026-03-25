@@ -14,12 +14,29 @@ MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://cartes-bot.onrender.c
 
 st.set_page_config(page_title="Carte Manuelle", page_icon="🗺️", layout="wide")
 
+# ─── CSS AGRESSIF ─────────────────────────────────────────────────────────────
 st.markdown("""
     <style>
-        .block-container { padding: 0 !important; margin: 0 !important; }
+        /* Supprime TOUT l'espace Streamlit */
+        .block-container { 
+            padding: 0 !important; 
+            margin: 0 !important;
+            max-width: 100% !important;
+        }
         header { display: none !important; }
         #MainMenu { display: none !important; }
         footer { display: none !important; }
+        section[data-testid="stMain"] > div:first-child {
+            padding: 0 !important;
+        }
+        div[data-testid="stVerticalBlock"] {
+            gap: 0rem !important;
+        }
+        /* L'iframe de la carte sans bordure */
+        iframe {
+            display: block !important;
+            border: none !important;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -49,58 +66,14 @@ if "server_ready" not in st.session_state:
 if "calc" not in st.session_state:
     st.session_state["calc"] = None
 
-# ─── Formulaire ───────────────────────────────────────────────────────────────
-with st.form("form_carte", clear_on_submit=False):
-    c1, c2, c3, c4, c5 = st.columns([3, 3, 1, 1, 1])
-    with c1:
-        origine = st.text_input("📍 Départ", placeholder="Ex : Dunkerque, France", label_visibility="collapsed")
-    with c2:
-        destination = st.text_input("🏁 Arrivée", placeholder="Ex : Lyon, France", label_visibility="collapsed")
-    with c3:
-        avoid_tolls = st.checkbox("🚫 Péages")
-    with c4:
-        avoid_highways = st.checkbox("🚫 Autoroutes")
-    with c5:
-        submitted = st.form_submit_button("🗺️ Calculer", use_container_width=True)
+# ─── CARTE EN PREMIER si déjà calculée ────────────────────────────────────────
+# Le formulaire flotte AU-DESSUS de la carte via HTML/CSS
+# On injecte un formulaire HTML directement dans la carte
 
-# ─── Traitement ───────────────────────────────────────────────────────────────
-if submitted:
-    if not origine.strip() or not destination.strip():
-        st.error("❌ Renseignez le départ et l'arrivée.")
-    else:
-        with st.spinner("⏳ Calcul en cours..."):
-            try:
-                payload = {
-                    "origin":         format_location(origine),   # ← modifié
-                    "dest":           format_location(destination), # ← modifié
-                    "avoid_tolls":    avoid_tolls,
-                    "avoid_highways": avoid_highways
-                }
-                st.write("📤 Payload :", payload)  # DEBUG
-
-                resp = requests.post(
-                    f"{MAP_SERVER_URL}/api/recalculate",
-                    json=payload,
-                    timeout=60
-                )
-                st.write("📥 Status :", resp.status_code)
-                st.write("📥 Réponse :", resp.text[:500])
-
-                if resp.status_code == 200:
-                    st.session_state["calc"]    = resp.json()
-                    st.session_state["origine"] = format_location(origine)
-                    st.session_state["dest"]    = format_location(destination)
-                    st.rerun()
-                else:
-                    st.error(f"❌ Erreur serveur ({resp.status_code})")
-            except Exception as e:
-                st.error(f"❌ Connexion impossible : {e}")
-
-# ─── Affichage carte ──────────────────────────────────────────────────────────
 if st.session_state["calc"]:
-    calc = st.session_state["calc"]
+    calc     = st.session_state["calc"]
     _origine = st.session_state.get("origine", "")
-    _dest    = st.session_state.get("dest", "")
+    _dest    = st.session_state.get("dest",    "")
 
     try:
         map_html_path = Path(__file__).parent.parent / "map.html"
@@ -122,9 +95,72 @@ if st.session_state["calc"]:
             route_id   = calc.get("route_id", "manual"),
             server_url = MAP_SERVER_URL
         )
-        components.html(html_final, height=820, scrolling=False)
+
+        # ✅ Hauteur = 100vh via JS injecté
+        html_final += """
+        <script>
+            // Envoie la hauteur réelle de la fenêtre à Streamlit
+            function sendHeight() {
+                const h = window.innerHeight;
+                window.parent.postMessage({
+                    type: 'streamlit:setFrameHeight',
+                    height: h
+                }, '*');
+            }
+            sendHeight();
+            window.addEventListener('resize', sendHeight);
+        </script>
+        """
+
+        components.html(html_final, height=950, scrolling=False)
 
     except Exception as e:
         st.error(f"❌ Erreur chargement map.html : {e}")
+
 else:
-    st.info("👆 Renseignez un départ et une arrivée puis cliquez sur Calculer.")
+    # ─── Formulaire centré quand pas encore de carte ──────────────────────────
+    st.markdown("<div style='height:30vh'></div>", unsafe_allow_html=True)
+    
+    with st.form("form_carte", clear_on_submit=False):
+        st.markdown("### 🗺️ Calculer un itinéraire")
+        c1, c2 = st.columns(2)
+        with c1:
+            origine = st.text_input("📍 Départ", placeholder="Ex : Liège, Belgium")
+        with c2:
+            destination = st.text_input("🏁 Arrivée", placeholder="Ex : Nieuport, Belgium")
+        
+        c3, c4, c5 = st.columns([1, 1, 2])
+        with c3:
+            avoid_tolls = st.checkbox("🚫 Éviter péages")
+        with c4:
+            avoid_highways = st.checkbox("🚫 Éviter autoroutes")
+        with c5:
+            submitted = st.form_submit_button("🗺️ Calculer l'itinéraire", use_container_width=True)
+
+    if submitted:
+        if not origine.strip() or not destination.strip():
+            st.error("❌ Renseignez le départ et l'arrivée.")
+        else:
+            with st.spinner("⏳ Calcul en cours..."):
+                try:
+                    payload = {
+                        "origin":         format_location(origine),
+                        "dest":           format_location(destination),
+                        "avoid_tolls":    avoid_tolls,
+                        "avoid_highways": avoid_highways
+                    }
+                    resp = requests.post(
+                        f"{MAP_SERVER_URL}/api/recalculate",
+                        json=payload,
+                        timeout=60
+                    )
+
+                    if resp.status_code == 200:
+                        st.session_state["calc"]    = resp.json()
+                        st.session_state["origine"] = format_location(origine)
+                        st.session_state["dest"]    = format_location(destination)
+                        st.rerun()
+                    else:
+                        st.error(f"❌ Erreur serveur ({resp.status_code}) : {resp.text[:200]}")
+                except Exception as e:
+                    st.error(f"❌ Connexion impossible : {e}")
