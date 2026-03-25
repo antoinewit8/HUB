@@ -5,6 +5,7 @@ import time
 import os
 from dotenv import load_dotenv
 from pathlib import Path
+from jinja2 import Template  # ← AJOUT
 
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
@@ -13,7 +14,6 @@ MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://cartes-bot.onrender.c
 
 st.set_page_config(page_title="Carte Manuelle", page_icon="🗺️", layout="wide")
 
-# Supprime TOUS les paddings Streamlit autour de la carte
 st.markdown("""
     <style>
         .block-container { padding: 0 !important; margin: 0 !important; }
@@ -66,15 +66,17 @@ if submitted:
                 resp = requests.post(
                     f"{MAP_SERVER_URL}/api/recalculate",
                     json={
-                        "origin":          origine.strip(),
-                        "dest":            destination.strip(),
-                        "avoid_tolls":     avoid_tolls,
-                        "avoid_highways":  avoid_highways
+                        "origin":         origine.strip(),
+                        "dest":           destination.strip(),
+                        "avoid_tolls":    avoid_tolls,
+                        "avoid_highways": avoid_highways
                     },
                     timeout=60
                 )
                 if resp.status_code == 200:
-                    st.session_state["calc"] = resp.json()
+                    st.session_state["calc"]    = resp.json()
+                    st.session_state["origine"] = origine.strip()      # ← mémorise
+                    st.session_state["dest"]    = destination.strip()  # ← mémorise
                     st.rerun()
                 else:
                     st.error(f"❌ Erreur serveur ({resp.status_code})")
@@ -84,22 +86,33 @@ if submitted:
 # ─── Affichage carte PLEIN ÉCRAN ──────────────────────────────────────────────
 if st.session_state["calc"]:
     calc = st.session_state["calc"]
+
+    # Récupère les valeurs mémorisées (car après rerun les inputs sont vides)
+    _origine = st.session_state.get("origine", "")
+    _dest    = st.session_state.get("dest", "")
+
     try:
         map_html_path = Path(__file__).parent.parent / "map.html"
         with open(map_html_path, "r", encoding="utf-8") as f:
             html_template = f.read()
 
-        html_final = (
-            html_template
-            .replace("{{ route.origin }}",      origine)
-            .replace("{{ route.dest }}",        destination)
-            .replace("{{ route.polyline }}",    str(calc.get("polyline", "[]")))
-            .replace("{{ route.distance_km }}", str(calc.get("distance_km", "")))
-            .replace("{{ route.duration_h }}",  str(calc.get("duration_h", "")))
-            .replace("{{ route.prix_peage }}",  str(calc.get("prix_peage", "0.0")))
+        # ── Rendu Jinja2 propre (gère | tojson, or, etc.) ──────────────────
+        template   = Template(html_template)
+        html_final = template.render(
+            route={
+                "origin":            _origine,
+                "dest":              _dest,
+                "polyline":          calc.get("polyline", []),
+                "polyline_current":  calc.get("polyline", []),
+                "polyline_original": calc.get("polyline", []),
+                "distance_km":       calc.get("distance_km", ""),
+                "duration_h":        calc.get("duration_h", ""),
+                "prix_peage":        calc.get("prix_peage", 0.0),
+            },
+            route_id   = calc.get("route_id", "manual"),
+            server_url = MAP_SERVER_URL
         )
 
-        # Hauteur = viewport complet moins la barre formulaire (~80px)
         components.html(html_final, height=820, scrolling=False)
 
     except Exception as e:
