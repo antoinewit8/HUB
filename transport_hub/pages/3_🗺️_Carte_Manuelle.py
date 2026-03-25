@@ -5,7 +5,7 @@ import time
 import os
 from dotenv import load_dotenv
 from pathlib import Path
-from jinja2 import Template  # ← AJOUT
+from jinja2 import Template
 
 env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
@@ -22,6 +22,13 @@ st.markdown("""
         footer { display: none !important; }
     </style>
 """, unsafe_allow_html=True)
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+def format_location(loc: str) -> str:
+    loc = loc.strip()
+    if "," in loc:
+        return loc
+    return f"{loc}, Belgium"
 
 # ─── Warm Up ──────────────────────────────────────────────────────────────────
 def warm_up_server() -> bool:
@@ -42,7 +49,7 @@ if "server_ready" not in st.session_state:
 if "calc" not in st.session_state:
     st.session_state["calc"] = None
 
-# ─── Formulaire COMPACT en haut ───────────────────────────────────────────────
+# ─── Formulaire ───────────────────────────────────────────────────────────────
 with st.form("form_carte", clear_on_submit=False):
     c1, c2, c3, c4, c5 = st.columns([3, 3, 1, 1, 1])
     with c1:
@@ -63,34 +70,35 @@ if submitted:
     else:
         with st.spinner("⏳ Calcul en cours..."):
             try:
+                payload = {
+                    "origin":         format_location(origine),   # ← modifié
+                    "dest":           format_location(destination), # ← modifié
+                    "avoid_tolls":    avoid_tolls,
+                    "avoid_highways": avoid_highways
+                }
+                st.write("📤 Payload :", payload)  # DEBUG
+
                 resp = requests.post(
                     f"{MAP_SERVER_URL}/api/recalculate",
-                    json={
-                        "origin":         origine.strip(),
-                        "dest":           destination.strip(),
-                        "avoid_tolls":    avoid_tolls,
-                        "avoid_highways": avoid_highways
-                    },
+                    json=payload,
                     timeout=60
                 )
-                st.write("📥 Status :", resp.status_code)       # DEBUG
-                st.write("📥 Réponse :", resp.text[:500])       # DEBUG
+                st.write("📥 Status :", resp.status_code)
+                st.write("📥 Réponse :", resp.text[:500])
 
                 if resp.status_code == 200:
                     st.session_state["calc"]    = resp.json()
-                    st.session_state["origine"] = origine.strip()      # ← mémorise
-                    st.session_state["dest"]    = destination.strip()  # ← mémorise
+                    st.session_state["origine"] = format_location(origine)
+                    st.session_state["dest"]    = format_location(destination)
                     st.rerun()
                 else:
                     st.error(f"❌ Erreur serveur ({resp.status_code})")
             except Exception as e:
                 st.error(f"❌ Connexion impossible : {e}")
 
-# ─── Affichage carte PLEIN ÉCRAN ──────────────────────────────────────────────
+# ─── Affichage carte ──────────────────────────────────────────────────────────
 if st.session_state["calc"]:
     calc = st.session_state["calc"]
-
-    # Récupère les valeurs mémorisées (car après rerun les inputs sont vides)
     _origine = st.session_state.get("origine", "")
     _dest    = st.session_state.get("dest", "")
 
@@ -99,7 +107,6 @@ if st.session_state["calc"]:
         with open(map_html_path, "r", encoding="utf-8") as f:
             html_template = f.read()
 
-        # ── Rendu Jinja2 propre (gère | tojson, or, etc.) ──────────────────
         template   = Template(html_template)
         html_final = template.render(
             route={
@@ -115,7 +122,6 @@ if st.session_state["calc"]:
             route_id   = calc.get("route_id", "manual"),
             server_url = MAP_SERVER_URL
         )
-
         components.html(html_final, height=820, scrolling=False)
 
     except Exception as e:
