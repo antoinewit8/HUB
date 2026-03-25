@@ -73,6 +73,9 @@ if submitted:
                     },
                     timeout=60
                 )
+                st.write("📥 Status :", resp.status_code)       # DEBUG
+                st.write("📥 Réponse :", resp.text[:500])       # DEBUG
+
                 if resp.status_code == 200:
                     st.session_state["calc"]    = resp.json()
                     st.session_state["origine"] = origine.strip()      # ← mémorise
