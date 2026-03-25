@@ -17,7 +17,6 @@ st.set_page_config(page_title="Carte Manuelle", page_icon="🗺️", layout="wid
 # ─── CSS AGRESSIF ─────────────────────────────────────────────────────────────
 st.markdown("""
     <style>
-        /* Supprime TOUT l'espace Streamlit */
         .block-container { 
             padding: 0 !important; 
             margin: 0 !important;
@@ -32,10 +31,14 @@ st.markdown("""
         div[data-testid="stVerticalBlock"] {
             gap: 0rem !important;
         }
-        /* L'iframe de la carte sans bordure */
         iframe {
             display: block !important;
             border: none !important;
+        }
+        iframe[title="components.html"] {
+            height: 100vh !important;
+            min-height: 100vh !important;
+            width: 100% !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -66,10 +69,7 @@ if "server_ready" not in st.session_state:
 if "calc" not in st.session_state:
     st.session_state["calc"] = None
 
-# ─── CARTE EN PREMIER si déjà calculée ────────────────────────────────────────
-# Le formulaire flotte AU-DESSUS de la carte via HTML/CSS
-# On injecte un formulaire HTML directement dans la carte
-
+# ─── CARTE ────────────────────────────────────────────────────────────────────
 if st.session_state["calc"]:
     calc     = st.session_state["calc"]
     _origine = st.session_state.get("origine", "")
@@ -96,43 +96,15 @@ if st.session_state["calc"]:
             server_url = MAP_SERVER_URL
         )
 
-        # ✅ Hauteur = 100vh via JS injecté
-        html_final += """
-        <script>
-            // Envoie la hauteur réelle de la fenêtre à Streamlit
-            function sendHeight() {
-                const h = window.innerHeight;
-                window.parent.postMessage({
-                    type: 'streamlit:setFrameHeight',
-                    height: h
-                }, '*');
-            }
-            sendHeight();
-            window.addEventListener('resize', sendHeight);
-        </script>
-        """
-
         components.html(html_final, height=2000, scrolling=False)
 
     except Exception as e:
         st.error(f"❌ Erreur chargement map.html : {e}")
 
 else:
-    # ─── Formulaire centré quand pas encore de carte ──────────────────────────
-   st.markdown("""
-    <style>
-        /* ... ton CSS existant ... */
-        
-        /* Force l'iframe carte à remplir toute la hauteur visible */
-        iframe[title="components.html"] {
-            height: 100vh !important;
-            min-height: 100vh !important;
-            width: 100% !important;
-        }
-    </style>
-""", unsafe_allow_html=True)
+    # ─── Formulaire ───────────────────────────────────────────────────────────
+    st.markdown("<div style='height:30vh'></div>", unsafe_allow_html=True)
 
-    
     with st.form("form_carte", clear_on_submit=False):
         st.markdown("### 🗺️ Calculer un itinéraire")
         c1, c2 = st.columns(2)
@@ -140,7 +112,7 @@ else:
             origine = st.text_input("📍 Départ", placeholder="Ex : Liège, Belgium")
         with c2:
             destination = st.text_input("🏁 Arrivée", placeholder="Ex : Nieuport, Belgium")
-        
+
         c3, c4, c5 = st.columns([1, 1, 2])
         with c3:
             avoid_tolls = st.checkbox("🚫 Éviter péages")
