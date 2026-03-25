@@ -9,27 +9,26 @@
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
 
     <style>
-       html, body {
-    height: 100%;
-    width: 100%;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
-    touch-action: none;
-    overscroll-behavior: none;
-    font-family: 'Segoe UI', Arial, sans-serif;
-    background: #f4f6f8;
-}
+        html, body {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            touch-action: none;
+            overscroll-behavior: none;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #f4f6f8;
+        }
 
-#map { 
-    position: absolute; 
-    top: 0; left: 0; right: 0; bottom: 0; 
-    width: 100%; 
-    height: 100%;
-}
+        #map { 
+            position: absolute; 
+            top: 0; left: 0; right: 0; bottom: 0; 
+            width: 100%; 
+            height: 100%;
+        }
 
-
-        /* ── Info box (inchangée) ── */
+        /* ── Info box ── */
         #info-box {
             position: absolute; top: 20px; left: 20px;
             background: rgba(255,255,255,0.95); backdrop-filter: blur(10px);
@@ -77,9 +76,7 @@
         .popup-btn-cancel { background: #ecf0f1; color: #7f8c8d; }
         .popup-btn-cancel:hover { background: #dce1e7; }
 
-        /* ══════════════════════════════════════════
-           PANNEAU TOGGLE — NOUVEAU
-        ══════════════════════════════════════════ */
+        /* ── PANNEAU TOGGLE COUCHES ── */
         #layer-panel {
             position: absolute;
             bottom: 30px;
@@ -96,7 +93,6 @@
             border: 1px solid #e1e8ed;
         }
 
-        /* Bouton toggle individuel */
         .toggle-btn {
             display: flex;
             align-items: center;
@@ -113,7 +109,6 @@
             color: #5d6d7e;
         }
 
-        /* État ON */
         .toggle-btn.active-road {
             background: #eaf4fb;
             color: #1a6ea8;
@@ -125,7 +120,6 @@
             border-color: #e74c3c;
         }
 
-        /* Petite pastille colorée dans le bouton */
         .toggle-dot {
             width: 10px;
             height: 10px;
@@ -136,7 +130,6 @@
         .dot-road { background: #3498db; }
         .dot-pl   { background: #e74c3c; }
 
-        /* Badge "chargement" sur le bouton PL */
         .toggle-btn .badge-loading {
             font-size: 11px;
             opacity: 0.7;
@@ -145,7 +138,6 @@
 </head>
 <body>
 
-    <!-- ═══ INFO BOX (inchangée) ═══ -->
     <div id="info-box">
         <h3>📍 {{ route.origin }} <br>🏁 {{ route.dest }}</h3>
         <div id="route-state" class="state-original">✅ Itinéraire original</div>
@@ -180,32 +172,17 @@
         </div>
     </div>
 
-    <!-- ═══ PANNEAU TOGGLE COUCHES — NOUVEAU ═══ -->
     <div id="layer-panel">
-
-        <!-- Toggle A : Types de routes -->
-        <button
-            class="toggle-btn"
-            id="toggle-road"
-            onclick="toggleLayer('road')"
-            title="Colorier autoroutes / nationales / départementales"
-        >
+        <button class="toggle-btn" id="toggle-road" onclick="toggleLayer('road')" title="Colorier autoroutes / nationales / départementales">
             <span class="toggle-dot dot-road"></span>
             🛣️ Types de routes
         </button>
 
-        <!-- Toggle B : Restrictions PL -->
-        <button
-            class="toggle-btn"
-            id="toggle-pl"
-            onclick="toggleLayer('pl')"
-            title="Segments interdits ou limités aux poids lourds (44t / 4m)"
-        >
+        <button class="toggle-btn" id="toggle-pl" onclick="toggleLayer('pl')" title="Segments interdits ou limités aux poids lourds (44t / 4m)">
             <span class="toggle-dot dot-pl"></span>
             🚛 Restrictions PL
             <span class="badge-loading" id="pl-status"></span>
         </button>
-
     </div>
 
     <div id="loading-indicator">⏳ Calcul en cours...</div>
@@ -216,7 +193,7 @@
         const serverUrl = "{{ server_url }}";
 
         // ═══════════════════════════════════════════════════════
-        //  DONNÉES INITIALES (inchangées)
+        //  DONNÉES INITIALES
         // ═══════════════════════════════════════════════════════
 
         const initPolylineCurrent  = {{ (route.polyline_current  or route.polyline) | tojson }};
@@ -230,13 +207,9 @@
 
         let isModified = false;
 
-        // ═══════════════════════════════════════════════════════
-        //  ÉTAT DES COUCHES — NOUVEAU
-        // ═══════════════════════════════════════════════════════
-
         const layerState = {
-            road: false,   // couche A désactivée par défaut
-            pl:   false    // couche B désactivée par défaut
+            road: false,
+            pl:   false
         };
 
         // ═══════════════════════════════════════════════════════
@@ -257,7 +230,7 @@
 
         map.on('load', () => {
 
-            // ── Tracé ORIGINAL grisé ────────────────────────────
+            // Tracé ORIGINAL grisé
             map.addSource('originalRouteSource', {
                 type: 'geojson',
                 data: buildGeoJSON(originalGeojsonCoords)
@@ -269,7 +242,7 @@
                 paint: { 'line-color': '#95a5a6', 'line-width': 5, 'line-opacity': 0.0 }
             });
 
-            // ── Tracé ACTIF bleu ────────────────────────────────
+            // Tracé ACTIF bleu
             map.addSource('routeSource', {
                 type: 'geojson',
                 data: buildGeoJSON(geojsonCoords)
@@ -281,15 +254,11 @@
                 paint: { 'line-color': '#007cbf', 'line-width': 6, 'line-opacity': 0.85 }
             });
 
-            // ── COUCHE A : Types de routes ── NOUVEAU ───────────
             _initRoadTypeLayer();
-
-            // ── COUCHE B : Restrictions PL ── NOUVEAU ───────────
-            _initPLLayer();   // fetch Overpass en arrière-plan
+            _initPLLayer();
 
             fitBoundsToCoords(geojsonCoords);
 
-            // Marqueurs
             originMarker = new maplibregl.Marker({ color: '#27ae60', draggable: true })
                 .setLngLat(startCoord).addTo(map);
             destMarker = new maplibregl.Marker({ color: '#c0392b', draggable: true })
@@ -306,50 +275,32 @@
         });
 
         // ═══════════════════════════════════════════════════════
-        //  COUCHE A — TYPES DE ROUTES  (NOUVEAU)
+        //  COUCHE A — TYPES DE ROUTES
         // ═══════════════════════════════════════════════════════
-        /**
-         * On exploite les couches vectorielles déjà présentes dans le style
-         * CARTO Voyager (roads, tunnels, bridges) en ajoutant des couches
-         * de highlight par-dessus — opacité 0 par défaut, 1 quand activé.
-         *
-         * Filtres OSM highway :
-         *   motorway / motorway_link          → Autoroute  #e74c3c
-         *   trunk / trunk_link / primary      → Nationale  #f39c12
-         *   secondary / tertiary              → Dép.       #27ae60
-         */
 
         function _initRoadTypeLayer() {
-
-            // Source vecteur OSM via Stadia/OpenMapTiles (compatible CARTO Voyager)
-            // On utilise le tileset vecteur public de maptiler pour les tags highway
             map.addSource('osmRoads', {
                 type: 'vector',
                 url: 'https://tiles.stadiamaps.com/data/openmaptiles.json'
-                // ⚠️ Gratuit jusqu'à 200k tuiles/mois — suffisant pour usage métier léger
-                // Alternative sans compte : https://api.maptiler.com/tiles/v3/tiles.json?key=YOUR_KEY
             });
 
             const roadDefs = [
                 {
                     id:     'highlight-motorway',
-                    label:  'Autoroutes',
                     filter: ['in', 'class', 'motorway', 'motorway_link'],
-                    color:  '#e74c3c',   // rouge
+                    color:  '#e74c3c',
                     width:  5
                 },
                 {
                     id:     'highlight-trunk',
-                    label:  'Nationales / RN',
                     filter: ['in', 'class', 'trunk', 'trunk_link', 'primary'],
-                    color:  '#f39c12',   // orange
+                    color:  '#f39c12',
                     width:  4
                 },
                 {
                     id:     'highlight-secondary',
-                    label:  'Départementales',
                     filter: ['in', 'class', 'secondary', 'tertiary'],
-                    color:  '#27ae60',   // vert
+                    color:  '#27ae60',
                     width:  3
                 }
             ];
@@ -359,45 +310,31 @@
                     id:           def.id,
                     type:         'line',
                     source:       'osmRoads',
-                    'source-layer': 'transportation',   // couche vecteur OpenMapTiles
+                    'source-layer': 'transportation',
                     filter:       def.filter,
                     layout: { 'line-join': 'round', 'line-cap': 'round' },
                     paint: {
                         'line-color':   def.color,
                         'line-width':   def.width,
-                        'line-opacity': 0   // caché par défaut — toggle l'allume
+                        'line-opacity': 0
                     }
-                },
-                'routeLayer'  // inséré SOUS la route active pour ne pas la masquer
-                );
+                }, 'routeLayer');
             });
         }
 
         // ═══════════════════════════════════════════════════════
-        //  COUCHE B — RESTRICTIONS PL  (NOUVEAU)
+        //  COUCHE B — RESTRICTIONS PL
         // ═══════════════════════════════════════════════════════
-        /**
-         * Stratégie :
-         *   1. Au load de la carte : requête Overpass API pour la bbox de l'itinéraire
-         *      → récupère les ways avec maxweight < 44 OU maxheight < 4
-         *   2. Transforme en GeoJSON LineString
-         *   3. Source GeoJSON locale → couche rouge/orange overlay
-         *   4. Tooltip au survol
-         *
-         * Overpass est gratuit, pas de clé, données OSM CC-BY.
-         */
 
         async function _initPLLayer() {
             const statusEl = document.getElementById('pl-status');
             statusEl.textContent = '⏳';
 
-            // Source vide initialement
             map.addSource('plSource', {
                 type: 'geojson',
                 data: { type: 'FeatureCollection', features: [] }
             });
 
-            // Couche segments INTERDITS (poids > 44t ou hauteur > 4m)
             map.addLayer({
                 id:     'plLayerBlock',
                 type:   'line',
@@ -407,12 +344,11 @@
                 paint: {
                     'line-color':    '#e74c3c',
                     'line-width':    6,
-                    'line-opacity':  0,          // caché par défaut
+                    'line-opacity':  0,
                     'line-dasharray': [2, 2]
                 }
             });
 
-            // Couche segments LIMITÉS (ex : 3.5t – 44t, ou 3.5m – 4m)
             map.addLayer({
                 id:     'plLayerWarn',
                 type:   'line',
@@ -427,7 +363,6 @@
                 }
             });
 
-            // Tooltip hover
             const plPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
 
             ['plLayerBlock', 'plLayerWarn'].forEach(layerId => {
@@ -447,26 +382,17 @@
                 });
             });
 
-            // ── Fetch Overpass ───────────────────────────────────
             try {
                 const geojson = await _fetchPLRestrictions();
                 map.getSource('plSource').setData(geojson);
-                statusEl.textContent = geojson.features.length > 0
-                    ? `(${geojson.features.length})`
-                    : '(0)';
+                statusEl.textContent = geojson.features.length > 0 ? `(${geojson.features.length})` : '(0)';
             } catch (err) {
                 console.warn('Overpass fetch échoué:', err);
                 statusEl.textContent = '⚠️';
             }
         }
 
-        /**
-         * Calcule la bbox de l'itinéraire + marge, puis interroge Overpass
-         * pour récupérer les ways avec restrictions de poids ou hauteur.
-         */
         async function _fetchPLRestrictions() {
-
-            // Bbox de l'itinéraire avec marge de 0.3°
             const lats = originalGeojsonCoords.map(c => c[1]);
             const lngs = originalGeojsonCoords.map(c => c[0]);
             const margin = 0.3;
@@ -477,8 +403,6 @@
                 Math.max(...lngs) + margin
             ].join(',');
 
-            // Requête Overpass QL :
-            //   ways avec maxweight OU maxheight présents dans la bbox
             const query = `
                 [out:json][timeout:25];
                 (
@@ -496,14 +420,11 @@
             if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
             const json = await res.json();
 
-            // Convertit les ways Overpass → GeoJSON features
             const features = json.elements
                 .filter(el => el.type === 'way' && el.geometry)
                 .map(el => {
                     const mw = parseFloat(el.tags?.maxweight);
                     const mh = parseFloat(el.tags?.maxheight);
-
-                    // Classifie : block si interdit pour 44t/4m, warn si limite partielle
                     let severity = 'warn';
                     if ((mw && mw < 3.5) || (mh && mh < 3.5)) severity = 'block';
 
@@ -526,13 +447,9 @@
         }
 
         // ═══════════════════════════════════════════════════════
-        //  TOGGLE LOGIQUE — NOUVEAU
+        //  TOGGLE LOGIQUE
         // ═══════════════════════════════════════════════════════
 
-        /**
-         * Active / désactive une couche et met à jour le bouton.
-         * @param {'road'|'pl'} key
-         */
         function toggleLayer(key) {
             layerState[key] = !layerState[key];
             const on = layerState[key];
@@ -553,7 +470,6 @@
             }
         }
 
-        /** Met à jour l'apparence visuelle du bouton toggle */
         function _setToggleBtn(btnId, on, activeClass) {
             const btn = document.getElementById(btnId);
             if (on) {
@@ -564,7 +480,7 @@
         }
 
         // ═══════════════════════════════════════════════════════
-        //  HELPERS (inchangés)
+        //  HELPERS
         // ═══════════════════════════════════════════════════════
 
         function buildGeoJSON(coords) {
@@ -600,13 +516,22 @@
         }
 
         // ═══════════════════════════════════════════════════════
-        //  WAYPOINTS (inchangés)
+        //  WAYPOINTS
         // ═══════════════════════════════════════════════════════
 
+        const WP_COLORS = ['#3498db','#9b59b6','#1abc9c','#f39c12','#e67e22','#16a085'];
+
         function addWaypoint(lngLat) {
-            const id = Date.now();
-            const wpMarker = new maplibregl.Marker({ color: '#3498db', draggable: true }).setLngLat(lngLat).addTo(map);
-            const wpObj = { id, marker: wpMarker };
+            const id    = Date.now();
+            const color = WP_COLORS[waypoints.length % WP_COLORS.length];
+            const wpMarker = new maplibregl.Marker({ color: color, draggable: true })
+                .setLngLat(lngLat).addTo(map);
+            const wpObj = {
+                id,
+                marker: wpMarker,
+                color,
+                label: `${lngLat.lat.toFixed(4)}, ${lngLat.lng.toFixed(4)}`
+            };
             waypoints.push(wpObj);
             wpMarker.on('dragend', () => { updateWaypointsList(); recalculateRoute(); });
             wpMarker.getElement().addEventListener('dblclick', () => removeWaypoint(id));
@@ -640,26 +565,48 @@
         }
 
         function updateWaypointsList() {
-            const listDiv = document.getElementById('wp-list');
+            const list = document.getElementById('wp-list');
             if (waypoints.length === 0) {
-                listDiv.innerHTML = '<p class="wp-empty">Aucune étape ajoutée. Clic-droit sur la carte pour en ajouter.</p>';
+                list.innerHTML = '<p class="wp-empty">Aucune étape ajoutée.</p>';
                 return;
             }
-            listDiv.innerHTML = '';
-            waypoints.forEach((wp, index) => {
-                const lngLat = wp.marker.getLngLat();
-                const item   = document.createElement('div');
-                item.className = 'wp-item';
-                item.innerHTML = `
-                    <div><b>Étape ${index + 1}</b><br>
-                    <span style="color:#7f8c8d; font-size:12px;">${lngLat.lat.toFixed(4)}, ${lngLat.lng.toFixed(4)}</span></div>
-                    <div class="wp-remove" onclick="removeWaypoint(${wp.id})" title="Supprimer">❌</div>`;
-                listDiv.appendChild(item);
-            });
+            list.innerHTML = waypoints.map((wp, i) => {
+                const color   = WP_COLORS[i % WP_COLORS.length];
+                const label   = wp.label || `Étape ${i+1}`;
+                const isFirst = i === 0;
+                const isLast  = i === waypoints.length - 1;
+                return `
+                <div class="wp-item" style="border-left-color:${color}">
+                    <div style="background:${color};color:white;border-radius:50%;width:22px;height:22px;
+                            display:flex;align-items:center;justify-content:center;
+                            font-size:11px;font-weight:bold;flex-shrink:0;">${i+1}</div>
+                    <div style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;
+                            white-space:nowrap;margin:0 6px;" title="${label}">${label}</div>
+                    <div style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">
+                        <button onclick="moveWaypoint(${wp.id},-1)" ${isFirst?'disabled':''} 
+                            style="background:none;border:1px solid #ddd;border-radius:3px;
+                            cursor:pointer;font-size:10px;padding:1px 4px;">▲</button>
+                        <button onclick="moveWaypoint(${wp.id}, 1)" ${isLast?'disabled':''} 
+                            style="background:none;border:1px solid #ddd;border-radius:3px;
+                            cursor:pointer;font-size:10px;padding:1px 4px;">▼</button>
+                    </div>
+                    <span class="wp-remove" onclick="removeWaypoint(${wp.id})">✕</span>
+                </div>`;
+            }).join('');
+        }
+
+        function moveWaypoint(id, direction) {
+            const i = waypoints.findIndex(w => w.id === id);
+            if (i === -1) return;
+            const newIndex = i + direction;
+            if (newIndex < 0 || newIndex >= waypoints.length) return;
+            [waypoints[i], waypoints[newIndex]] = [waypoints[newIndex], waypoints[i]];
+            updateWaypointsList();
+            recalculateRoute();
         }
 
         // ═══════════════════════════════════════════════════════
-        //  RESET & RECALCUL (inchangés)
+        //  RESET & RECALCUL
         // ═══════════════════════════════════════════════════════
 
         function restoreOriginalDisplay() {
@@ -709,7 +656,7 @@
         }
 
         // ═══════════════════════════════════════════════════════
-        //  RECHERCHE ADRESSE (inchangée)
+        //  RECHERCHE ADRESSE
         // ═══════════════════════════════════════════════════════
 
         let searchMarker = null, searchPopup = null;
@@ -752,9 +699,7 @@
                     <div class="popup-label">📍 ${label}</div>
                     <button class="popup-btn popup-btn-origin" onclick="_applySearchResult(${lat},${lng},'origin')">🟢 Définir comme départ</button>
                     <button class="popup-btn popup-btn-dest"   onclick="_applySearchResult(${lat},${lng},'dest')">🔴 Définir comme arrivée</button>
-                    
                     <button class="popup-btn popup-btn-waypoint" onclick="_applySearchWaypoint(${lat}, ${lng})">🔵 Ajouter comme étape</button>
-                    
                     <button class="popup-btn popup-btn-cancel" onclick="_cancelSearchPin()">Annuler</button>`)
                 .addTo(map);
         }
@@ -765,17 +710,16 @@
             else                   destMarker.setLngLat([lng, lat]);
             await recalculateRoute();
         }
-        // Nouvelle fonction pour gérer l'ajout d'étape depuis la barre de recherche
+
         function _applySearchWaypoint(lat, lng) {
-            _cancelSearchPin(); // On ferme la bulle de recherche
-            addWaypoint({ lng: lng, lat: lat }); // On appelle la même fonction que le clic-droit !
+            _cancelSearchPin();
+            addWaypoint({ lng: lng, lat: lat });
         }
 
         function _cancelSearchPin() {
             if (searchMarker) { searchMarker.remove(); searchMarker = null; }
             if (searchPopup)  { searchPopup.remove();  searchPopup  = null; }
         }
-
     </script>
 </body>
 </html>
