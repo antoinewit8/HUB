@@ -96,7 +96,7 @@ if st.session_state["calc"]:
             server_url = MAP_SERVER_URL
         )
 
-        components.html(html_final, height=1200, scrolling=False)
+        components.html(html_final, height=1250, scrolling=False)
 
     except Exception as e:
         st.error(f"❌ Erreur chargement map.html : {e}")
