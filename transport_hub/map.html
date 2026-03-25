@@ -735,6 +735,9 @@
                     <div class="popup-label">📍 ${label}</div>
                     <button class="popup-btn popup-btn-origin" onclick="_applySearchResult(${lat},${lng},'origin')">🟢 Définir comme départ</button>
                     <button class="popup-btn popup-btn-dest"   onclick="_applySearchResult(${lat},${lng},'dest')">🔴 Définir comme arrivée</button>
+                    
+                    <button class="popup-btn popup-btn-waypoint" onclick="ajouterEtape(${lat}, ${lng})">🔵 Ajouter comme étape</button>
+                    
                     <button class="popup-btn popup-btn-cancel" onclick="_cancelSearchPin()">Annuler</button>`)
                 .addTo(map);
         }
