@@ -600,7 +600,22 @@
             if (i === -1) return;
             const newIndex = i + direction;
             if (newIndex < 0 || newIndex >= waypoints.length) return;
+
+            // Récupère les positions des deux marqueurs AVANT le swap
+            const posI        = waypoints[i].marker.getLngLat();
+            const posNewIndex = waypoints[newIndex].marker.getLngLat();
+
+            // Swap les positions physiques sur la carte
+            waypoints[i].marker.setLngLat(posNewIndex);
+            waypoints[newIndex].marker.setLngLat(posI);
+
+            // Met à jour les labels
+            waypoints[i].label        = `${posNewIndex.lat.toFixed(4)}, ${posNewIndex.lng.toFixed(4)}`;
+            waypoints[newIndex].label = `${posI.lat.toFixed(4)}, ${posI.lng.toFixed(4)}`;
+
+            // Swap dans le tableau (pour l'ordre logique)
             [waypoints[i], waypoints[newIndex]] = [waypoints[newIndex], waypoints[i]];
+
             updateWaypointsList();
             recalculateRoute();
         }
