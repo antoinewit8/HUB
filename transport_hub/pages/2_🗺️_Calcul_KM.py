@@ -27,31 +27,31 @@ if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
 
+    st.info(f"📁 Fichier temp : {tmp_path}")
+
     with st.spinner("⏳ Calcul des distances en cours via PTV..."):
-        result = run_calcul_km(tmp_path, calculer_peage=calculer_peage)
+        try:
+            result = run_calcul_km(tmp_path, calculer_peage=calculer_peage)
+            st.write("🔍 Résultat brut :", result)
+        except Exception as e:
+            st.error(f"💥 Exception : {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            result = None
 
-    if result["success"]:
+    if result and result["success"]:
         st.success("🎉 Calcul terminé !")
-
-        # ── Lire le fichier EN BYTES dans session_state ──
         with open(result["output_path"], "rb") as f:
             st.session_state["km_result_bytes"] = f.read()
             st.session_state["km_result_name"]  = uploaded_file.name.replace(".xlsx", "_KM.xlsx")
-
-        # Nettoyage des 2 fichiers temp
-        for p in [tmp_path, result["output_path"]]:
-            try:
-                os.unlink(p)
-            except:
-                pass
-    else:
+    elif result:
         st.error(f"❌ Erreur : {result['error']}")
-        try:
-            os.unlink(tmp_path)
-        except:
-            pass
 
-# ── Bouton téléchargement PERSISTANT (hors du bloc button) ──
+    try:
+        os.unlink(tmp_path)
+    except:
+        pass
+
 if "km_result_bytes" in st.session_state:
     st.download_button(
         label     = "📥 Télécharger le fichier KM",
@@ -59,3 +59,4 @@ if "km_result_bytes" in st.session_state:
         file_name = st.session_state["km_result_name"],
         mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
