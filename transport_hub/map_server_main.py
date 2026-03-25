@@ -274,6 +274,7 @@ async def health():
 # ── Recherche d'adresse (Géocodage depuis le frontend) ───────────────────────
 @app.get("/api/geocode")
 async def api_geocode(q: str):
+    """Route API pour la recherche d'adresse depuis le frontend."""
     if not q:
         raise HTTPException(status_code=400, detail="Requête vide")
         
