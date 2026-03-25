@@ -748,6 +748,11 @@
             else                   destMarker.setLngLat([lng, lat]);
             await recalculateRoute();
         }
+        // Nouvelle fonction pour gérer l'ajout d'étape depuis la barre de recherche
+        function _applySearchWaypoint(lat, lng) {
+            _cancelSearchPin(); // On ferme la bulle de recherche
+            addWaypoint({ lng: lng, lat: lat }); // On appelle la même fonction que le clic-droit !
+        }
 
         function _cancelSearchPin() {
             if (searchMarker) { searchMarker.remove(); searchMarker = null; }
