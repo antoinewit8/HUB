@@ -119,13 +119,17 @@ def traiter_trajet(index, total, route, cache, calculer_peage):
 
 # ── MAIN ──────────────────────────────────────────────────────────────────
 def main():
-    filepath = input("📁 Chemin du fichier Excel: ").strip().strip('"')
+    filepath = input("📁 Chemin du fichier Excel: ").strip().strip('"').strip("'")
+    
+    # Normalise le chemin en absolu IMMÉDIATEMENT
+    filepath = os.path.abspath(filepath)
+    
+    if not os.path.exists(filepath):
+        print(f"❌ Fichier introuvable : {filepath}")
+        return
+    
     choix_peage    = input("💶 Calculer les frais de péage ? (o/n) : ").strip().lower()
     calculer_peage = choix_peage in ('o', 'oui')
-
-    dossier_excel = os.path.dirname(os.path.abspath(filepath))
-    if dossier_excel:
-        os.chdir(dossier_excel)
 
     print("\n🔌 Réveil du serveur de cartes...")
     warm_up_server()
@@ -171,11 +175,19 @@ def main():
 
         write_km_results(ws, results, calculer_peage)
 
-    sauvegarder_cache(cache)   # ← sauvegarde finale garantie
+    sauvegarder_cache(cache)
 
-    output_path = filepath.replace(".xlsx", "_KM.xlsx")
+    # ── Génération du chemin de sortie ROBUSTE ──
+    dossier = os.path.dirname(filepath)
+    nom     = os.path.basename(filepath)
+    base, ext = os.path.splitext(nom)  # gère .xlsx .XLSX .Xlsx etc.
+    output_name = f"{base}_KM{ext}"
+    output_path = os.path.join(dossier, output_name)
+
     wb.save(output_path)
-    print(f"\n🎉 Terminé ! Excel sauvegardé : {os.path.basename(output_path)}")
+    print(f"\n📂 Dossier : {dossier}")
+    print(f"🎉 Terminé ! Excel sauvegardé : {output_name}")
+    print(f"📍 Chemin complet : {output_path}")
 
 
 if __name__ == "__main__":
