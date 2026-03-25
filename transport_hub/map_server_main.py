@@ -12,10 +12,22 @@ from pydantic import BaseModel
 from typing import List, Optional
 import uvicorn, uuid, json, os, httpx
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 app = FastAPI(title="Arcelor Route Map Server")
+app = FastAPI(title="Arcelor Route Map Server")
+
+# --- AJOUTEZ CE BLOC ICI ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Autorise tous les sites web (dont votre Streamlit) à appeler cette API
+    allow_credentials=True,
+    allow_methods=["*"],  # Autorise toutes les méthodes (GET, POST, etc.)
+    allow_headers=["*"],
+)
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
