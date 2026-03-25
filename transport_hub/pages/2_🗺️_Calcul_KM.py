@@ -23,7 +23,6 @@ calculer_peage = st.checkbox("💶 Calculer les frais de péage", value=False)
 
 if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
 
-    # Sauvegarde temporaire
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
@@ -34,19 +33,29 @@ if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
     if result["success"]:
         st.success("🎉 Calcul terminé !")
 
-        # Lecture du fichier généré pour téléchargement
+        # ── Lire le fichier EN BYTES dans session_state ──
         with open(result["output_path"], "rb") as f:
-            st.download_button(
-                label     = "📥 Télécharger le fichier KM",
-                data      = f,
-                file_name = os.path.basename(result["output_path"]),
-                mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.session_state["km_result_bytes"] = f.read()
+            st.session_state["km_result_name"]  = uploaded_file.name.replace(".xlsx", "_KM.xlsx")
+
+        # Nettoyage des 2 fichiers temp
+        for p in [tmp_path, result["output_path"]]:
+            try:
+                os.unlink(p)
+            except:
+                pass
     else:
         st.error(f"❌ Erreur : {result['error']}")
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
 
-    # Nettoyage fichier temp
-    try:
-        os.unlink(tmp_path)
-    except:
-        pass
+# ── Bouton téléchargement PERSISTANT (hors du bloc button) ──
+if "km_result_bytes" in st.session_state:
+    st.download_button(
+        label     = "📥 Télécharger le fichier KM",
+        data      = st.session_state["km_result_bytes"],
+        file_name = st.session_state["km_result_name"],
+        mime      = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
