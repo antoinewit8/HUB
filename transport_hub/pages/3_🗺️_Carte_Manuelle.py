@@ -103,8 +103,34 @@ if st.session_state["calc"]:
 
 else:
     # ─── Formulaire ───────────────────────────────────────────────────────────
-    st.markdown("<div style='height:30vh'></div>", unsafe_allow_html=True)
+    # 1. On supprime l'espace vide de 30vh qui poussait tout vers le bas
+# st.markdown("<div style='height:30vh'></div>", unsafe_allow_html=True) # <-- À SUPPRIMER OU COMMENTER
 
+# 2. On injecte ce CSS pour coller la carte en haut et supprimer les marges Streamlit
+st.markdown(
+    """
+    <style>
+        /* Supprime les marges internes de Streamlit */
+        .block-container {
+            padding-top: 0rem !important;
+            padding-bottom: 0rem !important;
+            padding-left: 0rem !important;
+            padding-right: 0rem !important;
+        }
+        /* Cache le scrollbar de la page principale */
+        .main {
+            overflow: hidden;
+        }
+        /* Supprime l'espace réservé au header Streamlit */
+        header {display: none !important;}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# 3. Quand vous affichez votre carte, assurez-vous de bien régler la hauteur
+# Si vous utilisez components.html :
+# components.html(html_code, height=800) # Ajustez la hauteur ici pour que ça rentre dans votre écran
     with st.form("form_carte", clear_on_submit=False):
         st.markdown("### 🗺️ Calculer un itinéraire")
         c1, c2 = st.columns(2)
