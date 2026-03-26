@@ -53,9 +53,15 @@ if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
 
 # === Download persistant ===
 if "km_result_bytes" in st.session_state:
-    st.download_button(
-        label="📥 Télécharger le fichier KM",
-        data=st.session_state["km_result_bytes"],
-        file_name=st.session_state["km_result_name"],
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    data = st.session_state["km_result_bytes"]
+    st.write("DEBUG type:", type(data), "len:", len(data) if isinstance(data, bytes) else "N/A")
+    if isinstance(data, bytes) and len(data) > 0:
+        st.download_button(
+            label="📥 Télécharger le fichier KM",
+            data=data,
+            file_name=st.session_state["km_result_name"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("⚠️ Données invalides dans session_state")
+
