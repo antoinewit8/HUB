@@ -25,30 +25,34 @@ if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
         tmp_path = tmp.name
 
     try:
-        import time
-        
-        # TEST 1 : Import seul
         st.session_state["km_debug"] = "Step 1: imports..."
         from tools.km_calcul.modules.map_server_client import warm_up_server
         from tools.km_calcul.modules.excel_handler_km import read_all_sheets
+        from tools.km_calcul.modules.ptv_router_km import geocode_address
         st.session_state["km_debug"] = "Step 2: imports OK"
-        
-        # TEST 2 : Lecture Excel
+
         wb, sheets_data = read_all_sheets(tmp_path)
         nb = sum(len(r) for _, (_, r) in sheets_data.items()) if sheets_data else 0
-        st.session_state["km_debug"] = f"Step 3: Excel OK - {nb} routes trouvées"
-        
-        # TEST 3 : Warm up (souvent le coupable)
-        # COMMENTE SI ÇA BLOQUE ICI
-        # warm_up_server()
-        # st.session_state["km_debug"] = "Step 4: warm_up OK"
-        
+        st.session_state["km_debug"] = f"Step 3: Excel OK - {nb} routes"
+
+        # TEST warm_up avec timeout
+        import time
+        t0 = time.time()
+        warm_up_server()
+        st.session_state["km_debug"] = f"Step 4: warm_up OK ({time.time()-t0:.1f}s)"
+
+        # TEST géocodage simple
+        t0 = time.time()
+        coords = geocode_address("Paris, France")
+        st.session_state["km_debug"] = f"Step 5: geocode={'OK' if coords else 'FAIL'} ({time.time()-t0:.1f}s) → {coords}"
+
         os.unlink(tmp_path)
-        
+
     except Exception as e:
         st.session_state["km_debug"] = f"EXCEPTION: {e}\n{traceback.format_exc()}"
 
     st.rerun()
+
 
 
 # === Download ===
