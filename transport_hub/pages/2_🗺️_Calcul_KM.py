@@ -25,14 +25,18 @@ if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
         from tools.km_calcul.run_km import run_calcul_km
         
         with st.spinner("⏳ Calcul en cours..."):
-            result_bytes, result_name = run_calcul_km(tmp_path, calculer_peage)
+            result = run_calcul_km(tmp_path, calculer_peage)
         
-        if result_bytes and len(result_bytes) > 0:
+        if result["success"]:
+            with open(result["output_path"], "rb") as f:
+                result_bytes = f.read()
             st.session_state["km_result_bytes"] = result_bytes
-            st.session_state["km_result_name"] = result_name
+            st.session_state["km_result_name"] = os.path.basename(result["output_path"])
             st.session_state["km_debug"] = "✅ Calcul terminé avec succès"
+            os.unlink(result["output_path"])
         else:
-            st.session_state["km_debug"] = "⚠️ Calcul terminé mais fichier vide"
+            st.session_state["km_debug"] = f"⚠️ Échec : {result['error']}"
+
 
     except Exception as e:
         st.session_state["km_debug"] = f"EXCEPTION: {e}\n{traceback.format_exc()}"
