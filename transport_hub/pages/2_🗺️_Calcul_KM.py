@@ -42,9 +42,21 @@ if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
         st.session_state["km_debug"] = f"Step 4: warm_up OK ({time.time()-t0:.1f}s)"
 
         # TEST géocodage simple
+        import requests as req
         t0 = time.time()
-        coords = geocode_address("Paris, France")
-        st.session_state["km_debug"] = f"Step 5: geocode={'OK' if coords else 'FAIL'} ({time.time()-t0:.1f}s) → {coords}"
+        key = os.environ.get("PTV_API_KEY", "MANQUANTE")
+        key_info = f"{key[:8]}... (len={len(key)})"
+        resp = req.get(
+            "https://api.myptv.com/geocoding/v1/locations/by-text",
+            params={"searchText": "Paris, France"},
+            headers={"apiKey": key},
+            timeout=15
+        )
+        st.session_state["km_debug"] = (
+            f"Step 5: status={resp.status_code} | key={key_info} | "
+            f"body={resp.text[:200]} ({time.time()-t0:.1f}s)"
+        )
+
 
         os.unlink(tmp_path)
 
