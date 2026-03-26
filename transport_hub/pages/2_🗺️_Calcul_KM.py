@@ -25,28 +25,31 @@ if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
         tmp_path = tmp.name
 
     try:
-        st.session_state["km_debug"] = "Calcul lancé..."
-        result = run_calcul_km(tmp_path, calculer_peage=calculer_peage)
-        st.session_state["km_debug"] = f"Result: success={result.get('success')}, keys={list(result.keys())}"
-
-        if result["success"]:
-            with open(result["output_path"], "rb") as f:
-                data = f.read()
-            st.session_state["km_result_bytes"] = data
-            st.session_state["km_result_name"] = uploaded_file.name.replace(".xlsx", "_KM.xlsx")
-            st.session_state["km_debug"] = f"OK - {len(data)} bytes sauvés"
-
-            for p in [tmp_path, result["output_path"]]:
-                try:
-                    os.unlink(p)
-                except:
-                    pass
-        else:
-            st.session_state["km_debug"] = f"Echec: {result.get('error')}"
+        import time
+        
+        # TEST 1 : Import seul
+        st.session_state["km_debug"] = "Step 1: imports..."
+        from tools.km_calcul.modules.map_server_client import warm_up_server
+        from tools.km_calcul.modules.excel_handler_km import read_all_sheets
+        st.session_state["km_debug"] = "Step 2: imports OK"
+        
+        # TEST 2 : Lecture Excel
+        wb, sheets_data = read_all_sheets(tmp_path)
+        nb = sum(len(r) for _, (_, r) in sheets_data.items()) if sheets_data else 0
+        st.session_state["km_debug"] = f"Step 3: Excel OK - {nb} routes trouvées"
+        
+        # TEST 3 : Warm up (souvent le coupable)
+        # COMMENTE SI ÇA BLOQUE ICI
+        # warm_up_server()
+        # st.session_state["km_debug"] = "Step 4: warm_up OK"
+        
+        os.unlink(tmp_path)
+        
     except Exception as e:
         st.session_state["km_debug"] = f"EXCEPTION: {e}\n{traceback.format_exc()}"
 
     st.rerun()
+
 
 # === Download ===
 if "km_result_bytes" in st.session_state:
