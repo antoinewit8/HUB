@@ -324,6 +324,9 @@ async def create_route(route: RouteCreate):
     route_data = route.dict()
     route_data["polyline_original"] = route.polyline  # immuable, jamais écrasé
     route_data["polyline_current"]  = route.polyline  # modifiable par drag
+    route_data["distance_km_original"] = route.distance_km
+    route_data["duration_h_original"]  = route.duration_h
+    route_data["prix_peage_original"]  = route.prix_peage
 
     routes = {route_id: route_data}
     save_routes(routes)
