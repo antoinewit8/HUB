@@ -624,25 +624,29 @@
         //  RESET & RECALCUL
         // ═══════════════════════════════════════════════════════
 
-        function restoreOriginalDisplay() {
+        async function restoreOriginalDisplay() {
             geojsonCoords = [...originalGeojsonCoords];
             map.getSource('routeSource').setData(buildGeoJSON(geojsonCoords));
             originMarker.setLngLat(startCoord);
             destMarker.setLngLat(endCoord);
             setModifiedState(false);
-            document.getElementById('dist').textContent = "{{ route.distance_km }} km";
-            document.getElementById('dur').textContent  = "{{ route.duration_h }} h";
-            document.getElementById('toll').textContent = "{{ route.prix_peage }} €";
-            fetch(`${serverUrl}/api/reset_route/${routeId}`, { method: 'POST' })
-                .then(r => r.json()).then(d => console.log('Firebase reset:', d))
-                .catch(e => console.warn('Reset Firebase échoué:', e));
+
+            try {
+                const r = await fetch(`${serverUrl}/api/reset_route/${routeId}`, { method: 'POST' });
+                const d = await r.json();
+                if (d.distance_km !== undefined) document.getElementById('dist').textContent = d.distance_km + ' km';
+                if (d.duration_h  !== undefined) document.getElementById('dur').textContent  = d.duration_h + ' h';
+                if (d.prix_peage  !== undefined) document.getElementById('toll').textContent = d.prix_peage + ' €';
+            } catch (e) {
+                console.warn('Reset Firebase échoué:', e);
+            }
         }
 
         async function resetToOriginal() {
-            restoreOriginalDisplay();
             waypoints.forEach(wp => wp.marker.remove());
             waypoints = [];
             updateWaypointsList();
+            await restoreOriginalDisplay();
         }
 
         async function recalculateRoute() {
