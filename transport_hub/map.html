@@ -630,6 +630,9 @@
             originMarker.setLngLat(startCoord);
             destMarker.setLngLat(endCoord);
             setModifiedState(false);
+            document.getElementById('dist').textContent = "{{ route.distance_km }} km";
+            document.getElementById('dur').textContent  = "{{ route.duration_h }} h";
+            document.getElementById('toll').textContent = "{{ route.prix_peage }} €";
             fetch(`${serverUrl}/api/reset_route/${routeId}`, { method: 'POST' })
                 .then(r => r.json()).then(d => console.log('Firebase reset:', d))
                 .catch(e => console.warn('Reset Firebase échoué:', e));
