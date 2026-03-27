@@ -487,6 +487,16 @@ async def reset_route(route_id: str):
     except Exception as e:
         raise HTTPException(500, f"Erreur reset: {e}")
 
+@app.get("/api/geocode")
+async def geocode(q: str):
+    if not q or len(q) < 3:
+        raise HTTPException(400, "Requête trop courte")
+    coords = await _geocode(q)
+    if not coords:
+        raise HTTPException(404, "Adresse introuvable")
+    return {"lat": coords[0], "lng": coords[1], "label": q}
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
