@@ -10,14 +10,16 @@ from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
-import uvicorn, uuid, json, os, httpx
+import uvicorn, uuid, json, os, httpx, pathlib
 from dotenv import load_dotenv
 
 load_dotenv()
 
+BASE_DIR = pathlib.Path(__file__).resolve().parent
+
 app = FastAPI(title="Arcelor Route Map Server")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 ROUTES_FILE = "data/routes.json"
 os.makedirs("data", exist_ok=True)
