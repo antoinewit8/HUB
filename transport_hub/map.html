@@ -653,20 +653,29 @@
         }
 
         async function recalculateRoute() {
-            const allPoints = [
-                originMarker.getLngLat(),
-                ...waypoints.map(w => w.marker.getLngLat()),
-                destMarker.getLngLat()
-            ];
+            // Si aucun waypoint et markers pas bougés → restaurer l'original
+            if (waypoints.length === 0 && !hasMarkersMovedFromOriginal()) {
+                await restoreOriginalDisplay();
+                return;
+            }
+
             setLoading(true);
             try {
-                const response = await fetch(`${serverUrl}/api/recalculate_drag`, {
+                const o = originMarker.getLngLat(), d = destMarker.getLngLat();
+                const allWps = [
+                    { lat: o.lat, lng: o.lng },
+                    ...waypoints.map(wp => {
+                        const ll = wp.marker.getLngLat();
+                        return { lat: ll.lat, lng: ll.lng };
+                    }),
+                    { lat: d.lat, lng: d.lng }
+                ];
+                const resp = await fetch(`${serverUrl}/api/recalculate_drag`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ route_id: routeId, waypoints: allPoints.map(p => ({ lat: p.lat, lng: p.lng })) })
+                    body: JSON.stringify({ route_id: routeId, waypoints: allWps })
                 });
-                if (!response.ok) { console.error('Erreur serveur:', response.status); return; }
-                const data = await response.json();
+                const data = await resp.json();
                 document.getElementById('dist').innerText = data.distance_km + ' km';
                 document.getElementById('dur').innerText  = data.duration_h  + ' h';
                 document.getElementById('toll').innerText = data.prix_peage  + ' €';
