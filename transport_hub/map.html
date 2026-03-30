@@ -631,14 +631,17 @@
             destMarker.setLngLat(endCoord);
             setModifiedState(false);
 
-            // Restaurer les valeurs originales directement
-            document.getElementById('dist').textContent = "{{ route.distance_km }} km";
-            document.getElementById('dur').textContent  = "{{ route.duration_h }} h";
-            document.getElementById('toll').textContent = "{{ route.prix_peage }} €";
-
-            // Reset Firebase en arrière-plan
-            fetch(`${serverUrl}/api/reset_route/${routeId}`, { method: 'POST' })
-                .catch(e => console.warn('Reset Firebase échoué:', e));
+            try {
+                const resp = await fetch(`${serverUrl}/api/reset_route/${routeId}`, { method: 'POST' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    document.getElementById('dist').textContent = data.distance_km + " km";
+                    document.getElementById('dur').textContent  = data.duration_h + " h";
+                    document.getElementById('toll').textContent = data.prix_peage + " €";
+                }
+            } catch(e) {
+                console.warn('Reset échoué:', e);
+            }
         }
 
         async function resetToOriginal() {
