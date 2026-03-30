@@ -12,23 +12,11 @@ from pydantic import BaseModel
 from typing import List, Optional
 import uvicorn, uuid, json, os, httpx
 from dotenv import load_dotenv
-from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 app = FastAPI(title="Arcelor Route Map Server")
-app = FastAPI(title="Arcelor Route Map Server")
-
-# --- AJOUTEZ CE BLOC ICI ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Autorise tous les sites web (dont votre Streamlit) à appeler cette API
-    allow_credentials=True,
-    allow_methods=["*"],  # Autorise toutes les méthodes (GET, POST, etc.)
-    allow_headers=["*"],
-)
-
-# app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 ROUTES_FILE = "data/routes.json"
@@ -224,7 +212,7 @@ async def _geocode(address: str) -> Optional[list]:
         resp = await client.get(
             "https://api.myptv.com/geocoding/v1/locations/by-text",
             headers={"apiKey": PTV_API_KEY},
-            params={"searchText": address, "countryFilter": "FR,BE,LU,DE,ES,NL,GB"},
+            params={"searchText": address, "countryFilter": "FRA,BEL,LUX,DEU,ESP"},
             timeout=15,
         )
     if resp.status_code != 200:
@@ -283,37 +271,6 @@ async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: boo
 async def health():
     return {"status": "ok"}
 
-# ── Recherche d'adresse (Géocodage depuis le frontend) ───────────────────────
-@app.get("/api/geocode")
-async def api_geocode(q: str):
-    """Route API pour la recherche d'adresse depuis le frontend."""
-    if not q:
-        raise HTTPException(status_code=400, detail="Requête vide")
-        
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://api.myptv.com/geocoding/v1/locations/by-text",
-            headers={"apiKey": PTV_API_KEY},
-            params={"searchText": q, "countryFilter": "FR,BE,LU,DE,ES,NL,GB"},
-            timeout=15,
-        )
-        
-    if resp.status_code != 200:
-        raise HTTPException(status_code=500, detail="Erreur avec l'API PTV")
-        
-    results = resp.json().get("locations", [])
-    if not results:
-        raise HTTPException(status_code=404, detail="Adresse introuvable")
-        
-    best_match = results[0]
-    loc = best_match["referencePosition"]
-    label = best_match.get("address", {}).get("formattedAddress", q)
-
-    return {
-        "lat": loc["latitude"],
-        "lng": loc["longitude"],
-        "label": label
-    }
 
 # ── Créer une route ──────────────────────────────────────────────────────────
 @app.post("/api/create_route")
@@ -323,10 +280,10 @@ async def create_route(route: RouteCreate):
     # ✅ CORRIGÉ : route_data créé AVANT d'être utilisé
     route_data = route.dict()
     route_data["polyline_original"] = route.polyline  # immuable, jamais écrasé
-    route_data["polyline_current"]  = route.polyline  # modifiable par drag
+    route_data["polyline_current"]  = route.polyline 
     route_data["distance_km_original"] = route.distance_km
     route_data["duration_h_original"]  = route.duration_h
-    route_data["prix_peage_original"]  = route.prix_peage
+    route_data["prix_peage_original"]  = route.prix_peage 
 
     routes = {route_id: route_data}
     save_routes(routes)
@@ -390,14 +347,6 @@ async def recalculate(data: RouteRecalc):
 
 # ── Recalcul drag (waypoints coordonnées) ───────────────────────────────────
 @app.post("/api/recalculate_drag")
-async function recalculateRoute() {
-    // Si aucun waypoint et markers pas bougés → restaurer l'original
-    if (waypoints.length === 0 && !hasMarkersMovedFromOriginal()) {
-        await restoreOriginalDisplay();
-        return;
-    }
-    // ... reste du code existant
-
 async def recalculate_drag(data: RecalcDragRequest):
     if len(data.waypoints) < 2:
         raise HTTPException(400, "Il faut au minimum 2 waypoints")
@@ -515,7 +464,7 @@ async def reset_route(route_id: str):
         raise
     except Exception as e:
         raise HTTPException(500, f"Erreur reset: {e}")
-
+    
 @app.get("/api/geocode")
 async def geocode(q: str):
     if not q or len(q) < 3:
