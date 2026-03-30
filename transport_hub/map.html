@@ -654,7 +654,7 @@
 
         async function recalculateRoute() {
             // Si aucun waypoint et markers pas bougés → restaurer l'original
-            if (waypoints.length === 0 && !hasMarkersMovedFromOriginal()) {
+            if (waypoints.length === 0) {
                 await restoreOriginalDisplay();
                 return;
             }
