@@ -390,6 +390,14 @@ async def recalculate(data: RouteRecalc):
 
 # ── Recalcul drag (waypoints coordonnées) ───────────────────────────────────
 @app.post("/api/recalculate_drag")
+async function recalculateRoute() {
+    // Si aucun waypoint et markers pas bougés → restaurer l'original
+    if (waypoints.length === 0 && !hasMarkersMovedFromOriginal()) {
+        await restoreOriginalDisplay();
+        return;
+    }
+    // ... reste du code existant
+
 async def recalculate_drag(data: RecalcDragRequest):
     if len(data.waypoints) < 2:
         raise HTTPException(400, "Il faut au minimum 2 waypoints")
@@ -417,9 +425,29 @@ async def recalculate_drag(data: RecalcDragRequest):
 
     print(f"RÉSULTAT PTV : dist={distance_m}m, dur={duration_s}s, peage={prix_peage}, coords={len(coords)} points")
 
-    # ✅ On écrase seulement polyline_current, jamais polyline_original
     if data.route_id and FIREBASE_URL:
+        # ── 1) Lire la route existante pour préserver les originaux ──
+        try:
+            existing = httpx.get(
+                f"{FIREBASE_URL}/routes/{data.route_id}.json",
+                timeout=10
+            ).json() or {}
+        except Exception as e:
+            print(f"Erreur lecture Firebase: {e}")
+            existing = {}
+
+        # ── 2) Sauvegarder les originaux s'ils n'existent pas encore ──
+        originals_patch = {}
+        if "distance_km_original" not in existing:
+            originals_patch["distance_km_original"] = existing.get("distance_km")
+        if "duration_h_original" not in existing:
+            originals_patch["duration_h_original"] = existing.get("duration_h")
+        if "prix_peage_original" not in existing:
+            originals_patch["prix_peage_original"] = existing.get("prix_peage")
+
+        # ── 3) Écrire originaux + nouvelles valeurs en un seul patch ──
         update_data = {
+            **originals_patch,
             "polyline_current": coords,
             "distance_km":      round(distance_m / 1000, 1),
             "duration_h":       round(duration_s / 3600, 2),
@@ -440,6 +468,7 @@ async def recalculate_drag(data: RecalcDragRequest):
         "prix_peage":  round(prix_peage, 2),
         "polyline":    coords,
     }
+
 
 
 # ── Reset route → retour à l'itinéraire original ─────────────────────────────
