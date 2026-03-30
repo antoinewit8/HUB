@@ -18,8 +18,13 @@ load_dotenv()
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 
 app = FastAPI(title="Arcelor Route Map Server")
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+STATIC_DIR = BASE_DIR / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
 
 ROUTES_FILE = "data/routes.json"
 os.makedirs("data", exist_ok=True)
