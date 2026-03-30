@@ -539,23 +539,24 @@
             recalculateRoute();
         }
 
-        function removeWaypoint(id) {
+           function removeWaypoint(id) {
             const index = waypoints.findIndex(w => w.id === id);
             if (index === -1) return;
             waypoints[index].marker.remove();
             waypoints.splice(index, 1);
             updateWaypointsList();
-            if (waypoints.length === 0 && !hasMarkersMovedFromOriginal()) restoreOriginalDisplay();
-            else recalculateRoute();
+            // TOUJOURS recalculer, même avec 0 waypoints
+            recalculateRoute();
         }
 
         function clearWaypoints() {
             waypoints.forEach(wp => wp.marker.remove());
             waypoints = [];
             updateWaypointsList();
-            if (!hasMarkersMovedFromOriginal()) restoreOriginalDisplay();
-            else recalculateRoute();
+            // TOUJOURS recalculer
+            recalculateRoute();
         }
+
 
         function hasMarkersMovedFromOriginal() {
             if (!originMarker || !destMarker) return false;
