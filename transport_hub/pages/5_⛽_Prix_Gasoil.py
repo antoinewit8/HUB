@@ -163,130 +163,130 @@ if not df.empty:
     tab_daily, tab_monthly = st.tabs(["🕒 Suivi Quotidien", "📊 Moyennes Mensuelles (be.STAT)"])
 
     with tab_daily:
-    # ── Filtre type de carburant ──
-    fuel_types = df["type"].unique().tolist()
-    selected_fuel = st.selectbox(
-        "Type de carburant",
-        fuel_types,
-        index=fuel_types.index("diesel_routier") if "diesel_routier" in fuel_types else 0
-    )
+        # ── Filtre type de carburant ──
+        fuel_types = df["type"].unique().tolist()
+        selected_fuel = st.selectbox(
+            "Type de carburant",
+            fuel_types,
+            index=fuel_types.index("diesel_routier") if "diesel_routier" in fuel_types else 0
+        )
 
-    df_fuel = df[df["type"] == selected_fuel].copy()
+        df_fuel = df[df["type"] == selected_fuel].copy()
 
-    if not df_fuel.empty:
-        # ── KPIs ──
-        st.markdown("<br>", unsafe_allow_html=True)
-        k1, k2, k3, k4 = st.columns(4)
+        if not df_fuel.empty:
+            # ── KPIs ──
+            st.markdown("<br>", unsafe_allow_html=True)
+            k1, k2, k3, k4 = st.columns(4)
 
-        prix_actuel = df_fuel.iloc[-1]["prix"]
-        prix_moyen  = df_fuel["prix"].mean()
-        prix_min    = df_fuel["prix"].min()
-        prix_max    = df_fuel["prix"].max()
+            prix_actuel = df_fuel.iloc[-1]["prix"]
+            prix_moyen  = df_fuel["prix"].mean()
+            prix_min    = df_fuel["prix"].min()
+            prix_max    = df_fuel["prix"].max()
 
-        # Tendance
-        if len(df_fuel) >= 2:
-            diff = df_fuel.iloc[-1]["prix"] - df_fuel.iloc[-2]["prix"]
-            if diff > 0.005:
-                trend_icon, trend_class = "📈", "trend-up"
-                trend_text = f"+{diff:.4f}"
-            elif diff < -0.005:
-                trend_icon, trend_class = "📉", "trend-down"
-                trend_text = f"{diff:.4f}"
+            # Tendance
+            if len(df_fuel) >= 2:
+                diff = df_fuel.iloc[-1]["prix"] - df_fuel.iloc[-2]["prix"]
+                if diff > 0.005:
+                    trend_icon, trend_class = "📈", "trend-up"
+                    trend_text = f"+{diff:.4f}"
+                elif diff < -0.005:
+                    trend_icon, trend_class = "📉", "trend-down"
+                    trend_text = f"{diff:.4f}"
+                else:
+                    trend_icon, trend_class = "➡️", "trend-flat"
+                    trend_text = "stable"
             else:
-                trend_icon, trend_class = "➡️", "trend-flat"
-                trend_text = "stable"
-        else:
-            trend_icon, trend_class, trend_text = "➡️", "trend-flat", "N/A"
+                trend_icon, trend_class, trend_text = "➡️", "trend-flat", "N/A"
 
-        with k1:
-            st.markdown(f"""
-            <div class="price-card">
-                <div class="label">Dernier prix</div>
-                <div class="price">{prix_actuel:.4f}€</div>
-                <div class="{trend_class}">{trend_icon} {trend_text}</div>
-            </div>""", unsafe_allow_html=True)
+            with k1:
+                st.markdown(f"""
+                <div class="price-card">
+                    <div class="label">Dernier prix</div>
+                    <div class="price">{prix_actuel:.4f}€</div>
+                    <div class="{trend_class}">{trend_icon} {trend_text}</div>
+                </div>""", unsafe_allow_html=True)
 
-        with k2:
-            st.markdown(f"""
-            <div class="price-card">
-                <div class="label">Moyenne</div>
-                <div class="price">{prix_moyen:.4f}€</div>
-                <div class="unit">sur {len(df_fuel)} mois</div>
-            </div>""", unsafe_allow_html=True)
+            with k2:
+                st.markdown(f"""
+                <div class="price-card">
+                    <div class="label">Moyenne</div>
+                    <div class="price">{prix_moyen:.4f}€</div>
+                    <div class="unit">sur {len(df_fuel)} mois</div>
+                </div>""", unsafe_allow_html=True)
 
-        with k3:
-            st.markdown(f"""
-            <div class="price-card">
-                <div class="label">Minimum</div>
-                <div class="price" style="color:#2ECC71">{prix_min:.4f}€</div>
-                <div class="unit">/litre</div>
-            </div>""", unsafe_allow_html=True)
+            with k3:
+                st.markdown(f"""
+                <div class="price-card">
+                    <div class="label">Minimum</div>
+                    <div class="price" style="color:#2ECC71">{prix_min:.4f}€</div>
+                    <div class="unit">/litre</div>
+                </div>""", unsafe_allow_html=True)
 
-        with k4:
-            st.markdown(f"""
-            <div class="price-card">
-                <div class="label">Maximum</div>
-                <div class="price" style="color:#E74C3C">{prix_max:.4f}€</div>
-                <div class="unit">/litre</div>
-            </div>""", unsafe_allow_html=True)
+            with k4:
+                st.markdown(f"""
+                <div class="price-card">
+                    <div class="label">Maximum</div>
+                    <div class="price" style="color:#E74C3C">{prix_max:.4f}€</div>
+                    <div class="unit">/litre</div>
+                </div>""", unsafe_allow_html=True)
 
-        # ── Graphique évolution ──
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("""
-        <div class="info-box">
-            📊 <strong>Évolution du prix</strong> — {fuel}
-        </div>
-        """.format(fuel=selected_fuel.replace("_", " ").title()), unsafe_allow_html=True)
+            # ── Graphique évolution ──
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("""
+            <div class="info-box">
+                📊 <strong>Évolution du prix</strong> — {fuel}
+            </div>
+            """.format(fuel=selected_fuel.replace("_", " ").title()), unsafe_allow_html=True)
 
-        fig = go.Figure()
+            fig = go.Figure()
 
-        fig.add_trace(go.Scatter(
-            x=df_fuel["date"],
-            y=df_fuel["prix"],
-            mode="lines+markers",
-            name=selected_fuel.replace("_", " ").title(),
-            line=dict(color="#4A90D9", width=3),
-            marker=dict(size=8, color="#4A90D9", line=dict(width=2, color="#FFFFFF")),
-            fill="tozeroy",
-            fillcolor="rgba(74, 144, 217, 0.1)",
-            hovertemplate="<b>%{x|%B %Y}</b><br>Prix: %{y:.4f} €/L<extra></extra>",
-        ))
+            fig.add_trace(go.Scatter(
+                x=df_fuel["date"],
+                y=df_fuel["prix"],
+                mode="lines+markers",
+                name=selected_fuel.replace("_", " ").title(),
+                line=dict(color="#4A90D9", width=3),
+                marker=dict(size=8, color="#4A90D9", line=dict(width=2, color="#FFFFFF")),
+                fill="tozeroy",
+                fillcolor="rgba(74, 144, 217, 0.1)",
+                hovertemplate="<b>%{x|%B %Y}</b><br>Prix: %{y:.4f} €/L<extra></extra>",
+            ))
 
-        # Ligne moyenne
-        fig.add_hline(
-            y=prix_moyen,
-            line_dash="dash",
-            line_color="rgba(255,255,255,0.3)",
-            annotation_text=f"Moyenne: {prix_moyen:.4f}€",
-            annotation_font_color="rgba(255,255,255,0.6)",
-        )
+            # Ligne moyenne
+            fig.add_hline(
+                y=prix_moyen,
+                line_dash="dash",
+                line_color="rgba(255,255,255,0.3)",
+                annotation_text=f"Moyenne: {prix_moyen:.4f}€",
+                annotation_font_color="rgba(255,255,255,0.6)",
+            )
 
-        fig.update_layout(
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#C0CDE0"),
-            xaxis=dict(
-                gridcolor="rgba(255,255,255,0.05)",
-                title="",
-            ),
-            yaxis=dict(
-                gridcolor="rgba(255,255,255,0.05)",
-                title="€ / litre (TTC)",
-                tickformat=".4f",
-            ),
-            margin=dict(l=60, r=20, t=20, b=40),
-            height=400,
-            hovermode="x unified",
-        )
+            fig.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)",
+                paper_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#C0CDE0"),
+                xaxis=dict(
+                    gridcolor="rgba(255,255,255,0.05)",
+                    title="",
+                ),
+                yaxis=dict(
+                    gridcolor="rgba(255,255,255,0.05)",
+                    title="€ / litre (TTC)",
+                    tickformat=".4f",
+                ),
+                margin=dict(l=60, r=20, t=20, b=40),
+                height=400,
+                hovermode="x unified",
+            )
 
-        st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True)
 
-        # ── Tableau détaillé ──
-        with st.expander("📋 Données détaillées"):
-            df_display = df_fuel[["date", "prix", "source"]].copy()
-            df_display["date"] = df_display["date"].dt.strftime("%B %Y")
-            df_display.columns = ["Période", "Prix €/L", "Source PDF"]
-            st.dataframe(df_display, use_container_width=True, hide_index=True)
+            # ── Tableau détaillé ──
+            with st.expander("📋 Données détaillées"):
+                df_display = df_fuel[["date", "prix", "source"]].copy()
+                df_display["date"] = df_display["date"].dt.strftime("%B %Y")
+                df_display.columns = ["Période", "Prix €/L", "Source PDF"]
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     # ── Comparaison tous types ──
     if len(fuel_types) > 1:
