@@ -372,11 +372,13 @@ if not df.empty:
             st.markdown("<br>", unsafe_allow_html=True)
             
             # Graphique d'évolution
-            st.markdown("**Évolution des moyennes mensuelles (€/L)**")
+            st.markdown("**Évolution de toutes les catégories be.STAT (€/L)**")
             # Préparation données pour le chart
             chart_data = df_avg.copy()
             chart_data["date"] = chart_data["date"].dt.strftime("%Y-%m")
-            st.line_chart(chart_data.set_index("date")[["gasoil_routier", "gasoil_chauffage"]])
+            
+            # On affiche toutes les colonnes sauf 'date'
+            st.line_chart(chart_data.set_index("date"))
             
             # Tableau
             with st.expander("🔍 Voir le tableau complet des moyennes"):
