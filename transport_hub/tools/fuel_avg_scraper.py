@@ -35,9 +35,9 @@ def get_monthly_averages() -> pd.DataFrame:
                 df.columns = [str(c).lower() for c in df.columns]
                 
                 # Identification dynamique des colonnes (plus robuste que l'index fixe)
-                col_date = [c for c in df.columns if 'période' in c or '0' in c][0]
+                col_date = [c for c in df.columns if any(x in c for x in ['période', 'mois', '0'])][0]
                 col_routier = [c for c in df.columns if 'routier' in c or 'diesel' in c][0]
-                col_chauff = [c for c in df.columns if 'chauffage' in c][0]
+                col_chauff = [c for c in df.columns if 'chauffage' in c or 'heating' in c][0]
 
                 df = df[[col_date, col_chauff, col_routier]]
                 df.columns = ["date_raw", "gasoil_chauffage", "gasoil_routier"]
