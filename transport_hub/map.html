@@ -294,6 +294,10 @@
                 });
                 if (!response.ok) { console.error('Erreur serveur:', response.status); return; }
                 const data = await response.json();
+                
+                // DEBUG — ouvre la console F12 pour voir ce que le serveur renvoie
+                console.log('=== RÉPONSE SERVEUR recalculate_drag ===', JSON.stringify(data, null, 2));
+                
                 document.getElementById('dist').innerText = data.distance_km + ' km';
                 document.getElementById('dur').innerText  = data.duration_h  + ' h';
                 document.getElementById('toll').innerText = data.prix_peage  + ' €';
