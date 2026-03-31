@@ -242,3 +242,84 @@ def get_tarif_en_vigueur() -> dict:
             except Exception as e:
                 return {"error": str(e)}
     return {"error": "Aucun tarif officiel trouvé"}
+# ── Prix journaliers Statbel ─────────────────────────────────
+
+STATBEL_URL = "https://statbel.fgov.be/sites/default/files/files/opendata/Energie/FR_energieprijzen.xlsx"
+
+
+def get_daily_prices(full_history: bool = False) -> pd.DataFrame:
+    """
+    Télécharge les prix journaliers depuis Statbel (fichier Excel officiel).
+    Retourne un DataFrame avec colonnes : date + colonnes prix carburants.
+    """
+    cache_file = CACHE_DIR / "statbel_daily.xlsx"
+
+    # Cache de 6h
+    if cache_file.exists():
+        age_hours = (datetime.now().timestamp() - cache_file.stat().st_mtime) / 3600
+        if age_hours < 6:
+            return _parse_statbel_excel(cache_file, full_history)
+
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        resp = requests.get(STATBEL_URL, headers=headers, timeout=30)
+        resp.raise_for_status()
+        cache_file.write_bytes(resp.content)
+        return _parse_statbel_excel(cache_file, full_history)
+    except Exception as e:
+        # Fallback sur le cache même expiré
+        if cache_file.exists():
+            return _parse_statbel_excel(cache_file, full_history)
+        print(f"⚠️ Erreur Statbel: {e}")
+        return pd.DataFrame()
+
+
+def _parse_statbel_excel(path: Path, full_history: bool) -> pd.DataFrame:
+    """Parse le fichier Excel Statbel et retourne un DataFrame propre."""
+    try:
+        df = pd.read_excel(path, engine="openpyxl")
+
+        # Normaliser les noms de colonnes
+        df.columns = [str(c).strip().lower() for c in df.columns]
+
+        # Chercher la colonne date
+        date_col = None
+        for c in df.columns:
+            if "date" in c or "datum" in c:
+                date_col = c
+                break
+
+        if date_col is None:
+            # Prendre la première colonne comme date
+            date_col = df.columns[0]
+
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        df = df.dropna(subset=[date_col])
+        df = df.rename(columns={date_col: "date"})
+
+        # Garder uniquement les colonnes numériques + date
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        # Filtrer colonnes liées au gasoil/diesel/mazout
+        fuel_cols = [c for c in num_cols if any(
+            kw in c for kw in ["gasoil", "diesel", "mazout", "huisbrand", "heating"]
+        )]
+
+        # Si aucun filtre ne matche, prendre toutes les colonnes numériques
+        if not fuel_cols:
+            fuel_cols = num_cols
+
+        df = df[["date"] + fuel_cols].copy()
+        df = df.sort_values("date").reset_index(drop=True)
+
+        # Limiter à 1 an si pas full_history
+        if not full_history:
+            cutoff = datetime.now() - pd.Timedelta(days=365)
+            df = df[df["date"] >= cutoff]
+
+        return df
+
+    except Exception as e:
+        print(f"⚠️ Erreur parsing Statbel Excel: {e}")
+        return pd.DataFrame()
