@@ -10,3 +10,4 @@ httpx
 pydantic
 jinja2
 pdfplumber
+beautifulsoup4
