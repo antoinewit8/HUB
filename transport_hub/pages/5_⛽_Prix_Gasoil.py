@@ -125,7 +125,7 @@ st.markdown("""
 
 # ── Chargement des données ────────────────────────────────────
 from tools.fuel_scraper import get_all_prices, get_tarif_en_vigueur
-from core.fuel_avg_scraper import get_monthly_averages
+from tools.fuel_avg_scraper import get_monthly_averages
 
 with st.spinner("🔄 Récupération des prix officiels..."):
     # Tarif en vigueur
