@@ -125,7 +125,7 @@ st.markdown("""
 
 # ── Chargement des données ────────────────────────────────────
 from tools.fuel_scraper import get_all_prices, get_tarif_en_vigueur
-from tools.fuel_avg_scraper import get_monthly_averages
+from tools.fuel_avg_scraper import get_monthly_averages, get_daily_prices
 
 with st.spinner("🔄 Récupération des prix officiels..."):
     # Tarif en vigueur
@@ -160,7 +160,7 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 
 if not df.empty:
-    tab_daily, tab_monthly = st.tabs(["🕒 Suivi Quotidien", "📊 Moyennes Mensuelles (be.STAT)"])
+    tab_daily, tab_monthly, tab_statbel_daily = st.tabs(["🕒 Suivi Quotidien", "📊 Moyennes Mensuelles", "📈 Statbel Journalier"])
 
     with tab_daily:
         # ── Filtre type de carburant ──
@@ -388,6 +388,23 @@ if not df.empty:
         else:
             st.warning("⚠️ Impossible de charger les moyennes mensuelles. Assurez-vous que 'data/fuel_avg.csv' existe.")
 
+    with tab_statbel_daily:
+        st.markdown("### 📊 Prix Quotidiens Officiels (Statbel)")
+        hist_mode = st.toggle("Afficher l'historique complet (plus lent)", value=False)
+        
+        with st.spinner("📥 Téléchargement des données journalières..."):
+            df_stat_daily = get_daily_prices(full_history=hist_mode)
+            
+        if not df_stat_daily.empty:
+            st.markdown(f"Dernière mise à jour : **{df_stat_daily['date'].max().strftime('%d/%m/%Y')}**")
+            
+            # Graphique multi-colonnes
+            st.area_chart(df_stat_daily.set_index("date"), use_container_width=True)
+            
+            with st.expander("🔍 Voir le tableau des relevés"):
+                st.dataframe(df_stat_daily.sort_values("date", ascending=False), use_container_width=True, hide_index=True)
+        else:
+            st.error("⚠️ Impossible de récupérer les données journalières de Statbel pour le moment.")
 
 else:
     st.error("❌ Aucune donnée récupérée. Le site est peut-être temporairement indisponible.")
