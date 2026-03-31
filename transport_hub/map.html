@@ -9,26 +9,9 @@
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
 
     <style>
-        html, body {
-            height: 100%;
-            width: 100%;
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            touch-action: none;
-            overscroll-behavior: none;
-            font-family: 'Segoe UI', Arial, sans-serif;
-            background: #f4f6f8;
-        }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f8; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
 
-        #map { 
-            position: absolute; 
-            top: 0; left: 0; right: 0; bottom: 0; 
-            width: 100%; 
-            height: 100%;
-        }
-
-        /* ── Info box ── */
         #info-box {
             position: absolute; top: 20px; left: 20px;
             background: rgba(255,255,255,0.95); backdrop-filter: blur(10px);
@@ -75,65 +58,6 @@
         .popup-btn-dest:hover { background: #c0392b; }
         .popup-btn-cancel { background: #ecf0f1; color: #7f8c8d; }
         .popup-btn-cancel:hover { background: #dce1e7; }
-
-        /* ── PANNEAU TOGGLE COUCHES ── */
-        #layer-panel {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 20;
-            display: flex;
-            gap: 12px;
-            background: rgba(255,255,255,0.95);
-            backdrop-filter: blur(10px);
-            padding: 12px 18px;
-            border-radius: 40px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.18);
-            border: 1px solid #e1e8ed;
-        }
-
-        .toggle-btn {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
-            border-radius: 30px;
-            border: 2px solid transparent;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: bold;
-            transition: all 0.22s ease;
-            user-select: none;
-            background: #f0f3f5;
-            color: #5d6d7e;
-        }
-
-        .toggle-btn.active-road {
-            background: #eaf4fb;
-            color: #1a6ea8;
-            border-color: #3498db;
-        }
-        .toggle-btn.active-pl {
-            background: #fdf2ec;
-            color: #c0392b;
-            border-color: #e74c3c;
-        }
-
-        .toggle-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            display: inline-block;
-            flex-shrink: 0;
-        }
-        .dot-road { background: #3498db; }
-        .dot-pl   { background: #e74c3c; }
-
-        .toggle-btn .badge-loading {
-            font-size: 11px;
-            opacity: 0.7;
-        }
     </style>
 </head>
 <body>
@@ -172,29 +96,12 @@
         </div>
     </div>
 
-    <div id="layer-panel">
-        <button class="toggle-btn" id="toggle-road" onclick="toggleLayer('road')" title="Colorier autoroutes / nationales / départementales">
-            <span class="toggle-dot dot-road"></span>
-            🛣️ Types de routes
-        </button>
-
-        <button class="toggle-btn" id="toggle-pl" onclick="toggleLayer('pl')" title="Segments interdits ou limités aux poids lourds (44t / 4m)">
-            <span class="toggle-dot dot-pl"></span>
-            🚛 Restrictions PL
-            <span class="badge-loading" id="pl-status"></span>
-        </button>
-    </div>
-
     <div id="loading-indicator">⏳ Calcul en cours...</div>
     <div id="map"></div>
 
     <script>
         const routeId   = "{{ route_id }}";
         const serverUrl = "{{ server_url }}";
-
-        // ═══════════════════════════════════════════════════════
-        //  DONNÉES INITIALES
-        // ═══════════════════════════════════════════════════════
 
         const initPolylineCurrent  = {{ (route.polyline_current  or route.polyline) | tojson }};
         const initPolylineOriginal = {{ (route.polyline_original or route.polyline) | tojson }};
@@ -206,15 +113,6 @@
         const endCoord   = originalGeojsonCoords[originalGeojsonCoords.length - 1];
 
         let isModified = false;
-
-        const layerState = {
-            road: false,
-            pl:   false
-        };
-
-        // ═══════════════════════════════════════════════════════
-        //  INITIALISATION CARTE
-        // ═══════════════════════════════════════════════════════
 
         const map = new maplibregl.Map({
             container: 'map',
@@ -230,7 +128,6 @@
 
         map.on('load', () => {
 
-            // Tracé ORIGINAL grisé
             map.addSource('originalRouteSource', {
                 type: 'geojson',
                 data: buildGeoJSON(originalGeojsonCoords)
@@ -242,7 +139,6 @@
                 paint: { 'line-color': '#95a5a6', 'line-width': 5, 'line-opacity': 0.0 }
             });
 
-            // Tracé ACTIF bleu
             map.addSource('routeSource', {
                 type: 'geojson',
                 data: buildGeoJSON(geojsonCoords)
@@ -253,9 +149,6 @@
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
                 paint: { 'line-color': '#007cbf', 'line-width': 6, 'line-opacity': 0.85 }
             });
-
-            _initRoadTypeLayer();
-            _initPLLayer();
 
             fitBoundsToCoords(geojsonCoords);
 
@@ -273,215 +166,6 @@
                 setModifiedState(true);
             }
         });
-
-        // ═══════════════════════════════════════════════════════
-        //  COUCHE A — TYPES DE ROUTES
-        // ═══════════════════════════════════════════════════════
-
-        function _initRoadTypeLayer() {
-            map.addSource('osmRoads', {
-                type: 'vector',
-                url: 'https://tiles.stadiamaps.com/data/openmaptiles.json'
-            });
-
-            const roadDefs = [
-                {
-                    id:     'highlight-motorway',
-                    filter: ['in', 'class', 'motorway', 'motorway_link'],
-                    color:  '#e74c3c',
-                    width:  5
-                },
-                {
-                    id:     'highlight-trunk',
-                    filter: ['in', 'class', 'trunk', 'trunk_link', 'primary'],
-                    color:  '#f39c12',
-                    width:  4
-                },
-                {
-                    id:     'highlight-secondary',
-                    filter: ['in', 'class', 'secondary', 'tertiary'],
-                    color:  '#27ae60',
-                    width:  3
-                }
-            ];
-
-            roadDefs.forEach(def => {
-                map.addLayer({
-                    id:           def.id,
-                    type:         'line',
-                    source:       'osmRoads',
-                    'source-layer': 'transportation',
-                    filter:       def.filter,
-                    layout: { 'line-join': 'round', 'line-cap': 'round' },
-                    paint: {
-                        'line-color':   def.color,
-                        'line-width':   def.width,
-                        'line-opacity': 0
-                    }
-                }, 'routeLayer');
-            });
-        }
-
-        // ═══════════════════════════════════════════════════════
-        //  COUCHE B — RESTRICTIONS PL
-        // ═══════════════════════════════════════════════════════
-
-        async function _initPLLayer() {
-            const statusEl = document.getElementById('pl-status');
-            statusEl.textContent = '⏳';
-
-            map.addSource('plSource', {
-                type: 'geojson',
-                data: { type: 'FeatureCollection', features: [] }
-            });
-
-            map.addLayer({
-                id:     'plLayerBlock',
-                type:   'line',
-                source: 'plSource',
-                filter: ['==', ['get', 'severity'], 'block'],
-                layout: { 'line-join': 'round', 'line-cap': 'round' },
-                paint: {
-                    'line-color':    '#e74c3c',
-                    'line-width':    6,
-                    'line-opacity':  0,
-                    'line-dasharray': [2, 2]
-                }
-            });
-
-            map.addLayer({
-                id:     'plLayerWarn',
-                type:   'line',
-                source: 'plSource',
-                filter: ['==', ['get', 'severity'], 'warn'],
-                layout: { 'line-join': 'round', 'line-cap': 'round' },
-                paint: {
-                    'line-color':    '#f39c12',
-                    'line-width':    5,
-                    'line-opacity':  0,
-                    'line-dasharray': [3, 3]
-                }
-            });
-
-            const plPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false });
-
-            ['plLayerBlock', 'plLayerWarn'].forEach(layerId => {
-                map.on('mouseenter', layerId, (e) => {
-                    if (!layerState.pl) return;
-                    map.getCanvas().style.cursor = 'pointer';
-                    const props = e.features[0].properties;
-                    let html = '<div style="font-size:13px; font-weight:bold; color:#c0392b;">🚫 Restriction PL</div>';
-                    if (props.maxweight) html += `<div>⚖️ Tonnage max : <b>${props.maxweight} t</b></div>`;
-                    if (props.maxheight) html += `<div>📏 Hauteur max : <b>${props.maxheight} m</b></div>`;
-                    if (props.name)      html += `<div style="color:#7f8c8d; font-size:12px; margin-top:4px;">${props.name}</div>`;
-                    plPopup.setLngLat(e.lngLat).setHTML(html).addTo(map);
-                });
-                map.on('mouseleave', layerId, () => {
-                    map.getCanvas().style.cursor = '';
-                    plPopup.remove();
-                });
-            });
-
-            try {
-                const geojson = await _fetchPLRestrictions();
-                map.getSource('plSource').setData(geojson);
-                statusEl.textContent = geojson.features.length > 0 ? `(${geojson.features.length})` : '(0)';
-            } catch (err) {
-                console.warn('Overpass fetch échoué:', err);
-                statusEl.textContent = '⚠️';
-            }
-        }
-
-        async function _fetchPLRestrictions() {
-            const lats = originalGeojsonCoords.map(c => c[1]);
-            const lngs = originalGeojsonCoords.map(c => c[0]);
-            const margin = 0.3;
-            const bbox = [
-                Math.min(...lats) - margin,
-                Math.min(...lngs) - margin,
-                Math.max(...lats) + margin,
-                Math.max(...lngs) + margin
-            ].join(',');
-
-            const query = `
-                [out:json][timeout:25];
-                (
-                  way["maxweight"](${bbox});
-                  way["maxheight"](${bbox});
-                );
-                out geom;
-            `;
-
-            const res = await fetch('https://overpass-api.de/api/interpreter', {
-                method: 'POST',
-                body:   'data=' + encodeURIComponent(query)
-            });
-
-            if (!res.ok) throw new Error(`Overpass HTTP ${res.status}`);
-            const json = await res.json();
-
-            const features = json.elements
-                .filter(el => el.type === 'way' && el.geometry)
-                .map(el => {
-                    const mw = parseFloat(el.tags?.maxweight);
-                    const mh = parseFloat(el.tags?.maxheight);
-                    let severity = 'warn';
-                    if ((mw && mw < 3.5) || (mh && mh < 3.5)) severity = 'block';
-
-                    return {
-                        type: 'Feature',
-                        properties: {
-                            severity,
-                            maxweight: mw || null,
-                            maxheight: mh || null,
-                            name:      el.tags?.name || null
-                        },
-                        geometry: {
-                            type: 'LineString',
-                            coordinates: el.geometry.map(pt => [pt.lon, pt.lat])
-                        }
-                    };
-                });
-
-            return { type: 'FeatureCollection', features };
-        }
-
-        // ═══════════════════════════════════════════════════════
-        //  TOGGLE LOGIQUE
-        // ═══════════════════════════════════════════════════════
-
-        function toggleLayer(key) {
-            layerState[key] = !layerState[key];
-            const on = layerState[key];
-
-            if (key === 'road') {
-                const opacity = on ? 0.75 : 0;
-                ['highlight-motorway', 'highlight-trunk', 'highlight-secondary'].forEach(id => {
-                    map.setPaintProperty(id, 'line-opacity', opacity);
-                });
-                _setToggleBtn('toggle-road', on, 'active-road');
-
-            } else if (key === 'pl') {
-                const opBlock = on ? 0.85 : 0;
-                const opWarn  = on ? 0.75 : 0;
-                map.setPaintProperty('plLayerBlock', 'line-opacity', opBlock);
-                map.setPaintProperty('plLayerWarn',  'line-opacity', opWarn);
-                _setToggleBtn('toggle-pl', on, 'active-pl');
-            }
-        }
-
-        function _setToggleBtn(btnId, on, activeClass) {
-            const btn = document.getElementById(btnId);
-            if (on) {
-                btn.classList.add(activeClass);
-            } else {
-                btn.classList.remove(activeClass);
-            }
-        }
-
-        // ═══════════════════════════════════════════════════════
-        //  HELPERS
-        // ═══════════════════════════════════════════════════════
 
         function buildGeoJSON(coords) {
             return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } };
@@ -515,23 +199,10 @@
             }
         }
 
-        // ═══════════════════════════════════════════════════════
-        //  WAYPOINTS
-        // ═══════════════════════════════════════════════════════
-
-        const WP_COLORS = ['#3498db','#9b59b6','#1abc9c','#f39c12','#e67e22','#16a085'];
-
         function addWaypoint(lngLat) {
-            const id    = Date.now();
-            const color = WP_COLORS[waypoints.length % WP_COLORS.length];
-            const wpMarker = new maplibregl.Marker({ color: color, draggable: true })
-                .setLngLat(lngLat).addTo(map);
-            const wpObj = {
-                id,
-                marker: wpMarker,
-                color,
-                label: `${lngLat.lat.toFixed(4)}, ${lngLat.lng.toFixed(4)}`
-            };
+            const id = Date.now();
+            const wpMarker = new maplibregl.Marker({ color: '#3498db', draggable: true }).setLngLat(lngLat).addTo(map);
+            const wpObj = { id, marker: wpMarker };
             waypoints.push(wpObj);
             wpMarker.on('dragend', () => { updateWaypointsList(); recalculateRoute(); });
             wpMarker.getElement().addEventListener('dblclick', () => removeWaypoint(id));
@@ -539,24 +210,23 @@
             recalculateRoute();
         }
 
-           function removeWaypoint(id) {
+        function removeWaypoint(id) {
             const index = waypoints.findIndex(w => w.id === id);
             if (index === -1) return;
             waypoints[index].marker.remove();
             waypoints.splice(index, 1);
             updateWaypointsList();
-            // TOUJOURS recalculer, même avec 0 waypoints
-            recalculateRoute();
+            if (waypoints.length === 0 && !hasMarkersMovedFromOriginal()) restoreOriginalDisplay();
+            else recalculateRoute();
         }
 
         function clearWaypoints() {
             waypoints.forEach(wp => wp.marker.remove());
             waypoints = [];
             updateWaypointsList();
-            // TOUJOURS recalculer
-            recalculateRoute();
+            if (!hasMarkersMovedFromOriginal()) restoreOriginalDisplay();
+            else recalculateRoute();
         }
-
 
         function hasMarkersMovedFromOriginal() {
             if (!originMarker || !destMarker) return false;
@@ -566,64 +236,23 @@
         }
 
         function updateWaypointsList() {
-            const list = document.getElementById('wp-list');
+            const listDiv = document.getElementById('wp-list');
             if (waypoints.length === 0) {
-                list.innerHTML = '<p class="wp-empty">Aucune étape ajoutée.</p>';
+                listDiv.innerHTML = '<p class="wp-empty">Aucune étape ajoutée. Clic-droit sur la carte pour en ajouter.</p>';
                 return;
             }
-            list.innerHTML = waypoints.map((wp, i) => {
-                const color   = WP_COLORS[i % WP_COLORS.length];
-                const label   = wp.label || `Étape ${i+1}`;
-                const isFirst = i === 0;
-                const isLast  = i === waypoints.length - 1;
-                return `
-                <div class="wp-item" style="border-left-color:${color}">
-                    <div style="background:${color};color:white;border-radius:50%;width:22px;height:22px;
-                            display:flex;align-items:center;justify-content:center;
-                            font-size:11px;font-weight:bold;flex-shrink:0;">${i+1}</div>
-                    <div style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;
-                            white-space:nowrap;margin:0 6px;" title="${label}">${label}</div>
-                    <div style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">
-                        <button onclick="moveWaypoint(${wp.id},-1)" ${isFirst?'disabled':''} 
-                            style="background:none;border:1px solid #ddd;border-radius:3px;
-                            cursor:pointer;font-size:10px;padding:1px 4px;">▲</button>
-                        <button onclick="moveWaypoint(${wp.id}, 1)" ${isLast?'disabled':''} 
-                            style="background:none;border:1px solid #ddd;border-radius:3px;
-                            cursor:pointer;font-size:10px;padding:1px 4px;">▼</button>
-                    </div>
-                    <span class="wp-remove" onclick="removeWaypoint(${wp.id})">✕</span>
-                </div>`;
-            }).join('');
+            listDiv.innerHTML = '';
+            waypoints.forEach((wp, index) => {
+                const lngLat = wp.marker.getLngLat();
+                const item   = document.createElement('div');
+                item.className = 'wp-item';
+                item.innerHTML = `
+                    <div><b>Étape ${index + 1}</b><br>
+                    <span style="color:#7f8c8d; font-size:12px;">${lngLat.lat.toFixed(4)}, ${lngLat.lng.toFixed(4)}</span></div>
+                    <div class="wp-remove" onclick="removeWaypoint(${wp.id})" title="Supprimer">❌</div>`;
+                listDiv.appendChild(item);
+            });
         }
-
-        function moveWaypoint(id, direction) {
-            const i = waypoints.findIndex(w => w.id === id);
-            if (i === -1) return;
-            const newIndex = i + direction;
-            if (newIndex < 0 || newIndex >= waypoints.length) return;
-
-            // Récupère les positions des deux marqueurs AVANT le swap
-            const posI        = waypoints[i].marker.getLngLat();
-            const posNewIndex = waypoints[newIndex].marker.getLngLat();
-
-            // Swap les positions physiques sur la carte
-            waypoints[i].marker.setLngLat(posNewIndex);
-            waypoints[newIndex].marker.setLngLat(posI);
-
-            // Met à jour les labels
-            waypoints[i].label        = `${posNewIndex.lat.toFixed(4)}, ${posNewIndex.lng.toFixed(4)}`;
-            waypoints[newIndex].label = `${posI.lat.toFixed(4)}, ${posI.lng.toFixed(4)}`;
-
-            // Swap dans le tableau (pour l'ordre logique)
-            [waypoints[i], waypoints[newIndex]] = [waypoints[newIndex], waypoints[i]];
-
-            updateWaypointsList();
-            recalculateRoute();
-        }
-
-        // ═══════════════════════════════════════════════════════
-        //  RESET & RECALCUL
-        // ═══════════════════════════════════════════════════════
 
         async function restoreOriginalDisplay() {
             geojsonCoords = [...originalGeojsonCoords];
@@ -633,15 +262,13 @@
             setModifiedState(false);
 
             try {
-                const resp = await fetch(`${serverUrl}/api/reset_route/${routeId}`, { method: 'POST' });
-                if (resp.ok) {
-                    const data = await resp.json();
-                    document.getElementById('dist').textContent = data.distance_km + " km";
-                    document.getElementById('dur').textContent  = data.duration_h + " h";
-                    document.getElementById('toll').textContent = data.prix_peage + " €";
-                }
-            } catch(e) {
-                console.warn('Reset échoué:', e);
+                const r = await fetch(`${serverUrl}/api/reset_route/${routeId}`, { method: 'POST' });
+                const d = await r.json();
+                if (d.distance_km !== undefined) document.getElementById('dist').textContent = d.distance_km + ' km';
+                if (d.duration_h  !== undefined) document.getElementById('dur').textContent  = d.duration_h + ' h';
+                if (d.prix_peage  !== undefined) document.getElementById('toll').textContent = d.prix_peage + ' €';
+            } catch (e) {
+                console.warn('Reset Firebase échoué:', e);
             }
         }
 
@@ -653,29 +280,20 @@
         }
 
         async function recalculateRoute() {
-            // Si aucun waypoint et markers pas bougés → restaurer l'original
-            if (waypoints.length === 0) {
-                await restoreOriginalDisplay();
-                return;
-            }
-
+            const allPoints = [
+                originMarker.getLngLat(),
+                ...waypoints.map(w => w.marker.getLngLat()),
+                destMarker.getLngLat()
+            ];
             setLoading(true);
             try {
-                const o = originMarker.getLngLat(), d = destMarker.getLngLat();
-                const allWps = [
-                    { lat: o.lat, lng: o.lng },
-                    ...waypoints.map(wp => {
-                        const ll = wp.marker.getLngLat();
-                        return { lat: ll.lat, lng: ll.lng };
-                    }),
-                    { lat: d.lat, lng: d.lng }
-                ];
-                const resp = await fetch(`${serverUrl}/api/recalculate_drag`, {
+                const response = await fetch(`${serverUrl}/api/recalculate_drag`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ route_id: routeId, waypoints: allWps })
+                    body: JSON.stringify({ route_id: routeId, waypoints: allPoints.map(p => ({ lat: p.lat, lng: p.lng })) })
                 });
-                const data = await resp.json();
+                if (!response.ok) { console.error('Erreur serveur:', response.status); return; }
+                const data = await response.json();
                 document.getElementById('dist').innerText = data.distance_km + ' km';
                 document.getElementById('dur').innerText  = data.duration_h  + ' h';
                 document.getElementById('toll').innerText = data.prix_peage  + ' €';
@@ -688,10 +306,6 @@
                 setLoading(false);
             }
         }
-
-        // ═══════════════════════════════════════════════════════
-        //  RECHERCHE ADRESSE
-        // ═══════════════════════════════════════════════════════
 
         let searchMarker = null, searchPopup = null;
 
@@ -733,7 +347,6 @@
                     <div class="popup-label">📍 ${label}</div>
                     <button class="popup-btn popup-btn-origin" onclick="_applySearchResult(${lat},${lng},'origin')">🟢 Définir comme départ</button>
                     <button class="popup-btn popup-btn-dest"   onclick="_applySearchResult(${lat},${lng},'dest')">🔴 Définir comme arrivée</button>
-                    <button class="popup-btn popup-btn-waypoint" onclick="_applySearchWaypoint(${lat}, ${lng})">🔵 Ajouter comme étape</button>
                     <button class="popup-btn popup-btn-cancel" onclick="_cancelSearchPin()">Annuler</button>`)
                 .addTo(map);
         }
@@ -745,15 +358,11 @@
             await recalculateRoute();
         }
 
-        function _applySearchWaypoint(lat, lng) {
-            _cancelSearchPin();
-            addWaypoint({ lng: lng, lat: lat });
-        }
-
         function _cancelSearchPin() {
             if (searchMarker) { searchMarker.remove(); searchMarker = null; }
             if (searchPopup)  { searchPopup.remove();  searchPopup  = null; }
         }
+
     </script>
 </body>
 </html>
