@@ -3,13 +3,16 @@ import requests
 import os
 from datetime import datetime
 
-def get_monthly_averages() -> pd.DataFrame:
+def get_statbel_data(view_id: str = "90a3de47-97fc-4870-9936-f55ed85f15fd") -> pd.DataFrame:
     """
-    Récupère les moyennes mensuelles du gasoil depuis be.STAT (Statbel).
+    Récupère les données de prix depuis be.STAT via l'ID de la vue.
     Fallback sur data/fuel_avg.csv si le site est inaccessible.
+    Vues suggérées :
+    - 90a3de47-97fc-4870-9936-f55ed85f15fd (Mensuel)
+    - 939c67bb-39fa-4f49-9d05-c446187bef1d (Quotidien complet)
+    - cee4903e-c302-45be-9e43-e4b724ffb592 (30 derniers jours)
     """
-    url = "https://bestat.economie.fgov.be/bestat/crosstable.xhtml?view=90a3de47-97fc-4870-9936-f55ed85f15fd"
-    csv_path = "data/fuel_avg.csv"
+    url = f"https://bestat.statbel.fgov.be/bestat/crosstable.xhtml?view={view_id}"
     # Utilisation d'un chemin relatif au projet
     csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "fuel_avg.csv")
     
@@ -35,7 +38,7 @@ def get_monthly_averages() -> pd.DataFrame:
                 clean_mapping = {}
                 
                 # Identification de la colonne de date
-                col_date_idx = [i for i, c in enumerate(raw_cols) if any(x in str(c).lower() for x in ['période', 'mois', '0'])][0]
+                col_date_idx = [i for i, c in enumerate(raw_cols) if any(x in str(c).lower() for x in ['période', 'mois', 'jour', 'date', '0'])][0]
                 date_col_name = raw_cols[col_date_idx]
                 clean_mapping[date_col_name] = "date_raw"
 
@@ -49,11 +52,15 @@ def get_monthly_averages() -> pd.DataFrame:
 
                 df = df.rename(columns=clean_mapping)
 
-                # Nettoyage des lignes de total ou vides
-                df = df[df["date_raw"].str.contains(r'\d{4}', na=False)].copy()
+                # Nettoyage des lignes (on garde ce qui ressemble à une date ou un code temporel)
+                df = df[df["date_raw"].str.contains(r'\d', na=False)].copy()
                 
-                # Conversion date (Format be.STAT : 2024M01 ou Janvier 2024)
-                df["date"] = pd.to_datetime(df["date_raw"].str.replace('M', '-'), errors='coerce')
+                # Conversion date flexible (gère 2024M01, DD/MM/YYYY, etc.)
+                df["date"] = pd.to_datetime(
+                    df["date_raw"].str.replace('M', '-'), 
+                    dayfirst=True, 
+                    errors='coerce'
+                )
                 df = df.dropna(subset=["date"]).sort_values("date")
                 
                 # On garde 'date' en premier, puis toutes les autres colonnes nettoyées
@@ -78,5 +85,13 @@ def get_monthly_averages() -> pd.DataFrame:
         except Exception as e:
             print(f"DEBUG: Erreur lecture CSV local : {e}")
 
-    # Retourne un DataFrame vide si tout échoue
-    return pd.DataFrame(columns=["date", "gasoil_routier", "gasoil_chauffage"])
+    return pd.DataFrame()
+
+def get_monthly_averages() -> pd.DataFrame:
+    """Maintient la compatibilité avec l'existant."""
+    return get_statbel_data("90a3de47-97fc-4870-9936-f55ed85f15fd")
+
+def get_daily_prices(full_history: bool = False) -> pd.DataFrame:
+    """Récupère les prix journaliers (30j ou complet)."""
+    view_id = "939c67bb-39fa-4f49-9d05-c446187bef1d" if full_history else "cee4903e-c302-45be-9e43-e4b724ffb592"
+    return get_statbel_data(view_id)
