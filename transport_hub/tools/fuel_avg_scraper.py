@@ -30,27 +30,40 @@ def get_monthly_averages() -> pd.DataFrame:
             if dfs:
                 df = dfs[0]
                 
-                # be.STAT peut avoir des colonnes d'index complexes, on nettoie
-                # On cherche les colonnes qui contiennent nos mots clés
-                df.columns = [str(c).lower() for c in df.columns]
+                # Nettoyage des noms de colonnes
+                raw_cols = df.columns.tolist()
+                clean_mapping = {}
                 
-                # Identification dynamique des colonnes (plus robuste que l'index fixe)
-                col_date = [c for c in df.columns if any(x in c for x in ['période', 'mois', '0'])][0]
-                col_routier = [c for c in df.columns if 'routier' in c or 'diesel' in c][0]
-                col_chauff = [c for c in df.columns if 'chauffage' in c or 'heating' in c][0]
+                # Identification de la colonne de date
+                col_date_idx = [i for i, c in enumerate(raw_cols) if any(x in str(c).lower() for x in ['période', 'mois', '0'])][0]
+                date_col_name = raw_cols[col_date_idx]
+                clean_mapping[date_col_name] = "date_raw"
 
-                df = df[[col_date, col_chauff, col_routier]]
-                df.columns = ["date_raw", "gasoil_chauffage", "gasoil_routier"]
-                
+                # Mapping des autres colonnes (types de diesel/gasoil)
+                for col in raw_cols:
+                    if col == date_col_name: continue
+                    # Nettoyage : "Gasoil de chauffage Extra (> 2000 l)" -> "Chauffage Extra >2000L"
+                    name = str(col).replace("Gasoil de chauffage", "Chauff.").replace("(litres)", "").replace(" l", "L")
+                    name = name.replace("  ", " ").strip()
+                    clean_mapping[col] = name
+
+                df = df.rename(columns=clean_mapping)
+
                 # Nettoyage des lignes de total ou vides
                 df = df[df["date_raw"].str.contains(r'\d{4}', na=False)].copy()
                 
                 # Conversion date (Format be.STAT : 2024M01 ou Janvier 2024)
-                # On simplifie pour le DataFrame
                 df["date"] = pd.to_datetime(df["date_raw"].str.replace('M', '-'), errors='coerce')
                 df = df.dropna(subset=["date"]).sort_values("date")
                 
-                return df[["date", "gasoil_routier", "gasoil_chauffage"]]
+                # On garde 'date' en premier, puis toutes les autres colonnes nettoyées
+                cols_to_keep = ["date"] + [v for k, v in clean_mapping.items() if v != "date_raw"]
+                
+                # Pour la compatibilité avec les KPIs existants, on s'assure qu'une colonne s'appelle 'gasoil_routier'
+                if "Diesel" in df.columns:
+                    df = df.rename(columns={"Diesel": "gasoil_routier"})
+                
+                return df[cols_to_keep]
 
     except Exception as e:
         print(f"DEBUG: Erreur scraping be.STAT : {e}")
