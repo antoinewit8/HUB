@@ -6,7 +6,7 @@ Module Prix Gasoil Belgique — Données officielles SPF Economie
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Prix Gasoil — CB Groupe", page_icon="⛽", layout="wide")
 
@@ -313,6 +313,42 @@ if not df.empty:
             height=350,
         )
         st.plotly_chart(fig2, use_container_width=True)
+
+    # ── Analyse sur période personnalisée ──
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("📊 Moyenne des prix (Analyse par période)"):
+        today = datetime.now().date()
+        start_default = today - timedelta(days=30)
+        
+        date_range = st.date_input(
+            "Choisir une plage de dates",
+            value=(start_default, today),
+            max_value=today,
+            help="Filtrer l'historique pour calculer les moyennes sur une période donnée"
+        )
+
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            d_start, d_end = date_range
+            # Filtrage sur la période sélectionnée pour le carburant choisi
+            df_period = df_fuel[(df_fuel["date"].dt.date >= d_start) & (df_fuel["date"].dt.date <= d_end)].copy()
+            
+            if not df_period.empty:
+                pmoy = df_period["prix"].mean()
+                pmin = df_period["prix"].min()
+                pmax = df_period["prix"].max()
+                n_obs = len(df_period)
+                
+                st.markdown(f"**Analyse pour :** {selected_fuel.replace('_', ' ').title()}")
+                c_k1, c_k2, c_k3, c_k4 = st.columns(4)
+                c_k1.metric("Prix moyen", f"{pmoy:.4f} €/L")
+                c_k2.metric("Minimum", f"{pmin:.4f} €/L")
+                c_k3.metric("Maximum", f"{pmax:.4f} €/L")
+                c_k4.metric("Relevés", n_obs)
+                
+                st.area_chart(df_period.set_index("date")["prix"], color="#4A90D9")
+            else:
+                st.warning(f"⚠️ Aucune donnée n'existe pour la période du {d_start} au {d_end} ({selected_fuel.replace('_', ' ').title()}).")
+
 
 else:
     st.error("❌ Aucune donnée récupérée. Le site est peut-être temporairement indisponible.")
