@@ -125,6 +125,7 @@ st.markdown("""
 
 # ── Chargement des données ────────────────────────────────────
 from tools.fuel_scraper import get_all_prices, get_tarif_en_vigueur
+from core.fuel_avg_scraper import get_monthly_averages
 
 with st.spinner("🔄 Récupération des prix officiels..."):
     # Tarif en vigueur
@@ -159,6 +160,9 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 
 if not df.empty:
+    tab_daily, tab_monthly = st.tabs(["🕒 Suivi Quotidien", "📊 Moyennes Mensuelles (be.STAT)"])
+
+    with tab_daily:
     # ── Filtre type de carburant ──
     fuel_types = df["type"].unique().tolist()
     selected_fuel = st.selectbox(
@@ -348,6 +352,39 @@ if not df.empty:
                 st.area_chart(df_period.set_index("date")["prix"], color="#4A90D9")
             else:
                 st.warning(f"⚠️ Aucune donnée n'existe pour la période du {d_start} au {d_end} ({selected_fuel.replace('_', ' ').title()}).")
+
+    with tab_monthly:
+        with st.spinner("📊 Calcul des moyennes mensuelles..."):
+            df_avg = get_monthly_averages()
+            
+        if not df_avg.empty:
+            # KPIs pour le Gasoil Routier (le plus pertinent pour CB Groupe)
+            avg_glob = df_avg["gasoil_routier"].mean()
+            max_row = df_avg.loc[df_avg["gasoil_routier"].idxmax()]
+            min_row = df_avg.loc[df_avg["gasoil_routier"].idxmin()]
+            
+            st.markdown("### 📈 Analyse Long Terme (Routier)")
+            mk1, mk2, mk3 = st.columns(3)
+            mk1.metric("Moyenne Globale", f"{avg_glob:.4f} €/L")
+            mk2.metric("Mois le plus cher", f"{max_row['gasoil_routier']:.4f} €/L", max_row["date"].strftime("%b %Y"), delta_color="inverse")
+            mk3.metric("Mois le moins cher", f"{min_row['gasoil_routier']:.4f} €/L", min_row["date"].strftime("%b %Y"))
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Graphique d'évolution
+            st.markdown("**Évolution des moyennes mensuelles (€/L)**")
+            # Préparation données pour le chart
+            chart_data = df_avg.copy()
+            chart_data["date"] = chart_data["date"].dt.strftime("%Y-%m")
+            st.line_chart(chart_data.set_index("date")[["gasoil_routier", "gasoil_chauffage"]])
+            
+            # Tableau
+            with st.expander("🔍 Voir le tableau complet des moyennes"):
+                df_avg_disp = df_avg.copy()
+                df_avg_disp["date"] = df_avg_disp["date"].dt.strftime("%B %Y")
+                st.dataframe(df_avg_disp, use_container_width=True, hide_index=True)
+        else:
+            st.warning("⚠️ Impossible de charger les moyennes mensuelles. Assurez-vous que 'data/fuel_avg.csv' existe.")
 
 
 else:
