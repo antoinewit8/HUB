@@ -22,7 +22,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
         CACHE_FILE  = os.path.join(KM_DIR, "cache_trajets.json")
         GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
-        MAX_WORKERS = 4# ← 🛡️ RÉDUIT pour éviter les timeouts API/Streamlit
+        MAX_WORKERS = 2 # ← 🛡️ Sécurité maximale pour éviter les crashs API
         cache_lock  = threading.Lock()
         geo_lock    = threading.Lock()
 
@@ -203,12 +203,18 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
                     current_global += 1
 
+                    # On n'affiche le message de sauvegarde que tous les 20 trajets
+                    msg = f"📍 {routes[idx]['origin']} → {routes[idx]['dest']}"
+                    
+                    if current_global % 20 == 0:
+                        # Sauvegarde réelle du travail en cours (Excel + Cache)
+                        write_km_results(ws, results, calculer_peage)
+                        wb.save(filepath.replace(".xlsx", "_KM.xlsx"))
+                        sauvegarder_cache(cache)
+                        msg += " 💾 (Auto-save OK)"
+                    
                     if progress_callback:
-                        progress_callback(
-                            current_global,
-                            total_global,
-                            f"📍 {routes[idx]['origin']} → {routes[idx]['dest']} (Auto-save OK)"
-                        )
+                        progress_callback(current_global, total_global, msg)
 
             if progress_callback:
                 progress_callback(current_global, total_global, f"💾 Écriture des résultats ({sheet_name})...")
