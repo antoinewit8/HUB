@@ -12,11 +12,13 @@ from pydantic import BaseModel
 from typing import List, Optional
 import uvicorn, uuid, json, os, httpx
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
 app = FastAPI(title="Arcelor Route Map Server")
 
+# --- AJOUTEZ CE BLOC ICI ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Autorise tous les sites web (dont votre Streamlit) à appeler cette API
@@ -24,7 +26,8 @@ app.add_middleware(
     allow_methods=["*"],  # Autorise toutes les méthodes (GET, POST, etc.)
     allow_headers=["*"],
 )
-app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 ROUTES_FILE = "data/routes.json"
@@ -48,7 +51,7 @@ def load_pref_routes() -> list:
     with open(PREF_ROUTES_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def find_pref_waypoints(origin: str, dest: str) -> list:
+def find_pref_waypoints(origin: str, dest: str, super_mode: bool = False) -> list:
     """Retourne les waypoints préférentiels pour un trajet, ou []."""
     prefs = load_pref_routes()
     o = origin.strip().lower()
@@ -56,8 +59,13 @@ def find_pref_waypoints(origin: str, dest: str) -> list:
     for route in prefs:
         if (route["origine"].strip().lower() == o
                 and route["destination"].strip().lower() == d):
+            
+            # Support de la structure enrichie (super_waypoints)
+            key = "super_waypoints" if super_mode and "super_waypoints" in route else "waypoints"
+            wps_raw = route.get(key, [])
+            
             wps = []
-            for wp in route.get("waypoints", []):
+            for wp in wps_raw:
                 parts = wp.split(",")
                 if len(parts) == 2:
                     wps.append({
@@ -134,6 +142,7 @@ class RouteRecalc(BaseModel):
     dest:           str
     avoid_tolls:    bool = False
     avoid_highways: bool = False
+    super_pref:     bool = False
 
 class WaypointItem(BaseModel):
     lat: float
@@ -143,6 +152,7 @@ class RecalcDragRequest(BaseModel):
     waypoints:      List[WaypointItem]
     avoid_tolls:    bool = False
     avoid_highways: bool = False
+    super_pref:     bool = False
     route_id:       Optional[str] = None
 
 
@@ -220,7 +230,7 @@ async def _geocode(address: str) -> Optional[list]:
         resp = await client.get(
             "https://api.myptv.com/geocoding/v1/locations/by-text",
             headers={"apiKey": PTV_API_KEY},
-            params={"searchText": address, "countryFilter": "FRA,BEL,LUX,DEU,ESP"},
+            params={"searchText": address, "countryFilter": "FR,BE,LU,DE,ES,NL,GB"},
             timeout=15,
         )
     if resp.status_code != 200:
@@ -231,7 +241,7 @@ async def _geocode(address: str) -> Optional[list]:
     loc = results[0]["referencePosition"]
     return [loc["latitude"], loc["longitude"]]
 
-async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: bool) -> dict:
+async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: bool, super_pref: bool = False) -> dict:
     """Appel PTV routing v1 GET — waypoints répétés en query string."""
     query_params = [
         ("profile", "EUR_TRAILER_TRUCK"),
@@ -249,7 +259,7 @@ async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: boo
             query_params.append(("waypoints", f"{lat},{lng}"))
 
     avoid = []
-    if avoid_tolls:    avoid.append("TOLL_ROADS")
+    if avoid_tolls or super_pref: avoid.append("TOLL")
     if avoid_highways: avoid.append("HIGHWAYS")
     if avoid:
         query_params.append(("options[avoid]", ",".join(avoid)))
@@ -279,6 +289,36 @@ async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: boo
 async def health():
     return {"status": "ok"}
 
+@app.get("/api/geocode")
+async def api_geocode(q: str):
+    """Route API pour la recherche d'adresse depuis le frontend."""
+    if not q:
+        raise HTTPException(status_code=400, detail="Requête vide")
+        
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            "https://api.myptv.com/geocoding/v1/locations/by-text",
+            headers={"apiKey": PTV_API_KEY},
+            params={"searchText": q, "countryFilter": "FR,BE,LU,DE,ES,NL,GB"},
+            timeout=15,
+        )
+        
+    if resp.status_code != 200:
+        raise HTTPException(status_code=500, detail="Erreur avec l'API PTV")
+        
+    results = resp.json().get("locations", [])
+    if not results:
+        raise HTTPException(status_code=404, detail="Adresse introuvable")
+        
+    best_match = results[0]
+    loc = best_match["referencePosition"]
+    label = best_match.get("address", {}).get("formattedAddress", q)
+
+    return {
+        "lat": loc["latitude"],
+        "lng": loc["longitude"],
+        "label": label
+    }
 
 # ── Créer une route ──────────────────────────────────────────────────────────
 @app.post("/api/create_route")
@@ -293,8 +333,8 @@ async def create_route(route: RouteCreate):
     routes = {route_id: route_data}
     save_routes(routes)
 
-    url = f"{MAP_SERVER_URL}/carte?id={route_id}"
-    return {"url": url, "id": route_id}
+        url = f"{MAP_SERVER_URL}/carte?id={route_id}"
+        return {"url": url, "id": route_id}
 
 
 # ── Afficher la carte ────────────────────────────────────────────────────────
@@ -326,14 +366,14 @@ async def recalculate(data: RouteRecalc):
     if not origin_coords or not dest_coords:
         raise HTTPException(status_code=400, detail="Géocodage impossible")
 
-    pref_wps = find_pref_waypoints(data.origin, data.dest)
+    pref_wps = find_pref_waypoints(data.origin, data.dest, super_mode=data.super_pref)
 
     waypoints_list = [f"{origin_coords[0]},{origin_coords[1]}"]
     for wp in pref_wps:
         waypoints_list.append(f"{wp['lat']},{wp['lng']}")
     waypoints_list.append(f"{dest_coords[0]},{dest_coords[1]}")
 
-    ptv = await _call_ptv(waypoints_list, data.avoid_tolls, data.avoid_highways)
+    ptv = await _call_ptv(waypoints_list, data.avoid_tolls, data.avoid_highways, super_pref=data.super_pref)
 
     distance_m, duration_s = _extract_distance_duration(ptv)
     prix_peage = _extract_toll(ptv)
@@ -432,7 +472,7 @@ async def reset_route(route_id: str):
         raise
     except Exception as e:
         raise HTTPException(500, f"Erreur reset: {e}")
-
+    
 
 @app.get("/api/geocode")
 async def geocode(q: str):
