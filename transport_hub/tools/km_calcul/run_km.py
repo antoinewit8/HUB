@@ -1,3 +1,12 @@
+import os
+import sys
+
+KM_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def _inject_path():
+    if KM_DIR not in sys.path:
+        sys.path.insert(0, KM_DIR)
+
 def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool = False, progress_callback=None) -> dict:
     _inject_path()
 
