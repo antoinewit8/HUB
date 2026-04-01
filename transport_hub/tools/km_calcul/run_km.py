@@ -13,13 +13,14 @@ def _inject_path():
     if KM_DIR not in sys.path:
         sys.path.insert(0, KM_DIR)
 
-def run_calcul_km(filepath: str, calculer_peage: bool = False, progress_callback=None) -> dict:
+def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool = False, progress_callback=None) -> dict:
     """
     Point d'entrée principal pour le calcul KM.
 
     Args:
         filepath: Chemin absolu vers le fichier Excel source
         calculer_peage: True pour inclure les frais de péage
+        super_pref: True pour activer le mode super préférentiel
         progress_callback: fonction(current, total, message) optionnelle
 
     Returns:
@@ -73,8 +74,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, progress_callback
         }
 
         # === Traitement trajet ===
-        def traiter_trajet(index, total, route, cache, calculer_peage):
-            cache_key = f"{route['origin']} || {route['dest']}"
+        def traiter_trajet(index, total, route, cache, calculer_peage, super_pref):
+            cache_key = f"{route['origin']} || {route['dest']} || super={super_pref}"
             from_cache = False
 
             with cache_lock:
@@ -99,7 +100,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, progress_callback
                 origin_coords[0], origin_coords[1],
                 dest_coords[0],   dest_coords[1],
                 waypoints      = waypoints,
-                calculer_peage = calculer_peage
+                calculer_peage = calculer_peage,
+                super_pref     = super_pref
             )
 
             if not data:
@@ -146,7 +148,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, progress_callback
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 for i, route in enumerate(routes):
                     future = executor.submit(
-                        traiter_trajet, i + 1, total, route, cache, calculer_peage
+                        traiter_trajet, i + 1, total, route, cache, calculer_peage, super_pref
                     )
                     futures_map[future] = i
 
