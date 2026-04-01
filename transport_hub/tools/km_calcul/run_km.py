@@ -202,17 +202,30 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                         stats["trajets_erreur"] += 1
 
                     current_global += 1
+                    
+                    # === SAUVEGARDE PARTIELLE PAR BATCH (ex: toutes les 20 lignes) ===
+                    if current_global % 20 == 0:
+                        write_km_results(ws, results[:idx+1], calculer_peage)
+                        output_path_tmp = filepath.replace(".xlsx", "_KM.xlsx")
+                        wb.save(output_path_tmp)
+                        sauvegarder_cache(cache)
+
                     if progress_callback:
                         progress_callback(
                             current_global,
                             total_global,
-                            f"📍 {routes[idx]['origin']} → {routes[idx]['dest']}"
+                            f"📍 {routes[idx]['origin']} → {routes[idx]['dest']} (Auto-save OK)"
                         )
 
+            if progress_callback:
+                progress_callback(current_global, total_global, f"💾 Écriture des résultats ({sheet_name})...")
             write_km_results(ws, results, calculer_peage)
 
         sauvegarder_cache(cache)
         sauvegarder_geocode_cache(geocode_cache)  # 🚀 Sauvegarde geocoding
+
+        if progress_callback:
+            progress_callback(total_global, total_global, "💾 Sauvegarde du fichier final...")
 
         output_path = filepath.replace(".xlsx", "_KM.xlsx")
         wb.save(output_path)
