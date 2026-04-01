@@ -70,6 +70,7 @@ if st.session_state.get("uploaded_bytes") and st.button("🚀 Lancer le calcul",
                 st.rerun() # 🚀 Force l'affichage des résultats
         else:
             st.error(f"⚠️ Le calcul a été interrompu : {result.get('error')}")
+            st.code(result.get('error', ''))  # ← AJOUTE ÇA
             status_text.warning("Certains trajets ont pu être sauvegardés dans le cache. Réessayez pour compléter.")
 
         # Nettoyage fichier source temporaire
