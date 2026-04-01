@@ -259,7 +259,7 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
 
     if extra_avoids:
         # On évite les péages et/ou tunnels selon la logique optimizer
-        # PTV v1 supporte TOLL_ROADS, HIGHWAYS, FERRIES
+        # PTV v1 supporte TOLL, HIGHWAYS, FERRIES, RAIL_SHUTTLES
         query_params.append(("options[avoid]", ",".join(set(extra_avoids))))
 
     # 3. Rassemblement de tous les points (Départ + Intermédiaires + Arrivée)
