@@ -14,6 +14,9 @@ st.markdown("---")
 # === Upload ===
 uploaded_file = st.file_uploader("📂 Dépose ton fichier Excel", type=["xlsx"])
 calculer_peage = st.checkbox("💶 Calculer les frais de péage", value=False)
+calculer_peage = st.checkbox("💶 Calculer les frais de péage", value=False)
+super_pref = st.checkbox("🚀 Mode SUPER PRÉFÉRENTIEL (évite tunnels/péages)", value=False)
+
 
 # === Bouton → flag session ===
 if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
