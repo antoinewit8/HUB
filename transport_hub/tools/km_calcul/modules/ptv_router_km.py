@@ -4,6 +4,7 @@ import os
 import re
 import json
 from dotenv import load_dotenv
+from .route_optimizer import get_super_pref_logic
 
 load_dotenv()
 
@@ -199,13 +200,22 @@ def decode_polyline(encoded: str) -> list:
         coords.append([lat / 1e5, lon / 1e5])
     return coords
 
-def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, calculer_peage=False):
+def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, calculer_peage=False, super_pref=False):
     """
     Calcule l'itinéraire via PTV API (GET) avec le paramètre waypoints et un radius de tolérance.
     """
     
     # 1. Géocodage des waypoints intermédiaires
     waypoints_coords = []
+
+    # Injection de l'intelligence "Super Préférentielle"
+    extra_avoids = []
+    if super_pref:
+        sp_wps, sp_avoids = get_super_pref_logic(lat_start, lon_start, lat_end, lon_end)
+        waypoints_coords.extend(sp_wps)
+        extra_avoids.extend(sp_avoids)
+        print(f"      🚀 Mode SUPER activé : {len(sp_wps)} points injectés")
+
     if waypoints:
         for wp_address in waypoints:
             if isinstance(wp_address, (list, tuple)) and len(wp_address) == 2:
@@ -246,6 +256,11 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
     ]
     if calculer_peage:
         query_params.append(("options[currency]", "EUR"))
+
+    if extra_avoids:
+        # On évite les péages et/ou tunnels selon la logique optimizer
+        # PTV v1 supporte TOLL_ROADS, HIGHWAYS, FERRIES
+        query_params.append(("options[avoid]", ",".join(set(extra_avoids))))
 
     # 3. Rassemblement de tous les points (Départ + Intermédiaires + Arrivée)
     all_points = [(lat_start, lon_start)] + waypoints_coords + [(lat_end, lon_end)]
