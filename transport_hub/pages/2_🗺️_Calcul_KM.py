@@ -1,121 +1,235 @@
-import streamlit as st
 import os
-import tempfile
 import sys
-import traceback
-import pandas as pd
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+KM_DIR = os.path.dirname(os.path.abspath(__file__))
 
-st.set_page_config(page_title="Calcul KM PTV", page_icon="🗺️", layout="wide")
-st.title("🗺️ Calcul de distances PTV")
-st.markdown("---")
+def _inject_path():
+    if KM_DIR not in sys.path:
+        sys.path.insert(0, KM_DIR)
 
-# === Upload ===
-uploaded_file = st.file_uploader("📂 Dépose ton fichier Excel", type=["xlsx"])
-calculer_peage = st.checkbox("💶 Calculer les frais de péage", value=False)
-super_pref = st.checkbox("🚀 Mode SUPER PRÉFÉRENTIEL (évite tunnels/péages)", value=False)
+def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool = False, progress_callback=None) -> dict:
+    _inject_path()
 
-if uploaded_file:
-    # Sauvegarder en session pour survivre au rerun
-    st.session_state["uploaded_bytes"] = uploaded_file.read()
-    uploaded_file.seek(0)  # reset pour réutilisation
-
-if st.session_state.get("uploaded_bytes") and st.button("🚀 Lancer le calcul", type="primary"):
     try:
-        # 🔄 Réinitialisation propre des états de résultats
-        for key in ["km_result_bytes", "km_result_name", "km_stats"]:
-            st.session_state.pop(key, None)
+        from modules.excel_handler_km import read_all_sheets, write_km_results
+        from modules.ptv_router_km import calculate_km_route, geocode_address
+        from modules.routes_preferentielles import get_waypoints
+        from modules.map_server_client import create_route_url, warm_up_server
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp.write(st.session_state["uploaded_bytes"])
-            tmp_path = tmp.name
+        import json
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        from tools.km_calcul.run_km import run_calcul_km
+        CACHE_FILE  = os.path.join(KM_DIR, "cache_trajets.json")
+        GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
+        MAX_WORKERS = 2 # ← 🛡️ Sécurité maximale pour éviter les crashs API
+        cache_lock  = threading.Lock()
+        geo_lock    = threading.Lock()
 
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # === Cache trajets ===
+        def charger_cache():
+            if os.path.exists(CACHE_FILE):
+                try:
+                    with open(CACHE_FILE, "r", encoding="utf-8") as f:
+                        contenu = f.read().strip()
+                        return json.loads(contenu) if contenu else {}
+                except json.JSONDecodeError:
+                    return {}
+            return {}
 
-        def on_progress(current, total, message):
-            pct = current / total if total > 0 else 0
-            progress_bar.progress(pct)
-            status_text.markdown(f"**⚙️ Progression : {current}/{total}** — {message}")
+        def sauvegarder_cache(cache):
+            with open(CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(cache, f, indent=4, ensure_ascii=False)
 
-        # Lancement du calcul avec gestion batch interne (via run_km)
-        result = run_calcul_km(
-            tmp_path, 
-            calculer_peage, 
-            super_pref=super_pref, 
-            progress_callback=on_progress
-        )
+        # === 🚀 Cache geocoding ===
+        def charger_geocode_cache():
+            if os.path.exists(GEOCODE_CACHE_FILE):
+                try:
+                    with open(GEOCODE_CACHE_FILE, "r", encoding="utf-8") as f:
+                        return json.loads(f.read().strip() or "{}")
+                except:
+                    return {}
+            return {}
 
-        if result["success"]:
-            progress_bar.progress(1.0)
-            status_text.success("**✅ Calcul terminé et sauvegardé !**")
-            
-            with open(result["output_path"], "rb") as f:
-                result_bytes = f.read()
-            
-            if not result_bytes:
-                st.error("❌ Le fichier de sortie est vide ou corrompu.")
-            else:
-                st.session_state["km_result_bytes"] = result_bytes
-                st.session_state["km_result_name"] = os.path.basename(result["output_path"])
-                st.session_state["km_stats"] = result.get("stats", {})
-                
-                # Nettoyage fichier temporaire de sortie
-                if os.path.exists(result["output_path"]):
-                    os.unlink(result["output_path"])
-        else:
-            st.error(f"⚠️ Le calcul a été interrompu : {result.get('error')}")
-            status_text.warning("Certains trajets ont pu être sauvegardés dans le cache. Réessayez pour compléter.")
+        def sauvegarder_geocode_cache(gc):
+            with open(GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(gc, f, indent=2, ensure_ascii=False)
 
-        # Nettoyage fichier source temporaire
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        def geocode_cached(address, gc):
+            with geo_lock:
+                if address in gc:
+                    return gc[address]
+            coords = geocode_address(address)
+            if coords:
+                with geo_lock:
+                    gc[address] = coords
+            return coords
+
+        geocode_cache = charger_geocode_cache()
+
+        # === Stats ===
+        stats = {
+            "total_trajets": 0,
+            "trajets_ok": 0,
+            "trajets_erreur": 0,
+            "total_km": 0.0,
+            "total_peage": 0.0,
+            "from_cache": 0,
+            "resultats": []
+        }
+
+        # === Traitement trajet ===
+        def traiter_trajet(index, total, route, cache, calculer_peage, super_pref):
+            try:
+                cache_key = f"{route['origin']} || {route['dest']} || super={super_pref}"
+                print(f"🔍 [{index}/{total}] {route['origin']} → {route['dest']}")
+
+                with cache_lock:
+                    if cache_key in cache:
+                        cached = cache[cache_key]
+                        if calculer_peage and "prix_peage" not in cached:
+                            pass
+                        else:
+                            print(f"  📦 Cache hit")
+                            return {"row": route["row"], "data": cached, "from_cache": True}
+
+                origin_coords = geocode_cached(route["origin"], geocode_cache)
+                print(f"  📍 Origin geocode: {origin_coords}")
+                if not origin_coords:
+                    print(f"  ❌ Geocode FAILED pour origin: {route['origin']}")
+                    return {"row": route["row"], "data": None, "from_cache": False}
+
+                dest_coords = geocode_cached(route["dest"], geocode_cache)
+                print(f"  📍 Dest geocode: {dest_coords}")
+                if not dest_coords:
+                    print(f"  ❌ Geocode FAILED pour dest: {route['dest']}")
+                    return {"row": route["row"], "data": None, "from_cache": False}
+
+                waypoints = get_waypoints(route["origin"], route["dest"])
+                print(f"  🛣️ Waypoints: {waypoints}")
+
+                data = calculate_km_route(
+                    origin_coords[0], origin_coords[1],
+                    dest_coords[0],   dest_coords[1],
+                    waypoints=waypoints,
+                    calculer_peage=calculer_peage,
+                    super_pref=super_pref
+                )
+                print(f"  📊 Route result: {data}")
+
+                if not data:
+                    print(f"  ❌ Route calculation FAILED")
+                    return {"row": route["row"], "data": None, "from_cache": False}
+
+                carte_url = create_route_url(
+                    origin_name=route["origin"],
+                    dest_name=route["dest"],
+                    km=data["km"],
+                    duration_h=data.get("travel_time_h", 0),
+                    polyline=data.get("polyline_coords", []),
+                    prix_peage=data.get("prix_peage", 0.0),
+                )
+                data["carte_url"] = carte_url if carte_url else ""
+
+                with cache_lock:
+                    cache[cache_key] = data
+                    if index % 10 == 0 or index == total:
+                        sauvegarder_cache(cache)
+
+                return {"row": route["row"], "data": data, "from_cache": False}
+
+            except Exception as e:
+                print(f"  💥 EXCEPTION trajet {route['origin']} → {route['dest']}: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                return {"row": route["row"], "data": None, "from_cache": False}
+
+
+        # === Exécution principale ===
+        warm_up_server()
+
+        wb, sheets_data = read_all_sheets(filepath)
+        if not sheets_data:
+            return {"success": False, "output_path": "", "error": "Aucune feuille exploitable", "stats": stats}
+
+        cache = charger_cache()
+
+        total_global = sum(len(routes) for _, (ws, routes) in sheets_data.items())
+        current_global = 0
+
+        for sheet_name, (ws, routes) in sheets_data.items():
+            if not routes:
+                continue
+
+            total    = len(routes)
+            results  = [None] * total
+            futures_map = {}
+
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                for i, route in enumerate(routes):
+                    future = executor.submit(
+                        traiter_trajet, i + 1, total, route, cache, calculer_peage, super_pref
+                    )
+                    futures_map[future] = i
+
+                for future in as_completed(futures_map):
+                    idx = futures_map[future]
+                    try:
+                        res = future.result()
+                        results[idx] = res
+
+                        stats["total_trajets"] += 1
+                        if res["data"]:
+                            stats["trajets_ok"] += 1
+                            stats["total_km"] += res["data"].get("km", 0)
+                            stats["total_peage"] += res["data"].get("prix_peage", 0) or 0
+                            if res.get("from_cache"):
+                                stats["from_cache"] += 1
+                            if len(stats["resultats"]) < 50:
+                                stats["resultats"].append({
+                                    "Origine": routes[idx]["origin"],
+                                    "Destination": routes[idx]["dest"],
+                                    "KM": round(res["data"].get("km", 0), 1),
+                                    "Durée (h)": round(res["data"].get("travel_time_h", 0), 2),
+                                    "Péage (€)": round(res["data"].get("prix_peage", 0) or 0, 2),
+                                    "Cache": "✅" if res.get("from_cache") else "❌"
+                                })
+                        else:
+                            stats["trajets_erreur"] += 1
+
+                    except Exception:
+                        results[idx] = {"row": routes[idx]["row"], "data": None, "from_cache": False}
+                        stats["trajets_erreur"] += 1
+
+                    current_global += 1
+
+                    # On n'affiche le message de sauvegarde que tous les 20 trajets
+                    msg = f"📍 {routes[idx]['origin']} → {routes[idx]['dest']}"
+                    
+                    if current_global % 20 == 0:
+                        # Sauvegarde réelle du travail en cours (Excel + Cache)
+                        write_km_results(ws, results, calculer_peage)
+                        wb.save(filepath.replace(".xlsx", "_KM.xlsx"))
+                        sauvegarder_cache(cache)
+                        msg += " 💾 (Auto-save OK)"
+                    
+                    if progress_callback:
+                        progress_callback(current_global, total_global, msg)
+
+            if progress_callback:
+                progress_callback(current_global, total_global, f"💾 Écriture des résultats ({sheet_name})...")
+            write_km_results(ws, results, calculer_peage)
+
+        sauvegarder_cache(cache)
+        sauvegarder_geocode_cache(geocode_cache)  # 🚀 Sauvegarde geocoding
+
+        if progress_callback:
+            progress_callback(total_global, total_global, "💾 Sauvegarde du fichier final...")
+
+        output_path = filepath.replace(".xlsx", "_KM.xlsx")
+        wb.save(output_path)
+
+        return {"success": True, "output_path": output_path, "error": "", "stats": stats}
 
     except Exception as e:
-        st.error(f"❌ Une erreur critique est survenue durant le traitement.")
-        st.warning(f"Détail : {str(e)}")
-        st.code(traceback.format_exc())
-
-# === Résultats ===
-if "km_result_bytes" in st.session_state:
-    data = st.session_state["km_result_bytes"]
-    stats = st.session_state.get("km_stats", {})
-
-    if isinstance(data, bytes) and len(data) > 0:
-        st.success("🎉 Calcul terminé !")
-
-        # === Stats résumé ===
-        if stats:
-            st.markdown("### 📊 Résumé")
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("✅ Trajets OK", stats.get("trajets_ok", 0))
-            col2.metric("❌ Erreurs", stats.get("trajets_erreur", 0))
-            col3.metric("📏 Total KM", f"{stats.get('total_km', 0):,.0f} km")
-            col4.metric("💶 Total Péage", f"{stats.get('total_peage', 0):,.2f} €")
-
-            st.markdown(f"🗄️ **{stats.get('from_cache', 0)}** trajets depuis le cache")
-
-            # === Aperçu tableau ===
-            resultats = stats.get("resultats", [])
-            if resultats:
-                st.markdown("### 🔍 Aperçu des résultats")
-                df = pd.DataFrame(resultats)
-                st.dataframe(df, use_container_width=True, hide_index=True)
-
-        # === Téléchargement ===
-        st.markdown("---")
-        st.download_button(
-            label="📥 Télécharger le fichier KM",
-            data=data,
-            file_name=st.session_state["km_result_name"],
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-        # === Bouton reset ===
-        if st.button("🔄 Nouveau calcul"):
-            for key in ["km_result_bytes", "km_result_name", "km_stats"]:
-                st.session_state.pop(key, None)
-            st.rerun()
+        return {"success": False, "output_path": "", "error": str(e), "stats": {}}
