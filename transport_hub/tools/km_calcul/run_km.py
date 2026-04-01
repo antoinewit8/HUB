@@ -80,69 +80,69 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
         # === Traitement trajet ===
         def traiter_trajet(index, total, route, cache, calculer_peage, super_pref):
-    try:
-        cache_key = f"{route['origin']} || {route['dest']} || super={super_pref}"
-        print(f"🔍 [{index}/{total}] {route['origin']} → {route['dest']}")
+            try:
+                cache_key = f"{route['origin']} || {route['dest']} || super={super_pref}"
+                print(f"🔍 [{index}/{total}] {route['origin']} → {route['dest']}")
 
-        with cache_lock:
-            if cache_key in cache:
-                cached = cache[cache_key]
-                if calculer_peage and "prix_peage" not in cached:
-                    pass
-                else:
-                    print(f"  📦 Cache hit")
-                    return {"row": route["row"], "data": cached, "from_cache": True}
+                with cache_lock:
+                    if cache_key in cache:
+                        cached = cache[cache_key]
+                        if calculer_peage and "prix_peage" not in cached:
+                            pass
+                        else:
+                            print(f"  📦 Cache hit")
+                            return {"row": route["row"], "data": cached, "from_cache": True}
 
-        origin_coords = geocode_cached(route["origin"], geocode_cache)
-        print(f"  📍 Origin geocode: {origin_coords}")
-        if not origin_coords:
-            print(f"  ❌ Geocode FAILED pour origin: {route['origin']}")
-            return {"row": route["row"], "data": None, "from_cache": False}
+                origin_coords = geocode_cached(route["origin"], geocode_cache)
+                print(f"  📍 Origin geocode: {origin_coords}")
+                if not origin_coords:
+                    print(f"  ❌ Geocode FAILED pour origin: {route['origin']}")
+                    return {"row": route["row"], "data": None, "from_cache": False}
 
-        dest_coords = geocode_cached(route["dest"], geocode_cache)
-        print(f"  📍 Dest geocode: {dest_coords}")
-        if not dest_coords:
-            print(f"  ❌ Geocode FAILED pour dest: {route['dest']}")
-            return {"row": route["row"], "data": None, "from_cache": False}
+                dest_coords = geocode_cached(route["dest"], geocode_cache)
+                print(f"  📍 Dest geocode: {dest_coords}")
+                if not dest_coords:
+                    print(f"  ❌ Geocode FAILED pour dest: {route['dest']}")
+                    return {"row": route["row"], "data": None, "from_cache": False}
 
-        waypoints = get_waypoints(route["origin"], route["dest"])
-        print(f"  🛣️ Waypoints: {waypoints}")
+                waypoints = get_waypoints(route["origin"], route["dest"])
+                print(f"  🛣️ Waypoints: {waypoints}")
 
-        data = calculate_km_route(
-            origin_coords[0], origin_coords[1],
-            dest_coords[0],   dest_coords[1],
-            waypoints=waypoints,
-            calculer_peage=calculer_peage,
-            super_pref=super_pref
-        )
-        print(f"  📊 Route result: {data}")
+                data = calculate_km_route(
+                    origin_coords[0], origin_coords[1],
+                    dest_coords[0],   dest_coords[1],
+                    waypoints=waypoints,
+                    calculer_peage=calculer_peage,
+                    super_pref=super_pref
+                )
+                print(f"  📊 Route result: {data}")
 
-        if not data:
-            print(f"  ❌ Route calculation FAILED")
-            return {"row": route["row"], "data": None, "from_cache": False}
+                if not data:
+                    print(f"  ❌ Route calculation FAILED")
+                    return {"row": route["row"], "data": None, "from_cache": False}
 
-        carte_url = create_route_url(
-            origin_name=route["origin"],
-            dest_name=route["dest"],
-            km=data["km"],
-            duration_h=data.get("travel_time_h", 0),
-            polyline=data.get("polyline_coords", []),
-            prix_peage=data.get("prix_peage", 0.0),
-        )
-        data["carte_url"] = carte_url if carte_url else ""
+                carte_url = create_route_url(
+                    origin_name=route["origin"],
+                    dest_name=route["dest"],
+                    km=data["km"],
+                    duration_h=data.get("travel_time_h", 0),
+                    polyline=data.get("polyline_coords", []),
+                    prix_peage=data.get("prix_peage", 0.0),
+                )
+                data["carte_url"] = carte_url if carte_url else ""
 
-        with cache_lock:
-            cache[cache_key] = data
-            if index % 10 == 0 or index == total:
-                sauvegarder_cache(cache)
+                with cache_lock:
+                    cache[cache_key] = data
+                    if index % 10 == 0 or index == total:
+                        sauvegarder_cache(cache)
 
-        return {"row": route["row"], "data": data, "from_cache": False}
+                return {"row": route["row"], "data": data, "from_cache": False}
 
-    except Exception as e:
-        print(f"  💥 EXCEPTION trajet {route['origin']} → {route['dest']}: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"row": route["row"], "data": None, "from_cache": False}
+            except Exception as e:
+                print(f"  💥 EXCEPTION trajet {route['origin']} → {route['dest']}: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                return {"row": route["row"], "data": None, "from_cache": False}
 
 
         # === Exécution principale ===
