@@ -22,7 +22,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
         CACHE_FILE  = os.path.join(KM_DIR, "cache_trajets.json")
         GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
-        MAX_WORKERS = 5  # ← 🚀 PARALLÉLISME
+        MAX_WORKERS = 2  # ← 🛡️ RÉDUIT pour éviter les timeouts API/Streamlit
         cache_lock  = threading.Lock()
         geo_lock    = threading.Lock()
 
