@@ -9,7 +9,7 @@ def get_super_pref_logic(lat_start, lon_start, lat_end, lon_end):
     """
     extra_waypoints = []
     # En mode Super, on force l'évitement des péages pour privilégier les nationales
-    avoid_features = ["TOLL_ROADS"] 
+    avoid_features = ["TOLL"] 
 
     # 1. Corridor France <-> Italie (Éviter tunnels Fréjus / Mont-Blanc / Gothard)
     # Détection simplifiée par zones géographiques
