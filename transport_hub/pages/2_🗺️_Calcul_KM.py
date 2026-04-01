@@ -22,6 +22,10 @@ if uploaded_file:
     uploaded_file.seek(0)  # reset pour réutilisation
 
 if st.session_state.get("uploaded_bytes") and st.button("🚀 Lancer le calcul", type="primary"):
+    # 🔄 Réinitialiser le state pour effacer les anciens résultats avant de commencer
+    for key in ["km_result_bytes", "km_result_name", "km_stats"]:
+        st.session_state.pop(key, None)
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(st.session_state["uploaded_bytes"])
         tmp_path = tmp.name
@@ -36,23 +40,28 @@ if st.session_state.get("uploaded_bytes") and st.button("🚀 Lancer le calcul",
         def on_progress(current, total, message):
             pct = current / total if total > 0 else 0
             progress_bar.progress(pct)
-            status_text.markdown(f"**{current}/{total}** — {message}")
+            status_text.markdown(f"**⚙️ Traitement : {current}/{total}** — {message}")
 
         result = run_calcul_km(tmp_path, calculer_peage, super_pref=super_pref, progress_callback=on_progress)
 
-        # Finaliser la barre
-        progress_bar.progress(1.0)
-        status_text.markdown("**✅ Terminé !**")
-
         if result["success"]:
+            progress_bar.progress(1.0)
+            status_text.markdown("**✅ Terminé avec succès !**")
+            
             with open(result["output_path"], "rb") as f:
                 result_bytes = f.read()
+            
+            if not result_bytes:
+                raise ValueError("Le fichier généré est vide.")
+
             st.session_state["km_result_bytes"] = result_bytes
             st.session_state["km_result_name"] = os.path.basename(result["output_path"])
             st.session_state["km_stats"] = result.get("stats", {})
             os.unlink(result["output_path"])
         else:
             st.error(f"⚠️ Échec : {result['error']}")
+            status_text.markdown(f"❌ **Erreur :** {result['error']}")
+            progress_bar.empty()
 
     except Exception as e:
         st.error(f"❌ EXCEPTION: {e}")
