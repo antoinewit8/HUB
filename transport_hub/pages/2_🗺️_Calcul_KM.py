@@ -16,24 +16,15 @@ uploaded_file = st.file_uploader("📂 Dépose ton fichier Excel", type=["xlsx"]
 calculer_peage = st.checkbox("💶 Calculer les frais de péage", value=False)
 super_pref = st.checkbox("🚀 Mode SUPER PRÉFÉRENTIEL (évite tunnels/péages)", value=False)
 
-
-# === Bouton → flag session ===
 if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
-    # Sauvegarder le fichier AVANT le rerun
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(uploaded_file.read())
-        st.session_state["km_tmp_path"] = tmp.name
-    st.session_state["km_running"] = True
-    st.session_state["km_peage"] = calculer_peage
-    st.rerun()
+        tmp_path = tmp.name
 
-# === Exécution protégée par session_state ===
-if st.session_state.get("km_running", False):
-    tmp_path = st.session_state.pop("km_tmp_path", None)
-    calculer_peage_run = st.session_state.pop("km_peage", False)
-    st.session_state["km_running"] = False
+    try:
+        from tools.km_calcul.run_km import run_calcul_km
 
-    if tmp_path and os.path.exists(tmp_path):
+        # === Barre de progression ===
         progress_bar = st.progress(0)
         status_text = st.empty()
 
@@ -42,29 +33,27 @@ if st.session_state.get("km_running", False):
             progress_bar.progress(pct)
             status_text.markdown(f"**{current}/{total}** — {message}")
 
-        try:
-            from tools.km_calcul.run_km import run_calcul_km
-            result = run_calcul_km(tmp_path, calculer_peage_run, progress_callback=on_progress)
+        result = run_calcul_km(tmp_path, calculer_peage, super_pref=super_pref, progress_callback=on_progress)
 
-            progress_bar.progress(1.0)
-            status_text.markdown("**✅ Terminé !**")
+        # Finaliser la barre
+        progress_bar.progress(1.0)
+        status_text.markdown("**✅ Terminé !**")
 
-            if result["success"]:
-                with open(result["output_path"], "rb") as f:
-                    result_bytes = f.read()
-                st.session_state["km_result_bytes"] = result_bytes
-                st.session_state["km_result_name"] = os.path.basename(result["output_path"])
-                st.session_state["km_stats"] = result.get("stats", {})
-                os.unlink(result["output_path"])
-            else:
-                st.error(f"⚠️ Échec : {result['error']}")
+        if result["success"]:
+            with open(result["output_path"], "rb") as f:
+                result_bytes = f.read()
+            st.session_state["km_result_bytes"] = result_bytes
+            st.session_state["km_result_name"] = os.path.basename(result["output_path"])
+            st.session_state["km_stats"] = result.get("stats", {})
+            os.unlink(result["output_path"])
+        else:
+            st.error(f"⚠️ Échec : {result['error']}")
 
-        except Exception as e:
-            st.error(f"❌ EXCEPTION: {e}")
-            st.code(traceback.format_exc())
-        finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+    except Exception as e:
+        st.error(f"❌ EXCEPTION: {e}")
+        st.code(traceback.format_exc())
+    finally:
+        os.unlink(tmp_path)
 
 # === Résultats ===
 if "km_result_bytes" in st.session_state:
@@ -74,6 +63,7 @@ if "km_result_bytes" in st.session_state:
     if isinstance(data, bytes) and len(data) > 0:
         st.success("🎉 Calcul terminé !")
 
+        # === Stats résumé ===
         if stats:
             st.markdown("### 📊 Résumé")
             col1, col2, col3, col4 = st.columns(4)
@@ -84,12 +74,14 @@ if "km_result_bytes" in st.session_state:
 
             st.markdown(f"🗄️ **{stats.get('from_cache', 0)}** trajets depuis le cache")
 
+            # === Aperçu tableau ===
             resultats = stats.get("resultats", [])
             if resultats:
                 st.markdown("### 🔍 Aperçu des résultats")
                 df = pd.DataFrame(resultats)
                 st.dataframe(df, use_container_width=True, hide_index=True)
 
+        # === Téléchargement ===
         st.markdown("---")
         st.download_button(
             label="📥 Télécharger le fichier KM",
@@ -98,6 +90,7 @@ if "km_result_bytes" in st.session_state:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+        # === Bouton reset ===
         if st.button("🔄 Nouveau calcul"):
             for key in ["km_result_bytes", "km_result_name", "km_stats"]:
                 st.session_state.pop(key, None)
