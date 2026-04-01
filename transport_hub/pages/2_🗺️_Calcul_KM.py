@@ -22,52 +22,62 @@ if uploaded_file:
     uploaded_file.seek(0)  # reset pour réutilisation
 
 if st.session_state.get("uploaded_bytes") and st.button("🚀 Lancer le calcul", type="primary"):
-    # 🔄 Réinitialiser le state pour effacer les anciens résultats avant de commencer
-    for key in ["km_result_bytes", "km_result_name", "km_stats"]:
-        st.session_state.pop(key, None)
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(st.session_state["uploaded_bytes"])
-        tmp_path = tmp.name
-
     try:
+        # 🔄 Réinitialisation propre des états de résultats
+        for key in ["km_result_bytes", "km_result_name", "km_stats"]:
+            st.session_state.pop(key, None)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            tmp.write(st.session_state["uploaded_bytes"])
+            tmp_path = tmp.name
+
         from tools.km_calcul.run_km import run_calcul_km
 
-        # === Barre de progression ===
         progress_bar = st.progress(0)
         status_text = st.empty()
 
         def on_progress(current, total, message):
             pct = current / total if total > 0 else 0
             progress_bar.progress(pct)
-            status_text.markdown(f"**⚙️ Traitement : {current}/{total}** — {message}")
+            status_text.markdown(f"**⚙️ Progression : {current}/{total}** — {message}")
 
-        result = run_calcul_km(tmp_path, calculer_peage, super_pref=super_pref, progress_callback=on_progress)
+        # Lancement du calcul avec gestion batch interne (via run_km)
+        result = run_calcul_km(
+            tmp_path, 
+            calculer_peage, 
+            super_pref=super_pref, 
+            progress_callback=on_progress
+        )
 
         if result["success"]:
             progress_bar.progress(1.0)
-            status_text.markdown("**✅ Terminé avec succès !**")
+            status_text.success("**✅ Calcul terminé et sauvegardé !**")
             
             with open(result["output_path"], "rb") as f:
                 result_bytes = f.read()
             
             if not result_bytes:
-                raise ValueError("Le fichier généré est vide.")
-
-            st.session_state["km_result_bytes"] = result_bytes
-            st.session_state["km_result_name"] = os.path.basename(result["output_path"])
-            st.session_state["km_stats"] = result.get("stats", {})
-            os.unlink(result["output_path"])
+                st.error("❌ Le fichier de sortie est vide ou corrompu.")
+            else:
+                st.session_state["km_result_bytes"] = result_bytes
+                st.session_state["km_result_name"] = os.path.basename(result["output_path"])
+                st.session_state["km_stats"] = result.get("stats", {})
+                
+                # Nettoyage fichier temporaire de sortie
+                if os.path.exists(result["output_path"]):
+                    os.unlink(result["output_path"])
         else:
-            st.error(f"⚠️ Échec : {result['error']}")
-            status_text.markdown(f"❌ **Erreur :** {result['error']}")
-            progress_bar.empty()
+            st.error(f"⚠️ Le calcul a été interrompu : {result.get('error')}")
+            status_text.warning("Certains trajets ont pu être sauvegardés dans le cache. Réessayez pour compléter.")
+
+        # Nettoyage fichier source temporaire
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
     except Exception as e:
-        st.error(f"❌ EXCEPTION: {e}")
+        st.error(f"❌ Une erreur critique est survenue durant le traitement.")
+        st.warning(f"Détail : {str(e)}")
         st.code(traceback.format_exc())
-    finally:
-        os.unlink(tmp_path)
 
 # === Résultats ===
 if "km_result_bytes" in st.session_state:
