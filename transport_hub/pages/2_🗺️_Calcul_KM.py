@@ -16,9 +16,14 @@ uploaded_file = st.file_uploader("📂 Dépose ton fichier Excel", type=["xlsx"]
 calculer_peage = st.checkbox("💶 Calculer les frais de péage", value=False)
 super_pref = st.checkbox("🚀 Mode SUPER PRÉFÉRENTIEL (évite tunnels/péages)", value=False)
 
-if uploaded_file and st.button("🚀 Lancer le calcul", type="primary"):
+if uploaded_file:
+    # Sauvegarder en session pour survivre au rerun
+    st.session_state["uploaded_bytes"] = uploaded_file.read()
+    uploaded_file.seek(0)  # reset pour réutilisation
+
+if st.session_state.get("uploaded_bytes") and st.button("🚀 Lancer le calcul", type="primary"):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(uploaded_file.read())
+        tmp.write(st.session_state["uploaded_bytes"])
         tmp_path = tmp.name
 
     try:
