@@ -202,13 +202,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                         stats["trajets_erreur"] += 1
 
                     current_global += 1
-                    
-                    # === SAUVEGARDE PARTIELLE PAR BATCH (ex: toutes les 20 lignes) ===
-                    if current_global % 20 == 0:
-                        write_km_results(ws, results[:idx+1], calculer_peage)
-                        output_path_tmp = filepath.replace(".xlsx", "_KM.xlsx")
-                        wb.save(output_path_tmp)
-                        sauvegarder_cache(cache)
 
                     if progress_callback:
                         progress_callback(
