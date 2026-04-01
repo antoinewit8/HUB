@@ -208,10 +208,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                     
                     if current_global % 20 == 0:
                         # Sauvegarde réelle du travail en cours (Excel + Cache)
-                        write_km_results(ws, results, calculer_peage)
-                        wb.save(filepath.replace(".xlsx", "_KM.xlsx"))
                         sauvegarder_cache(cache)
-                        msg += " 💾 (Auto-save OK)"
+                        msg += " 💾 (Cache sauvegardé)"
                     
                     if progress_callback:
                         progress_callback(current_global, total_global, msg)
