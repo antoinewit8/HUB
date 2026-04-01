@@ -1,36 +1,4 @@
-"""
-Wrapper callable depuis Streamlit / Core Brain.
-Gère le path pour que les imports relatifs de main_km fonctionnent.
-"""
-
-import os
-import sys
-
-# === Injection du chemin km_calcul dans sys.path ===
-KM_DIR = os.path.dirname(os.path.abspath(__file__))
-
-def _inject_path():
-    if KM_DIR not in sys.path:
-        sys.path.insert(0, KM_DIR)
-
 def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool = False, progress_callback=None) -> dict:
-    """
-    Point d'entrée principal pour le calcul KM.
-
-    Args:
-        filepath: Chemin absolu vers le fichier Excel source
-        calculer_peage: True pour inclure les frais de péage
-        super_pref: True pour activer le mode super préférentiel
-        progress_callback: fonction(current, total, message) optionnelle
-
-    Returns:
-        dict {
-            "success": bool,
-            "output_path": str,
-            "error": str,
-            "stats": dict
-        }
-    """
     _inject_path()
 
     try:
@@ -44,10 +12,12 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         CACHE_FILE  = os.path.join(KM_DIR, "cache_trajets.json")
-        MAX_WORKERS = 1
+        GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
+        MAX_WORKERS = 5  # ← 🚀 PARALLÉLISME
         cache_lock  = threading.Lock()
+        geo_lock    = threading.Lock()
 
-        # === Cache ===
+        # === Cache trajets ===
         def charger_cache():
             if os.path.exists(CACHE_FILE):
                 try:
@@ -61,6 +31,32 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         def sauvegarder_cache(cache):
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(cache, f, indent=4, ensure_ascii=False)
+
+        # === 🚀 Cache geocoding ===
+        def charger_geocode_cache():
+            if os.path.exists(GEOCODE_CACHE_FILE):
+                try:
+                    with open(GEOCODE_CACHE_FILE, "r", encoding="utf-8") as f:
+                        return json.loads(f.read().strip() or "{}")
+                except:
+                    return {}
+            return {}
+
+        def sauvegarder_geocode_cache(gc):
+            with open(GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(gc, f, indent=2, ensure_ascii=False)
+
+        def geocode_cached(address, gc):
+            with geo_lock:
+                if address in gc:
+                    return gc[address]
+            coords = geocode_address(address)
+            if coords:
+                with geo_lock:
+                    gc[address] = coords
+            return coords
+
+        geocode_cache = charger_geocode_cache()
 
         # === Stats ===
         stats = {
@@ -76,7 +72,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         # === Traitement trajet ===
         def traiter_trajet(index, total, route, cache, calculer_peage, super_pref):
             cache_key = f"{route['origin']} || {route['dest']} || super={super_pref}"
-            from_cache = False
 
             with cache_lock:
                 if cache_key in cache:
@@ -86,11 +81,12 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                     else:
                         return {"row": route["row"], "data": cached, "from_cache": True}
 
-            origin_coords = geocode_address(route["origin"])
+            # 🚀 Geocoding avec cache
+            origin_coords = geocode_cached(route["origin"], geocode_cache)
             if not origin_coords:
                 return {"row": route["row"], "data": None, "from_cache": False}
 
-            dest_coords = geocode_address(route["dest"])
+            dest_coords = geocode_cached(route["dest"], geocode_cache)
             if not dest_coords:
                 return {"row": route["row"], "data": None, "from_cache": False}
 
@@ -133,7 +129,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
         cache = charger_cache()
 
-        # Compter total global pour la progression
         total_global = sum(len(routes) for _, (ws, routes) in sheets_data.items())
         current_global = 0
 
@@ -158,7 +153,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                         res = future.result()
                         results[idx] = res
 
-                        # === Mise à jour stats ===
                         stats["total_trajets"] += 1
                         if res["data"]:
                             stats["trajets_ok"] += 1
@@ -182,7 +176,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                         results[idx] = {"row": routes[idx]["row"], "data": None, "from_cache": False}
                         stats["trajets_erreur"] += 1
 
-                    # === Callback progression ===
                     current_global += 1
                     if progress_callback:
                         progress_callback(
@@ -194,6 +187,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             write_km_results(ws, results, calculer_peage)
 
         sauvegarder_cache(cache)
+        sauvegarder_geocode_cache(geocode_cache)  # 🚀 Sauvegarde geocoding
 
         output_path = filepath.replace(".xlsx", "_KM.xlsx")
         wb.save(output_path)
