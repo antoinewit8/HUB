@@ -211,12 +211,16 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
             # Calcul via PTV
             try:
+                lat_start, lon_start = coords_origin
+                lat_end, lon_end = coords_dest
+
                 data = calculate_km_route(
-                    coords_origin, coords_dest,
+                    lat_start, lon_start, lat_end, lon_end,
                     calculer_peage=calculer_peage,
                     waypoints=waypoints
                 )
-            except Exception:
+            except Exception as e:
+                print(f"!!! CRASH calculate_km_route: {e}", flush=True)
                 return {"row": route["row"], "data": None, "from_cache": False}
 
             if not data:
