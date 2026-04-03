@@ -265,7 +265,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
             if progress_callback:
                 progress_callback(current_global, total_global, f"💾 Écriture des résultats ({sheet_name})...")
-            write_km_results(ws, results, calculer_peage)
+            write_km_results(ws, list(results.values()), calculer_peage)
 
         # === Sauvegarde finale ===
         sauvegarder_cache(cache)
@@ -282,7 +282,5 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        err_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-        return {"success": False, "output_path": "", "error": err_msg, "stats": stats}
-
-
+        return {"success": False, "output_path": "", "error": f"{type(e).__name__}: 
+{str(e)}\n{traceback.format_exc()}", "stats": stats}
