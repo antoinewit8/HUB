@@ -65,14 +65,14 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
     _inject_path()
 print("DEBUG: DEBUT run_calcul_km")
 
-    stats = {
-        "trajets_calcules": 0,
-        "trajets_erreur": 0,
-        "from_cache": 0,
-        "total_km": 0,
-        "total_peage": 0,
-        "resultats": []
-    }
+stats = {
+    "trajets_calcules": 0,
+    "trajets_erreur": 0,
+    "from_cache": 0,
+    "total_km": 0,
+    "total_peage": 0,
+    "resultats": []
+}
 
     try:
         from modules.excel_handler_km import read_all_sheets, write_km_results
