@@ -288,8 +288,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
     except Exception as e:
         import traceback
         error_msg = traceback.format_exc()
-        print(error_msg)  # logs cloud
-        if progress_callback:
-            progress_callback(current_global, total_global, f"❌ ERREUR: {error_msg[:200]}")
-        results[idx] = {"row": routes[idx]["row"], "data": None, "from_cache": False}
-        stats["trajets_erreur"] += 1
+        print(error_msg)
+        return {"success": False, "output_path": "", "error": error_msg[:500], "stats": stats}
+
