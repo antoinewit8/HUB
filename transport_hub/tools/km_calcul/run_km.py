@@ -265,7 +265,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
             if progress_callback:
                 progress_callback(current_global, total_global, f"💾 Écriture des résultats ({sheet_name})...")
-            write_km_results(ws, list(results.values()), calculer_peage)
+            write_km_results(ws,list(results.values()), calculer_peage)
 
         # === Sauvegarde finale ===
         sauvegarder_cache(cache)
