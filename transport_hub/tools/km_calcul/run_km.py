@@ -1,15 +1,64 @@
 import os
 import sys
-import copy
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 KM_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+# =============================================================================
+# SafeDict — dictionnaire thread-safe qui ne plante jamais en itération
+# =============================================================================
+class SafeDict(dict):
+    def __init__(self, *args, **kwargs):
+        self._lock = threading.RLock()
+        super().__init__(*args, **kwargs)
+
+    def __setitem__(self, key, value):
+        with self._lock:
+            super().__setitem__(key, value)
+
+    def __getitem__(self, key):
+        with self._lock:
+            return super().__getitem__(key)
+
+    def __contains__(self, key):
+        with self._lock:
+            return super().__contains__(key)
+
+    def get(self, key, default=None):
+        with self._lock:
+            return super().get(key, default)
+
+    def to_json_str(self, indent=4):
+        with self._lock:
+            flat = {k: v for k, v in list(super().items())}
+        return json.dumps(flat, indent=indent, ensure_ascii=False)
+
+
+# =============================================================================
+# Injection du path
+# =============================================================================
 def _inject_path():
     if KM_DIR not in sys.path:
         sys.path.insert(0, KM_DIR)
 
+
+# =============================================================================
+# Point d'entrée principal
+# =============================================================================
 def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool = False, progress_callback=None) -> dict:
     _inject_path()
+
+    stats = {
+        "trajets_calcules": 0,
+        "trajets_erreur": 0,
+        "from_cache": 0,
+        "total_km": 0,
+        "total_peage": 0,
+        "resultats": []
+    }
 
     try:
         from modules.excel_handler_km import read_all_sheets, write_km_results
@@ -17,15 +66,9 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         from modules.routes_preferentielles import get_waypoints
         from modules.map_server_client import create_route_url, warm_up_server
 
-        import json
-        import threading
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        CACHE_FILE  = os.path.join(KM_DIR, "cache_trajets.json")
+        CACHE_FILE = os.path.join(KM_DIR, "cache_trajets.json")
         GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
         MAX_WORKERS = 2
-        cache_lock  = threading.Lock()
-        geo_lock    = threading.Lock()
 
         # === Cache trajets ===
         def charger_cache():
@@ -33,14 +76,13 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 try:
                     with open(CACHE_FILE, "r", encoding="utf-8") as f:
                         contenu = f.read().strip()
-                        return json.loads(contenu) if contenu else {}
-                except json.JSONDecodeError:
-                    return {}
-            return {}
+                        return SafeDict(json.loads(contenu)) if contenu else SafeDict()
+                except (json.JSONDecodeError, Exception):
+                    return SafeDict()
+            return SafeDict()
 
         def sauvegarder_cache(cache):
-            with cache_lock:
-                snapshot_str = json.dumps(cache, indent=4, ensure_ascii=False)
+            snapshot_str = cache.to_json_str(indent=4)
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
                 f.write(snapshot_str)
 
@@ -49,141 +91,135 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             if os.path.exists(GEOCODE_CACHE_FILE):
                 try:
                     with open(GEOCODE_CACHE_FILE, "r", encoding="utf-8") as f:
-                        return json.loads(f.read().strip() or "{}")
-                except:
-                    return {}
-            return {}
+                        return SafeDict(json.loads(f.read().strip() or "{}"))
+                except (json.JSONDecodeError, Exception):
+                    return SafeDict()
+            return SafeDict()
 
         def sauvegarder_geocode_cache(gc):
-            with geo_lock:
-                snapshot_str = json.dumps(gc, indent=2, ensure_ascii=False)
+            snapshot_str = gc.to_json_str(indent=2)
             with open(GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
                 f.write(snapshot_str)
 
+        # === Geocoding avec cache ===
         def geocode_cached(address, gc):
-            with geo_lock:
-                if address in gc:
-                    return gc[address]
+            if address in gc:
+                return gc[address]
             coords = geocode_address(address)
             if coords:
-                with geo_lock:
-                    gc[address] = coords
+                gc[address] = coords
             return coords
 
-        geocode_cache = charger_geocode_cache()
+        # === Warm-up serveur carte ===
+        try:
+            warm_up_server()
+        except Exception:
+            pass
 
-        # === Stats ===
-        stats = {
-            "total_trajets": 0,
-            "trajets_ok": 0,
-            "trajets_erreur": 0,
-            "total_km": 0.0,
-            "total_peage": 0.0,
-            "from_cache": 0,
-            "resultats": []
-        }
-
-        # === Traitement trajet ===
-        def traiter_trajet(index, total, route, cache, calculer_peage, super_pref):
-            try:
-                cache_key = f"{route['origin']} || {route['dest']} || super={super_pref}"
-                print(f"🔍 [{index}/{total}] {route['origin']} → {route['dest']}")
-
-                with cache_lock:
-                    if cache_key in cache:
-                        cached = cache[cache_key]
-                        if calculer_peage and "prix_peage" not in cached:
-                            pass
-                        else:
-                            print(f"  📦 Cache hit")
-                            return {"row": route["row"], "data": cached, "from_cache": True}
-
-                origin_coords = geocode_cached(route["origin"], geocode_cache)
-                print(f"  📍 Origin geocode: {origin_coords}")
-                if not origin_coords:
-                    print(f"  ❌ Geocode FAILED pour origin: {route['origin']}")
-                    return {"row": route["row"], "data": None, "from_cache": False}
-
-                dest_coords = geocode_cached(route["dest"], geocode_cache)
-                print(f"  📍 Dest geocode: {dest_coords}")
-                if not dest_coords:
-                    print(f"  ❌ Geocode FAILED pour dest: {route['dest']}")
-                    return {"row": route["row"], "data": None, "from_cache": False}
-
-                waypoints = get_waypoints(route["origin"], route["dest"])
-                print(f"  🛣️ Waypoints: {waypoints}")
-
-                data = calculate_km_route(
-                    origin_coords[0], origin_coords[1],
-                    dest_coords[0],   dest_coords[1],
-                    waypoints=waypoints,
-                    calculer_peage=calculer_peage,
-                    super_pref=super_pref
-                )
-                print(f"  📊 Route result: {data}")
-
-                if not data:
-                    print(f"  ❌ Route calculation FAILED")
-                    return {"row": route["row"], "data": None, "from_cache": False}
-
-                carte_url = create_route_url(
-                    origin_name=route["origin"],
-                    dest_name=route["dest"],
-                    km=data["km"],
-                    duration_h=data.get("travel_time_h", 0),
-                    polyline=data.get("polyline_coords", []),
-                    prix_peage=data.get("prix_peage", 0.0),
-                )
-                data["carte_url"] = carte_url if carte_url else ""
-
-                with cache_lock:
-                    cache[cache_key] = data
-
-                return {"row": route["row"], "data": data, "from_cache": False}
-
-            except Exception as e:
-                print(f"  💥 EXCEPTION trajet {route['origin']} → {route['dest']}: {type(e).__name__}: {e}")
-                import traceback
-                traceback.print_exc()
-                return {"row": route["row"], "data": None, "from_cache": False}
-
-        # === Exécution principale ===
-        warm_up_server()
+        # === Lecture Excel ===
+        if progress_callback:
+            progress_callback(0, 1, "📂 Lecture du fichier Excel...")
 
         wb, sheets_data = read_all_sheets(filepath)
-        if not sheets_data:
-            return {"success": False, "output_path": "", "error": "Aucune feuille exploitable", "stats": stats}
 
+        # === Comptage total ===
+        total_global = 0
+        for sheet_name, (ws, routes) in sheets_data.items():
+            total_global += len(routes)
+
+        if progress_callback:
+            progress_callback(0, total_global, f"📊 {total_global} trajets à calculer...")
+
+        # === Chargement des caches ===
         cache = charger_cache()
+        geocode_cache = charger_geocode_cache()
 
-        total_global = sum(len(routes) for _, (ws, routes) in sheets_data.items())
         current_global = 0
 
+        # =================================================================
+        # Traitement d'un trajet unique (exécuté dans un thread)
+        # =================================================================
+        def traiter_trajet(route, cache, geocode_cache):
+            origin = route["origin"]
+            dest = route["dest"]
+
+            if not origin or not dest:
+                return {"row": route["row"], "data": None, "from_cache": False}
+
+            cache_key = f"{origin}|{dest}|peage={calculer_peage}"
+
+            # Vérifier le cache
+            if cache_key in cache:
+                data = cache[cache_key]
+                return {"row": route["row"], "data": data, "from_cache": True}
+
+            # Geocoding
+            coords_origin = geocode_cached(origin, geocode_cache)
+            coords_dest = geocode_cached(dest, geocode_cache)
+
+            if not coords_origin or not coords_dest:
+                return {"row": route["row"], "data": None, "from_cache": False}
+
+            # Waypoints (routes préférentielles)
+            waypoints = []
+            if super_pref:
+                try:
+                    waypoints = get_waypoints(origin, dest)
+                except Exception:
+                    waypoints = []
+
+            # Calcul via PTV
+            try:
+                data = calculate_km_route(
+                    coords_origin, coords_dest,
+                    calculer_peage=calculer_peage,
+                    waypoints=waypoints
+                )
+            except Exception:
+                return {"row": route["row"], "data": None, "from_cache": False}
+
+            if not data:
+                return {"row": route["row"], "data": None, "from_cache": False}
+
+            # URL carte
+            try:
+                data["map_url"] = create_route_url(coords_origin, coords_dest, waypoints)
+            except Exception:
+                data["map_url"] = ""
+
+            # Stocker en cache
+            cache[cache_key] = data
+
+            return {"row": route["row"], "data": data, "from_cache": False}
+
+        # =================================================================
+        # Boucle par feuille
+        # =================================================================
         for sheet_name, (ws, routes) in sheets_data.items():
             if not routes:
                 continue
 
-            total    = len(routes)
-            results  = [None] * total
-            futures_map = {}
+            if progress_callback:
+                progress_callback(current_global, total_global, f"📋 Feuille : {sheet_name} ({len(routes)} trajets)")
+
+            results = {}
 
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                for i, route in enumerate(routes):
-                    future = executor.submit(
-                        traiter_trajet, i + 1, total, route, cache, calculer_peage, super_pref
-                    )
-                    futures_map[future] = i
+                future_to_idx = {}
+                for idx, route in enumerate(routes):
+                    future = executor.submit(traiter_trajet, route, cache, geocode_cache)
+                    future_to_idx[future] = idx
 
-                for future in as_completed(futures_map):
-                    idx = futures_map[future]
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+
                     try:
                         res = future.result()
                         results[idx] = res
 
-                        stats["total_trajets"] += 1
-                        if res["data"]:
-                            stats["trajets_ok"] += 1
-                            stats["total_km"] += res["data"].get("km", 0)
+                        if res and res.get("data"):
+                            stats["trajets_calcules"] += 1
+                            stats["total_km"] += res["data"].get("km", 0) or 0
                             stats["total_peage"] += res["data"].get("prix_peage", 0) or 0
                             if res.get("from_cache"):
                                 stats["from_cache"] += 1
@@ -218,6 +254,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 progress_callback(current_global, total_global, f"💾 Écriture des résultats ({sheet_name})...")
             write_km_results(ws, results, calculer_peage)
 
+        # === Sauvegarde finale ===
         sauvegarder_cache(cache)
         sauvegarder_geocode_cache(geocode_cache)
 
