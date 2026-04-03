@@ -166,20 +166,24 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         def traiter_trajet(route, cache, geocode_cache):
             origin = route["origin"]
             dest = route["dest"]
-
+            
+            # --- DEBUG ---
+            print(f"DEBUG GEO: Tentative sur {origin}")
+            
             if not origin or not dest:
                 return {"row": route["row"], "data": None, "from_cache": False}
 
             cache_key = f"{origin}|{dest}|peage={calculer_peage}"
 
-            # Vérifier le cache
             if cache_key in cache:
-                data = cache[cache_key]
-                return {"row": route["row"], "data": data, "from_cache": True}
+                return {"row": route["row"], "data": cache[cache_key], "from_cache": True}
 
-            # Geocoding
             coords_origin = geocode_cached(origin, geocode_cache)
             coords_dest = geocode_cached(dest, geocode_cache)
+
+            # --- DEBUG ---
+            if not coords_origin: print(f"❌ Géocodage échoué pour ORIGINE: {origin}")
+            if not coords_dest: print(f"❌ Géocodage échoué pour DEST: {dest}")
 
             if not coords_origin or not coords_dest:
                 return {"row": route["row"], "data": None, "from_cache": False}
