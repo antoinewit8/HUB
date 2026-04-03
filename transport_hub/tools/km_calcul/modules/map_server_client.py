@@ -1,6 +1,3 @@
-
-Copier
-
 # map_server_client.py
  
 import httpx
