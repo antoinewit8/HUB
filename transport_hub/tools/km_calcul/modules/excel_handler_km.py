@@ -562,7 +562,7 @@ def write_km_results(ws, results, calculer_peage=False):
 
         unmerge_and_write(ws, row, col_map["KM PTV"], data["km"], border=border)
 
-        carte_url = data.get("carte_url", "")
+        carte_url = data.get("map_url", "")
         if carte_url:
             cell = unmerge_and_write(
                 ws, row, col_map["Carte PTV"],
