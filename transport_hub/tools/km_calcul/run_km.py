@@ -208,6 +208,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         # =================================================================
         # Boucle par feuille
         # =================================================================
+        print(f"DEBUG SHEETS: {list(sheets_data.keys())}, total={total_global}")
         for sheet_name, (ws, routes) in sheets_data.items():
             if not routes:
                 continue
@@ -228,6 +229,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
                     try:
                         res = future.result()
+                        print(f"DEBUG: idx={idx}, current={current_global}, data={'OK' if res.get('data') else 'NONE'}, cache={res.get('from_cache')}")
                         results[idx] = res
 
                         if res and res.get("data"):
