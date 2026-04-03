@@ -282,6 +282,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return {"success": False, "output_path": "", "error": f"{type(e).__name__}: 
-{str(e)}\n{traceback.format_exc()}", "stats": stats}
+        err_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        return {"success": False, "output_path": "", "error": err_msg, "stats": stats}
+
 
