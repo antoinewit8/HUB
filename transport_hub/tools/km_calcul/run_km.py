@@ -2,9 +2,14 @@ import os
 import sys
 import json
 import threading
+import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 KM_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Locks globaux pour sécuriser les snapshots de cache pendant le multithreading
+cache_lock = threading.Lock()
+geocode_lock = threading.Lock()
 
 
 # =============================================================================
@@ -74,6 +79,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         "resultats": []
     }
 
+    erreurs_list = []
+
     try:
         from modules.excel_handler_km import read_all_sheets, write_km_results
         from modules.ptv_router_km import calculate_km_route, geocode_address
@@ -96,9 +103,10 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             return SafeDict()
 
         def sauvegarder_cache(cache):
-            snapshot_str = cache.to_json_str(indent=4)
+            with cache_lock:
+                snapshot = copy.deepcopy(cache)
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
-                f.write(snapshot_str)
+                json.dump(snapshot, f, indent=4, ensure_ascii=False)
 
         # === Cache geocoding ===
         def charger_geocode_cache():
@@ -111,17 +119,20 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             return SafeDict()
 
         def sauvegarder_geocode_cache(gc):
-            snapshot_str = gc.to_json_str(indent=2)
+            with geocode_lock:
+                snapshot = copy.deepcopy(gc)
             with open(GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
-                f.write(snapshot_str)
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
 
         # === Geocoding avec cache ===
         def geocode_cached(address, gc):
-            if address in gc:
-                return gc[address]
+            with geocode_lock:
+                if address in gc:
+                    return gc[address]
             coords = geocode_address(address)
             if coords:
-                gc[address] = coords
+                with geocode_lock:
+                    gc[address] = coords
             return coords
 
         # === Warm-up serveur carte ===
@@ -204,7 +215,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 data["map_url"] = ""
 
             # Stocker en cache
-            cache[cache_key] = data
+            with cache_lock:
+                cache[cache_key] = data
 
             return {"row": route["row"], "data": data, "from_cache": False}
 
@@ -252,10 +264,12 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                                 })
                         else:
                             stats["trajets_erreur"] += 1
+                            erreurs_list.append(f"❌ {routes[idx]['origin']} → {routes[idx]['dest']}: Calcul échoué ou vide")
 
-                    except Exception:
+                    except Exception as e:
                         results[idx] = {"row": routes[idx]["row"], "data": None, "from_cache": False}
                         stats["trajets_erreur"] += 1
+                        erreurs_list.append(f"❌ {routes[idx]['origin']} → {routes[idx]['dest']}: {str(e)}")
 
                     current_global += 1
 
@@ -278,6 +292,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 progress_callback(current_global, total_global, f"💾 Écriture des résultats ({sheet_name})...")
             write_km_results(ws,list(results.values()), calculer_peage)
 
+        stats["erreurs_detail"] = erreurs_list
+
         # === Sauvegarde finale ===
         sauvegarder_cache(cache)
         sauvegarder_geocode_cache(geocode_cache)
@@ -292,7 +308,5 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
     except Exception as e:
         import traceback
-        error_msg = traceback.format_exc()
-        print(error_msg)
-        return {"success": False, "output_path": "", "error": error_msg[:500], "stats": stats}
-
+        err_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        return {"success": False, "output_path": "", "error": err_msg, "stats": stats}
