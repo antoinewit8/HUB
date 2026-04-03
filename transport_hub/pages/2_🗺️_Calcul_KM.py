@@ -101,6 +101,12 @@ if "km_result_bytes" in st.session_state:
 
             st.markdown(f"🗄️ **{stats.get('from_cache', 0)}** trajets depuis le cache")
 
+            # === Détail des erreurs ===
+            if stats.get("erreurs_detail"):
+                with st.expander("🔍 Détail des erreurs"):
+                    for err in stats["erreurs_detail"]:
+                        st.text(err)
+
             # === Aperçu tableau ===
             resultats = stats.get("resultats", [])
             if resultats:
