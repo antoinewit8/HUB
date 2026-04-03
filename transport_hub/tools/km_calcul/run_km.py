@@ -189,11 +189,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             coords_origin = geocode_cached(origin, geocode_cache)
             coords_dest = geocode_cached(dest, geocode_cache)
 
-            # --- DEBUG ---
-            # Geocoding
-            coords_origin = geocode_cached(origin, geocode_cache)
-            coords_dest = geocode_cached(dest, geocode_cache)
-
             # AJOUTE CECI ICI :
             if not coords_origin: print(f"DEBUG: Géocodage échoué pour l'origine: {origin}")
             if not coords_dest: print(f"DEBUG: Géocodage échoué pour la destination: {dest}")
@@ -229,7 +224,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             # URL carte
             try:
                 data["map_url"] = create_route_url(coords_origin, coords_dest, waypoints)
-            except Exception:
+            except Exception as e:
+                print(f"!!! CRASH create_route_url: {e}", flush=True)
                 data["map_url"] = ""
 
             # Stocker en cache
