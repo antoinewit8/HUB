@@ -2,6 +2,7 @@ import os
 import time
 import json
 import threading
+import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from modules.ptv_router_km import calculate_km_route, geocode_address
 from modules.excel_handler_km import read_all_sheets, write_km_results
@@ -40,8 +41,9 @@ def charger_cache():
     return {}
 
 def sauvegarder_cache(cache):
+    snapshot = copy.deepcopy(cache)
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(dict(cache), f, indent=4, ensure_ascii=False)
+        json.dump(snapshot, f, indent=4, ensure_ascii=False)
 
 
 # ── Traitement complet : calcul + carte dans la foulée ────────────────────
