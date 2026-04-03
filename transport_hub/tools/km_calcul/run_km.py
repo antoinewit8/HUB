@@ -1,5 +1,6 @@
 import os
 import sys
+import copy
 
 KM_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -38,8 +39,9 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             return {}
 
         def sauvegarder_cache(cache):
+            snapshot = copy.deepcopy(cache)
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(dict(cache), f, indent=4, ensure_ascii=False)
+                json.dump(snapshot, f, indent=4, ensure_ascii=False)
 
         # === 🚀 Cache geocoding ===
         def charger_geocode_cache():
@@ -52,8 +54,9 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             return {}
 
         def sauvegarder_geocode_cache(gc):
+            snapshot = copy.deepcopy(gc)
             with open(GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(gc, f, indent=2, ensure_ascii=False)
+                json.dump(snapshot, f, indent=2, ensure_ascii=False)
 
         def geocode_cached(address, gc):
             with geo_lock:
