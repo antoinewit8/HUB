@@ -103,10 +103,9 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             return SafeDict()
 
         def sauvegarder_cache(cache):
-            with cache_lock:
-                snapshot = copy.deepcopy(cache)
+            data = {k: v for k, v in cache.items() if isinstance(k, str) and isinstance(v, (str, int, float, dict, list))}
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(snapshot, f, indent=4, ensure_ascii=False)
+                json.dump(data, f, indent=4, ensure_ascii=False)
 
         # === Cache geocoding ===
         def charger_geocode_cache():
@@ -119,11 +118,9 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             return SafeDict()
 
         def sauvegarder_geocode_cache(gc):
-            with geocode_lock:
-                snapshot = copy.deepcopy(gc)
+            data = {k: v for k, v in gc.items() if isinstance(k, str) and isinstance(v, (str, int, float, dict, list))}
             with open(GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(snapshot, f, indent=2, ensure_ascii=False)
-
+                json.dump(data, f, indent=2, ensure_ascii=False)
         # === Geocoding avec cache ===
         def geocode_cached(address, gc):
             with geocode_lock:
