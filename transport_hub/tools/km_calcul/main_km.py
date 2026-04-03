@@ -41,7 +41,7 @@ def charger_cache():
 
 def sauvegarder_cache(cache):
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cache, f, indent=4, ensure_ascii=False)
+        json.dump(dict(cache), f, indent=4, ensure_ascii=False)
 
 
 # ── Traitement complet : calcul + carte dans la foulée ────────────────────
