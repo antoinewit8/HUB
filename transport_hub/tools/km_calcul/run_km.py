@@ -223,7 +223,14 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
             # URL carte
             try:
-                data["map_url"] = create_route_url(coords_origin, coords_dest, waypoints)
+                data["map_url"] = create_route_url(
+                    origin_name = origin,
+                    dest_name   = dest,
+                    km          = data.get("km", 0),
+                    duration_h  = data.get("travel_time_h", 0),
+                    polyline    = data.get("polyline_coords", []),
+                    prix_peage  = data.get("prix_peage", 0.0),
+                )
             except Exception as e:
                 print(f"!!! CRASH create_route_url: {e}", flush=True)
                 data["map_url"] = ""
