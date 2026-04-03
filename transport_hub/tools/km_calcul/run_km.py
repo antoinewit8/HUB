@@ -39,7 +39,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
         def sauvegarder_cache(cache):
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
-                json.dump(cache, f, indent=4, ensure_ascii=False)
+                json.dump(dict(cache), f, indent=4, ensure_ascii=False)
 
         # === 🚀 Cache geocoding ===
         def charger_geocode_cache():
