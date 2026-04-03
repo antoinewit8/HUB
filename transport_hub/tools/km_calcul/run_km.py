@@ -282,13 +282,16 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                     msg = f"📍 {routes[idx]['origin']} → {routes[idx]['dest']}"
 
                     if current_global % 20 == 0:
+                        print(f"--- TENTATIVE SAUVEGARDE CACHE (Trajet {current_global}) ---", flush=True)
                         try:
                             sauvegarder_cache(cache)
                             sauvegarder_geocode_cache(geocode_cache)
+                            print("--- SAUVEGARDE REUSSIE ---", flush=True)
                             msg += " 💾 (Cache sauvegardé)"
                         except Exception as e:
                             import traceback
-                            traceback.print_exc()
+                            print("!!! ERREUR CRITIQUE SAUVEGARDE !!!", flush=True)
+                            traceback.print_exc() # <--- CA VA ENFIN DIRE POURQUOI
                             msg += f" ⚠️ Erreur sauvegarde: {e}"
 
                     if progress_callback:
