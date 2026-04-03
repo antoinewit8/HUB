@@ -8,7 +8,7 @@ KM_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 # =============================================================================
-# SafeDict — dictionnaire thread-safe qui ne plante jamais en itération
+# SafeDict — dictionnaire thread-safe avec snapshot profond
 # =============================================================================
 class SafeDict(dict):
     def __init__(self, *args, **kwargs):
@@ -31,10 +31,23 @@ class SafeDict(dict):
         with self._lock:
             return super().get(key, default)
 
-    def to_json_str(self, indent=4):
+    def _deep_copy_value(self, v):
+        """Copie récursive pure Python sans itérer le dict original pendant l'écriture"""
+        if isinstance(v, dict):
+            return {k2: self._deep_copy_value(v2) for k2, v2 in list(v.items())}
+        elif isinstance(v, list):
+            return [self._deep_copy_value(i) for i in list(v)]
+        else:
+            return v
+
+    def snapshot(self):
+        """Retourne une copie profonde complète sous lock — 100% safe"""
         with self._lock:
-            flat = {k: v for k, v in list(super().items())}
-        return json.dumps(flat, indent=indent, ensure_ascii=False)
+            return {k: self._deep_copy_value(v) for k, v in list(super().items())}
+
+    def to_json_str(self, indent=4):
+        snap = self.snapshot()
+        return json.dumps(snap, indent=indent, ensure_ascii=False)
 
 
 # =============================================================================
@@ -269,4 +282,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return {"success": False, "output_path": "", "error": f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}", "stats": stats}
+        return {"success": False, "output_path": "", "error": f"{type(e).__name__}: 
+{str(e)}\n{traceback.format_exc()}", "stats": stats}
+
