@@ -23,7 +23,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
         CACHE_FILE  = os.path.join(KM_DIR, "cache_trajets.json")
         GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
-        MAX_WORKERS = 2 # ← 🛡️ Sécurité maximale pour éviter les crashs API
+        MAX_WORKERS = 2
         cache_lock  = threading.Lock()
         geo_lock    = threading.Lock()
 
@@ -39,11 +39,12 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             return {}
 
         def sauvegarder_cache(cache):
-            snapshot = copy.deepcopy(cache)
+            with cache_lock:
+                snapshot = copy.deepcopy(cache)
             with open(CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(snapshot, f, indent=4, ensure_ascii=False)
 
-        # === 🚀 Cache geocoding ===
+        # === Cache geocoding ===
         def charger_geocode_cache():
             if os.path.exists(GEOCODE_CACHE_FILE):
                 try:
@@ -54,7 +55,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             return {}
 
         def sauvegarder_geocode_cache(gc):
-            snapshot = copy.deepcopy(gc)
+            with geo_lock:
+                snapshot = copy.deepcopy(gc)
             with open(GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(snapshot, f, indent=2, ensure_ascii=False)
 
@@ -136,8 +138,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
                 with cache_lock:
                     cache[cache_key] = data
-                    if index % 10 == 0 or index == total:
-                        sauvegarder_cache(cache)
 
                 return {"row": route["row"], "data": data, "from_cache": False}
 
@@ -146,7 +146,6 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 import traceback
                 traceback.print_exc()
                 return {"row": route["row"], "data": None, "from_cache": False}
-
 
         # === Exécution principale ===
         warm_up_server()
@@ -206,14 +205,12 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
                     current_global += 1
 
-                    # On n'affiche le message de sauvegarde que tous les 20 trajets
                     msg = f"📍 {routes[idx]['origin']} → {routes[idx]['dest']}"
-                    
+
                     if current_global % 20 == 0:
-                        # Sauvegarde réelle du travail en cours (Excel + Cache)
                         sauvegarder_cache(cache)
                         msg += " 💾 (Cache sauvegardé)"
-                    
+
                     if progress_callback:
                         progress_callback(current_global, total_global, msg)
 
@@ -222,7 +219,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             write_km_results(ws, results, calculer_peage)
 
         sauvegarder_cache(cache)
-        sauvegarder_geocode_cache(geocode_cache)  # 🚀 Sauvegarde geocoding
+        sauvegarder_geocode_cache(geocode_cache)
 
         if progress_callback:
             progress_callback(total_global, total_global, "💾 Sauvegarde du fichier final...")
