@@ -257,8 +257,14 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                     msg = f"📍 {routes[idx]['origin']} → {routes[idx]['dest']}"
 
                     if current_global % 20 == 0:
-                        sauvegarder_cache(cache)
-                        msg += " 💾 (Cache sauvegardé)"
+                        try:
+                            sauvegarder_cache(cache)
+                            sauvegarder_geocode_cache(geocode_cache)
+                            msg += " 💾 (Cache sauvegardé)"
+                        except Exception as e:
+                            import traceback
+                            traceback.print_exc()
+                            msg += f" ⚠️ Erreur sauvegarde: {e}"
 
                     if progress_callback:
                         progress_callback(current_global, total_global, msg)
@@ -280,10 +286,10 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         return {"success": True, "output_path": output_path, "error": "", "stats": stats}
 
     except Exception as e:
-    import traceback
-    error_msg = traceback.format_exc()
-    print(error_msg)  # logs cloud
-    if progress_callback:
-        progress_callback(current_global, total_global, f"❌ ERREUR: {error_msg[:200]}")
-    results[idx] = {"row": routes[idx]["row"], "data": None, "from_cache": False}
-    stats["trajets_erreur"] += 1
+        import traceback
+        error_msg = traceback.format_exc()
+        print(error_msg)  # logs cloud
+        if progress_callback:
+            progress_callback(current_global, total_global, f"❌ ERREUR: {error_msg[:200]}")
+        results[idx] = {"row": routes[idx]["row"], "data": None, "from_cache": False}
+        stats["trajets_erreur"] += 1
