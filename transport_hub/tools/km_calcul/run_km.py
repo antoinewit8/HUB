@@ -123,14 +123,22 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 json.dump(data, f, indent=2, ensure_ascii=False)
         # === Geocoding avec cache ===
         def geocode_cached(address, gc):
+            print(f"\n--- TEST GEOCODE: {address} ---", flush=True) # DOIT APPARAITRE
             with geocode_lock:
                 if address in gc:
+                    print(f"Trouvé dans le cache: {gc[address]}", flush=True)
                     return gc[address]
-            coords = geocode_address(address)
-            if coords:
-                with geocode_lock:
-                    gc[address] = coords
-            return coords
+            
+            try:
+                coords = geocode_address(address)
+                print(f"Résultat API pour {address} : {coords}", flush=True)
+                if coords:
+                    with geocode_lock:
+                        gc[address] = coords
+                return coords
+            except Exception as e:
+                print(f"!!! CRASH API GEOCODE pour {address} : {e}", flush=True)
+                return None
 
         # === Warm-up serveur carte ===
         try:
