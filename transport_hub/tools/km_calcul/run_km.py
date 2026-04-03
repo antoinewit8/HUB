@@ -63,6 +63,7 @@ def _inject_path():
 # =============================================================================
 def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool = False, progress_callback=None) -> dict:
     _inject_path()
+print("DEBUG: DEBUT run_calcul_km")
 
     stats = {
         "trajets_calcules": 0,
@@ -134,11 +135,13 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             progress_callback(0, 1, "📂 Lecture du fichier Excel...")
 
         wb, sheets_data = read_all_sheets(filepath)
+        print(f"DEBUG: sheets_data keys = {list(sheets_data.keys())}")
 
         # === Comptage total ===
         total_global = 0
         for sheet_name, (ws, routes) in sheets_data.items():
             total_global += len(routes)
+            print(f"DEBUG: total_global = {total_global}")
 
         if progress_callback:
             progress_callback(0, total_global, f"📊 {total_global} trajets à calculer...")
