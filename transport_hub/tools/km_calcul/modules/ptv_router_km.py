@@ -333,7 +333,7 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
             }
 
         except Exception as e:
-            print(f"      ⚠️  Tentative {attempt}/{MAX_RETRIES} : {e}")
+            print(f"❌ ERREUR trajet {routes[idx]['origin']} → {routes[idx]['dest']}: {e}")
             time.sleep(RETRY_DELAY)
 
     return None
