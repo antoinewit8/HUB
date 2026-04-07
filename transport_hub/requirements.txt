@@ -11,3 +11,4 @@ pydantic
 jinja2
 pdfplumber
 beautifulsoup4
+xlrd==2.0.1
