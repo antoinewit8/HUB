@@ -22,13 +22,55 @@ st.set_page_config(
 )
  
  
-# ─── Chargement fichier (avec conversion .xls via LibreOffice) ─
+# ─── Détection du vrai format par magic bytes ───────────
+def _is_real_xls(data: bytes) -> bool:
+    """
+    Vérifie si les données sont un vrai .xls (format BIFF/OLE2).
+    Magic bytes OLE2 : D0 CF 11 E0 A1 B1 1A E1
+    Les .xlsx sont des ZIP et commencent par 50 4B (PK).
+    """
+    return data[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'
+ 
+ 
+def _convert_xls_bytes_via_libreoffice(data: bytes, filename: str) -> pd.DataFrame:
+    """Écrit les bytes sur disque, convertit via LibreOffice, lit le .xlsx produit."""
+    libreoffice = shutil.which("libreoffice") or shutil.which("soffice")
+    if not libreoffice:
+        raise RuntimeError("LibreOffice est introuvable sur ce serveur.")
+ 
+    tmp_dir = tempfile.mkdtemp(prefix="txflex_")
+    try:
+        # Forcer l'extension .xls pour que LibreOffice reconnaisse le format
+        base     = os.path.splitext(filename)[0]
+        xls_tmp  = os.path.join(tmp_dir, base + ".xls")
+        with open(xls_tmp, "wb") as f:
+            f.write(data)
+ 
+        result = subprocess.run(
+            [libreoffice, "--headless", "--convert-to", "xlsx",
+             xls_tmp, "--outdir", tmp_dir],
+            capture_output=True, text=True, timeout=60
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Échec conversion LibreOffice : "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+ 
+        xlsx_path = os.path.join(tmp_dir, base + ".xlsx")
+        if not os.path.exists(xlsx_path):
+            raise RuntimeError(f"Fichier converti introuvable : {xlsx_path}")
+ 
+        return pd.read_excel(xlsx_path, engine="openpyxl")
+ 
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+ 
+ 
 def read_uploaded_file(file) -> pd.DataFrame:
     """
-    Lit un fichier uploadé par Streamlit (BytesIO).
-    - .csv  → lecture directe
-    - .xlsx → openpyxl
-    - .xls  → conversion via LibreOffice (pas besoin de xlrd)
+    Lit un fichier uploadé Streamlit.
+    Détecte le VRAI format par magic bytes — ignore l'extension déclarée.
     """
     name = file.name
     ext  = os.path.splitext(name)[1].lower()
@@ -36,53 +78,15 @@ def read_uploaded_file(file) -> pd.DataFrame:
     if ext == ".csv":
         return pd.read_csv(file)
  
-    if ext in (".xlsx", ".xlsm"):
-        return pd.read_excel(file, engine="openpyxl")
+    # Lire les bytes une seule fois
+    data = file.read()
  
-    if ext == ".xls":
-        # LibreOffice ne peut pas lire un BytesIO → on écrit dans un fichier temporaire
-        libreoffice = shutil.which("libreoffice") or shutil.which("soffice")
-        if not libreoffice:
-            raise RuntimeError(
-                "LibreOffice est introuvable. "
-                "Convertissez vos fichiers en .xlsx avant l'analyse."
-            )
- 
-        tmp_dir = tempfile.mkdtemp(prefix="txflex_")
-        try:
-            # 1. Écrire le BytesIO dans un .xls temporaire
-            xls_tmp = os.path.join(tmp_dir, name)
-            with open(xls_tmp, "wb") as f:
-                f.write(file.read())
- 
-            # 2. Convertir en .xlsx via LibreOffice
-            result = subprocess.run(
-                [libreoffice, "--headless", "--convert-to", "xlsx",
-                 xls_tmp, "--outdir", tmp_dir],
-                capture_output=True, text=True, timeout=60
-            )
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"Échec conversion LibreOffice : "
-                    f"{result.stderr.strip() or result.stdout.strip()}"
-                )
- 
-            # 3. Lire le .xlsx produit
-            basename  = os.path.splitext(name)[0]
-            xlsx_path = os.path.join(tmp_dir, basename + ".xlsx")
-            if not os.path.exists(xlsx_path):
-                raise RuntimeError(
-                    f"Fichier converti introuvable : {xlsx_path}\n"
-                    f"Sortie : {result.stdout.strip()}"
-                )
- 
-            return pd.read_excel(xlsx_path, engine="openpyxl")
- 
-        finally:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
- 
-    # Extension inconnue → tentative générique
-    return pd.read_excel(file)
+    if _is_real_xls(data):
+        # Vrai format OLE2/BIFF (.xls) — même si renommé en .xlsx
+        return _convert_xls_bytes_via_libreoffice(data, name)
+    else:
+        # Format ZIP → vrai .xlsx, lecture directe openpyxl
+        return pd.read_excel(io.BytesIO(data), engine="openpyxl")
  
  
 # ─── Header ────────────────────────────────────────────
@@ -121,14 +125,11 @@ for i, file in enumerate(uploaded_files):
     )
  
     try:
-        # ── Lecture (gère .xls, .xlsx, .csv) ──
         df = read_uploaded_file(file)
  
-        # ── KM à vide ──
         trajets_vides  = compute_empty_km(df)
         total_vide     = sum(t["km_vide"] for t in trajets_vides)
  
-        # ── KM totaux ──
         stats_totales  = compute_total_km(df)
         total_parcouru = stats_totales["total"]
         pct_vide       = (total_vide / total_parcouru * 100) if total_parcouru > 0 else 0
@@ -144,7 +145,6 @@ for i, file in enumerate(uploaded_files):
             trajet["Camion"] = camion_nom
             details_trajets.append(trajet)
  
-        # ── Alertes vendredis ──
         for anomalie in detect_friday_anomalies(df):
             if anomalie["alerte"]:
                 alertes_vendredi.append({
