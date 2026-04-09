@@ -91,6 +91,7 @@ GPS_FIXES_ORIGIN = {
     "rumbek":  "Rumbeke, 8800, Belgium",
     "rumbeke": "Rumbeke, 8800, Belgium",
     "indre":   "Indre, 44610, France",
+    "clermont": "Clermont-sur-oise, 60600, France"
 }
 
 # ============================================================
