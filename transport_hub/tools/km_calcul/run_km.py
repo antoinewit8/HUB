@@ -3,6 +3,7 @@ import sys
 import json
 import threading
 import copy
+import queue
 from concurrent.futures import ThreadPoolExecutor, as_completed
  
 KM_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -89,7 +90,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
  
         CACHE_FILE = os.path.join(KM_DIR, "cache_trajets.json")
         GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
-        MAX_WORKERS = 1
+        MAX_WORKERS = 3
  
         # === Cache trajets ===
         def charger_cache():
@@ -251,21 +252,31 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 progress_callback(current_global, total_global, f"📋 Feuille : {sheet_name} ({len(routes)} trajets)")
  
             results = {}
+            progress_queue = queue.Queue()
+ 
+            def traiter_avec_queue(idx, route):
+                res = traiter_trajet(route, cache, geocode_cache)
+                progress_queue.put((idx, res))
+                return res
  
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                future_to_idx = {}
-                for idx, route in enumerate(routes):
-                    future = executor.submit(traiter_trajet, route, cache, geocode_cache)
-                    future_to_idx[future] = idx
+                futures = [
+                    executor.submit(traiter_avec_queue, idx, route)
+                    for idx, route in enumerate(routes)
+                ]
  
-                for future in as_completed(future_to_idx):
-                    idx = future_to_idx[future]
+                completed = 0
+                while completed < len(routes):
+                    try:
+                        idx, res = progress_queue.get(timeout=60)
+                    except queue.Empty:
+                        break
+ 
+                    results[idx] = res
+                    completed += 1
+                    current_global += 1
  
                     try:
-                        res = future.result()
-                        print(f"DEBUG: idx={idx}, current={current_global}, data={'OK' if res.get('data') else 'NONE'}, cache={res.get('from_cache')}")
-                        results[idx] = res
- 
                         if res and res.get("data"):
                             stats["trajets_calcules"] += 1
                             stats["total_km"] += res["data"].get("km", 0) or 0
@@ -284,27 +295,18 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                         else:
                             stats["trajets_erreur"] += 1
                             erreurs_list.append(f"❌ {routes[idx]['origin']} → {routes[idx]['dest']}: Calcul échoué ou vide")
- 
                     except Exception as e:
-                        results[idx] = {"row": routes[idx]["row"], "data": None, "from_cache": False}
                         stats["trajets_erreur"] += 1
                         erreurs_list.append(f"❌ {routes[idx]['origin']} → {routes[idx]['dest']}: {str(e)}")
- 
-                    current_global += 1
  
                     msg = f"📍 {routes[idx]['origin']} → {routes[idx]['dest']}"
  
                     if current_global % 20 == 0:
-                        print(f"--- TENTATIVE SAUVEGARDE CACHE (Trajet {current_global}) ---", flush=True)
                         try:
                             sauvegarder_cache(cache)
                             sauvegarder_geocode_cache(geocode_cache)
-                            print("--- SAUVEGARDE REUSSIE ---", flush=True)
-                            msg += " 💾 (Cache sauvegardé)"
+                            msg += " 💾"
                         except Exception as e:
-                            import traceback
-                            print("!!! ERREUR CRITIQUE SAUVEGARDE !!!", flush=True)
-                            traceback.print_exc() # <--- CA VA ENFIN DIRE POURQUOI
                             msg += f" ⚠️ Erreur sauvegarde: {e}"
  
                     if progress_callback:
