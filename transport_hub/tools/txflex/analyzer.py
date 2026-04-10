@@ -34,8 +34,10 @@ def _deduplicate(df):
 # ─── Fonctions principales ────────────────────────────
 def compute_empty_km(df):
     """
-    Calcule les km à vide entre chaque Déchargement → Chargement.
-    (VERSION STABLE VALIDÉE)
+    Calcule les km à vide :
+      1. Approche initiale  : départ dépôt → premier chargement
+      2. Inter-missions     : déchargement → chargement suivant
+      3. Retour final       : dernier déchargement → fin de période (retour dépôt)
     """
     empty_km_list    = []
     last_unload      = None
@@ -45,6 +47,20 @@ def compute_empty_km(df):
     df["Date de création"] = parse_dates(df["Date de création"])
     df = df.sort_values("Date de création").reset_index(drop=True)
     df = _deduplicate(df)
+
+    # ── Point de départ initial (premier relevé KM connu = sortie dépôt) ──
+    df_km_valides = df[df["KM"].notna()]
+    if not df_km_valides.empty:
+        first_row = df_km_valides.iloc[0]
+        depot_start = {
+            "km":    first_row["KM"],
+            "date":  first_row["Date de création"],
+            "ville": str(first_row.get("Position de ville", "")).strip()
+        }
+    else:
+        depot_start = None
+
+    first_load_seen = False  # pour ne capter l'approche initiale qu'une fois
 
     for _, row in df.iterrows():
         activity = str(row["Activité / Enregistrement"]).lower().strip()
@@ -62,26 +78,59 @@ def compute_empty_km(df):
             waiting_for_load = True
 
         elif "décharg" not in activity \
-                and any(x in activity for x in ["chargement", "charger", "chargé"]) \
-                and waiting_for_load \
-                and last_unload is not None:
+                and any(x in activity for x in ["chargement", "charger", "chargé"]):
 
-            empty_km = km - last_unload["km"]
+            # ── Cas 1 : approche initiale (premier chargement de la période) ──
+            if not first_load_seen and depot_start is not None:
+                empty_km = km - depot_start["km"]
+                if empty_km >= SEUIL_KM_VIDE_MIN:
+                    alerte = empty_km >= SEUIL_KM_VIDE_ALERTE
+                    empty_km_list.append({
+                        "date_depart":   depot_start["date"],
+                        "date_arrivee":  row["Date de création"],
+                        "ville_depart":  depot_start["ville"] + " (départ dépôt)",
+                        "ville_arrivee": str(row.get("Position de ville", "")).strip(),
+                        "km_vide":       empty_km,
+                        "alerte":        alerte,
+                        "raison":        f"Approche à vide de {empty_km} km" if alerte else ""
+                    })
+                first_load_seen = True
 
-            if empty_km >= SEUIL_KM_VIDE_MIN:
-                alerte = empty_km >= SEUIL_KM_VIDE_ALERTE
-                empty_km_list.append({
-                    "date_depart":   last_unload["date"],
-                    "date_arrivee":  row["Date de création"],
-                    "ville_depart":  last_unload["ville"],
-                    "ville_arrivee": str(row.get("Position de ville", "")).strip(),
-                    "km_vide":       empty_km,
-                    "alerte":        alerte,
-                    "raison":        f"Trajet à vide de {empty_km} km" if alerte else ""
-                })
+            # ── Cas 2 : inter-missions (déchargement → chargement) ──
+            elif waiting_for_load and last_unload is not None:
+                empty_km = km - last_unload["km"]
+                if empty_km >= SEUIL_KM_VIDE_MIN:
+                    alerte = empty_km >= SEUIL_KM_VIDE_ALERTE
+                    empty_km_list.append({
+                        "date_depart":   last_unload["date"],
+                        "date_arrivee":  row["Date de création"],
+                        "ville_depart":  last_unload["ville"],
+                        "ville_arrivee": str(row.get("Position de ville", "")).strip(),
+                        "km_vide":       empty_km,
+                        "alerte":        alerte,
+                        "raison":        f"Trajet à vide de {empty_km} km" if alerte else ""
+                    })
 
             last_unload      = None
             waiting_for_load = False
+            first_load_seen  = True
+
+    # ── Cas 3 : retour à vide final (dernier déchargement → fin) ──
+    if waiting_for_load and last_unload is not None and not df_km_valides.empty:
+        last_row = df_km_valides.iloc[-1]
+        km_fin = last_row["KM"]
+        empty_km = km_fin - last_unload["km"]
+        if empty_km >= SEUIL_KM_VIDE_MIN:
+            alerte = empty_km >= SEUIL_KM_VIDE_ALERTE
+            empty_km_list.append({
+                "date_depart":   last_unload["date"],
+                "date_arrivee":  last_row["Date de création"],
+                "ville_depart":  last_unload["ville"],
+                "ville_arrivee": str(last_row.get("Position de ville", "")).strip() + " (retour dépôt)",
+                "km_vide":       empty_km,
+                "alerte":        alerte,
+                "raison":        f"Retour à vide de {empty_km} km" if alerte else ""
+            })
 
     return empty_km_list
 
