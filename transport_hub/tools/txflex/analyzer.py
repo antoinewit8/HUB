@@ -13,6 +13,8 @@ SEUIL_KM_VENDREDI        = 250
 SEUIL_ACTIVITES_VENDREDI = 5
 SEUIL_KM_VIDE_ALERTE     = 100
 SEUIL_KM_VIDE_MIN        = 5
+SEUIL_APPROCHE_MAX       = 150  # au-delà = probable trou de données, pas une vraie approche dépôt
+SEUIL_RETOUR_MAX         = 150  # idem pour le retour final
 
 # ─── Utilitaire partagé ───────────────────────────────
 def _simplify_activity(act):
@@ -83,7 +85,8 @@ def compute_empty_km(df):
             # ── Cas 1 : approche initiale (premier chargement de la période) ──
             if not first_load_seen and depot_start is not None:
                 empty_km = km - depot_start["km"]
-                if empty_km >= SEUIL_KM_VIDE_MIN:
+                # On ne retient que si plausible (sinon = trou de données)
+                if SEUIL_KM_VIDE_MIN <= empty_km <= SEUIL_APPROCHE_MAX:
                     alerte = empty_km >= SEUIL_KM_VIDE_ALERTE
                     empty_km_list.append({
                         "date_depart":   depot_start["date"],
@@ -120,7 +123,8 @@ def compute_empty_km(df):
         last_row = df_km_valides.iloc[-1]
         km_fin = last_row["KM"]
         empty_km = km_fin - last_unload["km"]
-        if empty_km >= SEUIL_KM_VIDE_MIN:
+        # Plausible uniquement si en-dessous du seuil (sinon = trou de données)
+        if SEUIL_KM_VIDE_MIN <= empty_km <= SEUIL_RETOUR_MAX:
             alerte = empty_km >= SEUIL_KM_VIDE_ALERTE
             empty_km_list.append({
                 "date_depart":   last_unload["date"],
