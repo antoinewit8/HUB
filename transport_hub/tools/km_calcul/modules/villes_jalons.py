@@ -167,7 +167,7 @@ def _is_nord_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
             or (is_nord_est(lat_end, lon_end) and is_ouest(lat_start, lon_start))):
         return False
     # Garde-fou : trajet assez long
-    return _haversine(lat_start, lon_start, lat_end, lon_end) >= 400
+    return _haversine(lat_start, lon_start, lat_end, lon_end) >= 350
 
 
 def _is_vosges_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
@@ -182,7 +182,7 @@ def _is_vosges_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
     if not ((is_est(lat_start, lon_start) and is_ouest(lat_end, lon_end))
             or (is_est(lat_end, lon_end) and is_ouest(lat_start, lon_start))):
         return False
-    return _haversine(lat_start, lon_start, lat_end, lon_end) >= 400
+    return _haversine(lat_start, lon_start, lat_end, lon_end) >= 350
 
 
 def _is_limousin_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
@@ -197,7 +197,7 @@ def _is_limousin_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
     if not ((is_sud(lat_start, lon_start) and is_nord_ouest(lat_end, lon_end))
             or (is_sud(lat_end, lon_end) and is_nord_ouest(lat_start, lon_start))):
         return False
-    return _haversine(lat_start, lon_start, lat_end, lon_end) >= 400
+    return _haversine(lat_start, lon_start, lat_end, lon_end) >= 350
 
 
 def _is_n88_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
@@ -304,13 +304,21 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
                              lat_start, lon_start, lat_end, lon_end)
 
     # N12/N2 : seulement si aucun axe spécifique ne s'est déclenché
+    # ET si aucune extrémité n'est trop au nord (lat>49) ou trop à l'ouest (lon<-0.3),
+    # car dans ces cas N12/N2 ramènent des waypoints en arrière du trajet réel
     if not (use_nord_ouest or use_vosges_ouest or use_limousin or use_n88):
-        if _is_east_west(lat_start, lon_start, lat_end, lon_end):
-            _appliquer_axe_force("N12", AXE_N12, villes_proches,
-                                 lat_start, lon_start, lat_end, lon_end)
-        if _is_north_axis(lat_start, lon_start, lat_end, lon_end):
-            _appliquer_axe_force("N2", AXE_N2, villes_proches,
-                                 lat_start, lon_start, lat_end, lon_end)
+        lat_max_traj = max(lat_start, lat_end)
+        lon_min_traj = min(lon_start, lon_end)
+        n12_n2_safe = (lat_max_traj < 49.0) and (lon_min_traj > -0.3)
+        if n12_n2_safe:
+            if _is_east_west(lat_start, lon_start, lat_end, lon_end):
+                _appliquer_axe_force("N12", AXE_N12, villes_proches,
+                                     lat_start, lon_start, lat_end, lon_end)
+            if _is_north_axis(lat_start, lon_start, lat_end, lon_end):
+                _appliquer_axe_force("N2", AXE_N2, villes_proches,
+                                     lat_start, lon_start, lat_end, lon_end)
+        else:
+            print(f"      ⏭️  N12/N2 désactivés (lat_max={lat_max_traj:.2f}, lon_min={lon_min_traj:.2f})")
 
     # 3. Anti-retour-en-arrière + anti-doublon-extrémité
     dist_total = _haversine(lat_start, lon_start, lat_end, lon_end)
