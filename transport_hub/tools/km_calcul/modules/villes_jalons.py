@@ -47,6 +47,40 @@ VILLES_JALONS = {
     # Centre / Champagne
     "Troyes":           (48.3100,  4.1000),   # A5/A26 échangeur
     "Orléans":          (47.9200,  1.9300),   # A10 échangeur nord
+
+    # ── AJOUTS : axes Vosges ↔ ouest (N57/N4) ──
+    "Vesoul":           (47.6240,  6.1550),   # N57/N19 contournement
+    "Langres":          (47.8650,  5.3350),   # N19/A31 échangeur
+
+    # ── AJOUTS : axes Champagne / nord-est ──
+    "Reims-sud":        (49.2000,  4.0500),   # A4/A26 échangeur Reims-sud
+    "Saint-Quentin":    (49.8400,  3.2800),   # A26/A29 échangeur
+
+    # ── AJOUTS : axe nord ↔ ouest via Normandie (A29/A28) ──
+    "Rouen":            (49.4430,  1.0990),   # A28/A29/A13 échangeur
+
+    # ── AJOUTS : Bretagne / N12-N137 ──
+    "Rennes":           (48.0830, -1.6800),   # N12/N137/N157 échangeur
+    "Vitré":            (48.1240, -1.2100),   # A81 sortie
+
+    # ── AJOUTS : axe N145/A20 (Cantal/Limousin ↔ ouest) ──
+    "Limoges":          (45.8340,  1.2620),   # A20/N145 échangeur nord
+    "La Souterraine":   (46.2370,  1.4870),   # N145 contournement
+    "Bellac":           (46.1230,  1.0480),   # N147 contournement
+    "Tulle":            (45.2650,  1.7690),   # A89 échangeur
+
+    # ── AJOUTS : axe N10/N137 (Bretagne ↔ sud-ouest) ──
+    "Poitiers":         (46.5800,  0.3400),   # A10/N147 échangeur
+    "Niort":            (46.3230, -0.4640),   # A83/A10 échangeur
+    "Angoulême":        (45.6480,  0.1560),   # N10 contournement
+
+    # ── AJOUTS : axe N20/A20 (sud-ouest) ──
+    "Cahors":           (44.4480,  1.4410),   # A20/N20 contournement
+    "Brive":            (45.1590,  1.5320),   # A20/A89 échangeur
+
+    # ── AJOUTS : axe Jura (N5/N57) Haute-Savoie ↔ Vosges ──
+    "Champagnole":      (46.7450,  5.9130),   # N5 jurassienne
+    "Pontarlier":       (46.9050,  6.3550),   # N57 contournement
 }
 
 # ==========================================
@@ -56,7 +90,14 @@ VILLES_JALONS = {
 AXE_N12 = ["Dreux", "Alençon", "Mayenne", "Laval"]
 AXE_N2  = ["Soissons", "Laon", "Cambrai"]
 
-RAYON_DETECTION_KM = 10  # réduit de 50 à 35 pour éviter les faux positifs
+# Nouveaux axes : ordre = sens de parcours géographique
+AXE_NORD_OUEST    = ["Saint-Quentin", "Amiens", "Rouen", "Alençon", "Mayenne"]
+AXE_VOSGES_OUEST  = ["Vesoul", "Langres", "Troyes", "Orléans", "Le Mans"]
+AXE_LIMOUSIN      = ["Tulle", "Limoges", "La Souterraine", "Poitiers"]
+
+RAYON_DETECTION_KM = 10        # détection auto par projection : strict pour éviter les faux positifs
+RAYON_AXE_FORCE_KM = 45        # axes forcés : large pour couvrir les corridors qui font détour
+MAX_WAYPOINTS      = 6         # max waypoints retournés (PTV gère mal les longues listes)
 
 
 # ==========================================
@@ -104,14 +145,77 @@ def _is_north_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
     return lat_max >= 49.0 and delta_lon > 2.0
 
 
+def _is_nord_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
+    """
+    Détecte un trajet Nord (Hauts-de-France/Ardennes/Belgique est) ↔ Ouest (Bretagne/Normandie).
+    Une extrémité doit être au nord-est, l'autre à l'ouest.
+    Couvre PETIT FAYT, ROUVROY SUR AUDRY, CUINCY, WALHORN ↔ BOUVRON, RETIERS, MAYENNE, ISIGNY...
+    """
+    def is_nord_est(lat, lon):
+        return lat >= 49.5 and lon >= 2.8
+    def is_ouest(lat, lon):
+        return lon <= 0.5 and 47.0 <= lat <= 49.5
+    return ((is_nord_est(lat_start, lon_start) and is_ouest(lat_end, lon_end))
+            or (is_nord_est(lat_end, lon_end) and is_ouest(lat_start, lon_start)))
+
+
+def _is_vosges_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
+    """
+    Détecte un trajet Vosges/Est (longitude > 5.5) ↔ Ouest (longitude < 0).
+    Couvre CORCIEUX, XERTIGNY, CLERVAL, ESCHWEILER ↔ MAYENNE, BOUVRON, PONTIVY...
+    """
+    def is_est(lat, lon):
+        return lon >= 5.5 and 47.0 <= lat <= 49.5
+    def is_ouest(lat, lon):
+        return lon <= 0.5 and 47.0 <= lat <= 49.5
+    return ((is_est(lat_start, lon_start) and is_ouest(lat_end, lon_end))
+            or (is_est(lat_end, lon_end) and is_ouest(lat_start, lon_start)))
+
+
+def _is_limousin_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
+    """
+    Détecte un trajet Cantal/Aveyron/Limousin (sud du Massif Central) ↔ Normandie/Bretagne.
+    Couvre RIOM ES MONTAGNES, ONET-LE-CHÂTEAU ↔ MAYENNE, BOUVRON, ISIGNY...
+    """
+    def is_sud(lat, lon):
+        return 44.0 <= lat <= 45.7 and 1.5 <= lon <= 3.5
+    def is_nord_ouest(lat, lon):
+        return lat >= 47.5 and lon <= 0.5
+    return ((is_sud(lat_start, lon_start) and is_nord_ouest(lat_end, lon_end))
+            or (is_sud(lat_end, lon_end) and is_nord_ouest(lat_start, lon_start)))
+
+
 # ==========================================
 # FONCTION PRINCIPALE
 # ==========================================
+def _appliquer_axe_force(nom_axe, liste_villes, villes_proches,
+                         lat_start, lon_start, lat_end, lon_end):
+    """Applique un axe forcé avec le rayon élargi RAYON_AXE_FORCE_KM."""
+    for ville in liste_villes:
+        if any(v[0] == ville for v in villes_proches):
+            continue
+        if ville not in VILLES_JALONS:
+            print(f"      ⚠️  {nom_axe} : ville '{ville}' inconnue dans VILLES_JALONS")
+            continue
+        vlat, vlon = VILLES_JALONS[ville]
+        dist_seg = _distance_point_to_segment(
+            vlat, vlon,
+            lat_start, lon_start,
+            lat_end, lon_end
+        )
+        if dist_seg <= RAYON_AXE_FORCE_KM:
+            dist_from_start = _haversine(lat_start, lon_start, vlat, vlon)
+            villes_proches.append((ville, vlat, vlon, dist_from_start, dist_seg))
+            print(f"      🛣️  {nom_axe} forcé : {ville} ({dist_seg:.0f}km du segment)")
+        else:
+            print(f"      🛣️  {nom_axe} ignoré : {ville} ({dist_seg:.0f}km > {RAYON_AXE_FORCE_KM}km)")
+
+
 def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
     print(f"      🧭 Jalons: ({lat_start:.4f}, {lon_start:.4f}) → ({lat_end:.4f}, {lon_end:.4f})")
     villes_proches = []
 
-    # 1. Détection par proximité au segment direct
+    # 1. Détection auto par proximité au segment direct (rayon strict 10 km)
     for ville, (vlat, vlon) in VILLES_JALONS.items():
         dist = _distance_point_to_segment(
             vlat, vlon,
@@ -122,46 +226,62 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
             dist_from_start = _haversine(lat_start, lon_start, vlat, vlon)
             villes_proches.append((ville, vlat, vlon, dist_from_start, dist))
 
-    # 2. Axes forcés — TOUJOURS vérifier la proximité au segment
-    if _is_east_west(lat_start, lon_start, lat_end, lon_end):
-        for ville in AXE_N12:
-            if not any(v[0] == ville for v in villes_proches):
-                vlat, vlon = VILLES_JALONS[ville]
-                dist_seg = _distance_point_to_segment(
-                    vlat, vlon,
-                    lat_start, lon_start,
-                    lat_end, lon_end
-                )
-                if dist_seg <= RAYON_DETECTION_KM:
-                    dist_from_start = _haversine(lat_start, lon_start, vlat, vlon)
-                    villes_proches.append((ville, vlat, vlon, dist_from_start, dist_seg))
-                    print(f"      🛣️  N12 forcé : {ville} ({dist_seg:.0f}km du segment)")
-                else:
-                    print(f"      🛣️  N12 ignoré : {ville} ({dist_seg:.0f}km trop loin)")
+    # 2. Axes forcés (rayon élargi pour couvrir les corridors en détour)
+    # Détection prioritaire des nouveaux axes : si Nord→Ouest ou Vosges→Ouest se déclenche,
+    # on désactive N12/N2 pour éviter les doublons et trajets contradictoires
+    use_nord_ouest    = _is_nord_to_ouest(lat_start, lon_start, lat_end, lon_end)
+    use_vosges_ouest  = _is_vosges_to_ouest(lat_start, lon_start, lat_end, lon_end)
+    use_limousin      = _is_limousin_axis(lat_start, lon_start, lat_end, lon_end)
 
-    if _is_north_axis(lat_start, lon_start, lat_end, lon_end):
-        for ville in AXE_N2:
-            if not any(v[0] == ville for v in villes_proches):
-                vlat, vlon = VILLES_JALONS[ville]
-                dist_seg = _distance_point_to_segment(
-                    vlat, vlon,
-                    lat_start, lon_start,
-                    lat_end, lon_end
-                )
-                if dist_seg <= RAYON_DETECTION_KM:
-                    dist_from_start = _haversine(lat_start, lon_start, vlat, vlon)
-                    villes_proches.append((ville, vlat, vlon, dist_from_start, dist_seg))
-                    print(f"      🛣️  N2 forcé : {ville} ({dist_seg:.0f}km du segment)")
-                else:
-                    print(f"      🛣️  N2 ignoré : {ville} ({dist_seg:.0f}km trop loin)")
+    if use_nord_ouest:
+        _appliquer_axe_force("NORD-OUEST", AXE_NORD_OUEST, villes_proches,
+                             lat_start, lon_start, lat_end, lon_end)
 
-    # 3. Tri par distance depuis le départ
-    villes_proches.sort(key=lambda x: x[3])
+    if use_vosges_ouest:
+        _appliquer_axe_force("VOSGES-OUEST", AXE_VOSGES_OUEST, villes_proches,
+                             lat_start, lon_start, lat_end, lon_end)
 
-    # 4. Conversion en strings "lat, lon"
+    if use_limousin:
+        _appliquer_axe_force("LIMOUSIN", AXE_LIMOUSIN, villes_proches,
+                             lat_start, lon_start, lat_end, lon_end)
+
+    # N12/N2 : seulement si aucun axe spécifique ne s'est déclenché
+    if not (use_nord_ouest or use_vosges_ouest or use_limousin):
+        if _is_east_west(lat_start, lon_start, lat_end, lon_end):
+            _appliquer_axe_force("N12", AXE_N12, villes_proches,
+                                 lat_start, lon_start, lat_end, lon_end)
+        if _is_north_axis(lat_start, lon_start, lat_end, lon_end):
+            _appliquer_axe_force("N2", AXE_N2, villes_proches,
+                                 lat_start, lon_start, lat_end, lon_end)
+
+    # 3. Anti-retour-en-arrière : retirer les waypoints au-delà de la destination
+    dist_total = _haversine(lat_start, lon_start, lat_end, lon_end)
+    villes_filtrees = []
+    for v in villes_proches:
+        ville, vlat, vlon, dist_start, dist_seg = v
+        dist_to_end = _haversine(vlat, vlon, lat_end, lon_end)
+        # Garde le waypoint seulement si la somme des deux distances ne dépasse pas
+        # significativement la distance totale (= il est bien "entre" départ et arrivée)
+        if dist_start + dist_to_end <= dist_total * 1.4:
+            villes_filtrees.append(v)
+        else:
+            print(f"      🚫 {ville} écarté (hors corridor : {dist_start:.0f}+{dist_to_end:.0f} > {dist_total*1.4:.0f})")
+
+    # 4. Tri par distance depuis le départ (ordre de parcours)
+    villes_filtrees.sort(key=lambda x: x[3])
+
+    # 5. Élagage : si trop de waypoints, garder ceux les plus proches du segment
+    if len(villes_filtrees) > MAX_WAYPOINTS:
+        # Conserver les MAX_WAYPOINTS villes les plus proches du segment, puis re-trier par ordre
+        villes_filtrees.sort(key=lambda x: x[4])
+        villes_filtrees = villes_filtrees[:MAX_WAYPOINTS]
+        villes_filtrees.sort(key=lambda x: x[3])
+        print(f"      ✂️  Élagage : limité à {MAX_WAYPOINTS} waypoints")
+
+    # 6. Conversion en strings "lat, lon"
     waypoints = []
-    for ville, vlat, vlon, dist_start, dist_seg in villes_proches:
+    for ville, vlat, vlon, dist_start, dist_seg in villes_filtrees:
         waypoints.append(f"{vlat}, {vlon}")
-        print(f"      📌 Jalon auto : {ville} ({dist_seg:.0f}km du trajet, {dist_start:.0f}km du départ)")
+        print(f"      📌 Jalon retenu : {ville} ({dist_seg:.0f}km du trajet, {dist_start:.0f}km du départ)")
 
     return waypoints
