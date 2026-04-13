@@ -217,6 +217,75 @@ def _is_n88_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
 
 
 # ==========================================
+# JALONS CONDITIONNELS
+# Certains jalons causent des détours hors de leur zone utile.
+# ==========================================
+def _jalon_autorise(ville, lon_start, lon_end, lat_start=None, lat_end=None) -> bool:
+    lon_min = min(lon_start, lon_end)
+    lon_max = max(lon_start, lon_end)
+
+    # Amiens/Albert/Rouen : inutiles si une extrémité est à l'ouest (lon < 0.0)
+    if ville in ("Amiens", "Albert", "Rouen"):
+        if lon_min < 0.0:
+            return False
+
+    # Saint-Quentin : utile pour les trajets Nord/Belgique ↔ Ouest/Centre.
+    # Inutile si les DEUX extrémités sont à l'ouest de lon 4.0 (trajet purement occidental)
+    # OU si le trajet est entièrement au sud de lat 50.2 sans passer par le nord-est.
+    if ville == "Saint-Quentin":
+        if lat_start is not None and lat_end is not None:
+            # Bloquer si aucune des deux extrémités n'est en zone nord-est (lon>4, lat>49.5)
+            neither_is_north_east = (
+                not (lon_start > 4.0 and lat_start > 49.5) and
+                not (lon_end   > 4.0 and lat_end   > 49.5)
+            )
+            if neither_is_north_east and lon_min < 0.0:
+                return False
+            if max(lat_start, lat_end) < 50.2 and lon_max < 4.0:
+                return False
+
+    # Dreux : inutile si départ à l'est (lon > 4.0) — crée un détour via Paris
+    if ville == "Dreux":
+        if lon_max > 4.0:
+            return False
+
+    return True
+
+
+def _is_lorraine_to_belgique(lat_start, lon_start, lat_end, lon_end) -> bool:
+    """
+    Détecte un trajet depuis Alsace/Lorraine (lon > 6.0) vers Belgique/Pays-Bas
+    (lat > 49.5, lon < 7.5). Force Nancy → A31 nord → Thionville → Belgique
+    au lieu de l'A4 payante.
+    """
+    def is_lorraine(lat, lon):
+        return lon >= 6.0 and 47.5 <= lat <= 49.5
+    def is_belgique(lat, lon):
+        return lat >= 49.5 and lon < 7.5
+    return ((is_lorraine(lat_start, lon_start) and is_belgique(lat_end, lon_end))
+            or (is_lorraine(lat_end, lon_end) and is_belgique(lat_start, lon_start)))
+
+
+def _is_idf_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
+    """
+    Détecte un trajet depuis IDF/Picardie/Nord (lon 1.5-5.0, lat 48-50.5)
+    vers l'Ouest (lon < -0.5). PTV prend l'A11 payante via Paris sans jalon.
+    Force le passage par Mayenne/Le Mans.
+    """
+    def is_idf_nord(lat, lon):
+        return 1.5 <= lon <= 5.0 and 48.0 <= lat <= 50.5
+    def is_ouest(lat, lon):
+        return lon < -0.5 and 47.0 <= lat <= 49.5
+    return ((is_idf_nord(lat_start, lon_start) and is_ouest(lat_end, lon_end))
+            or (is_idf_nord(lat_end, lon_end) and is_ouest(lat_start, lon_start)))
+
+
+# Axes pour les nouveaux détecteurs
+AXE_LORRAINE_BELGIQUE = ["Nancy"]
+AXE_IDF_OUEST         = ["Le Mans", "Mayenne"]
+
+
+# ==========================================
 # FONCTION PRINCIPALE
 # ==========================================
 def _appliquer_axe_force(nom_axe, liste_villes, villes_proches,
@@ -234,6 +303,9 @@ def _appliquer_axe_force(nom_axe, liste_villes, villes_proches,
             continue
         if ville not in VILLES_JALONS:
             print(f"      ⚠️  {nom_axe} : ville '{ville}' inconnue dans VILLES_JALONS")
+            continue
+        if not _jalon_autorise(ville, lon_start, lon_end, lat_start, lat_end):
+            print(f"      🚫 {nom_axe} bloqué (zone): {ville}")
             continue
         vlat, vlon = VILLES_JALONS[ville]
         # Garde-fou : la ville doit être dans le rectangle élargi départ↔arrivée
@@ -267,6 +339,9 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
     lat_max = max(lat_start, lat_end)
     marge = 0.5
     for ville, (vlat, vlon) in VILLES_JALONS.items():
+        # Filtre conditionnel géographique
+        if not _jalon_autorise(ville, lon_start, lon_end, lat_start, lat_end):
+            continue
         # Filtre rectangle : la ville doit être (à peu près) entre départ et arrivée
         if vlon < lon_min - marge or vlon > lon_max + marge:
             continue
@@ -303,10 +378,44 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
         _appliquer_axe_force("N88", AXE_N88, villes_proches,
                              lat_start, lon_start, lat_end, lon_end)
 
+    # Axe Lorraine → Belgique : Nancy pour forcer A31 nord au lieu de l'A4 payante
+    use_lorraine_belgique = _is_lorraine_to_belgique(lat_start, lon_start, lat_end, lon_end)
+    if use_lorraine_belgique:
+        # Rayon élargi à 70km : Nancy est un crochet volontaire sur cet axe
+        old_rayon = RAYON_AXE_FORCE_KM
+        import builtins
+        # On applique manuellement avec rayon 70
+        for ville in AXE_LORRAINE_BELGIQUE:
+            if any(v[0] == ville for v in villes_proches):
+                continue
+            if ville not in VILLES_JALONS:
+                continue
+            vlat, vlon = VILLES_JALONS[ville]
+            _lon_min = min(lon_start, lon_end); _lon_max = max(lon_start, lon_end)
+            _lat_min = min(lat_start, lat_end); _lat_max = max(lat_start, lat_end)
+            marge = 1.0
+            if vlon < _lon_min - marge or vlon > _lon_max + marge:
+                continue
+            if vlat < _lat_min - marge or vlat > _lat_max + marge:
+                continue
+            dist_s = _distance_point_to_segment(vlat, vlon, lat_start, lon_start, lat_end, lon_end)
+            if dist_s <= 70:
+                dist_fs = _haversine(lat_start, lon_start, vlat, vlon)
+                villes_proches.append((ville, vlat, vlon, dist_fs, dist_s))
+                print(f"      🛣️  LORRAINE-BELGIQUE forcé : {ville} ({dist_s:.0f}km du segment)")
+            else:
+                print(f"      🛣️  LORRAINE-BELGIQUE ignoré : {ville} ({dist_s:.0f}km trop loin)")
+
+    # Axe IDF/Nord → Ouest : Mayenne/Le Mans pour éviter l'A11 payante via Paris
+    use_idf_ouest = _is_idf_to_ouest(lat_start, lon_start, lat_end, lon_end)
+    if use_idf_ouest:
+        _appliquer_axe_force("IDF-OUEST", AXE_IDF_OUEST, villes_proches,
+                             lat_start, lon_start, lat_end, lon_end)
+
     # N12/N2 : seulement si aucun axe spécifique ne s'est déclenché
     # ET si aucune extrémité n'est trop au nord (lat>49) ou trop à l'ouest (lon<-0.3),
     # car dans ces cas N12/N2 ramènent des waypoints en arrière du trajet réel
-    if not (use_nord_ouest or use_vosges_ouest or use_limousin or use_n88):
+    if not (use_nord_ouest or use_vosges_ouest or use_limousin or use_n88 or use_lorraine_belgique or use_idf_ouest):
         lat_max_traj = max(lat_start, lat_end)
         lon_min_traj = min(lon_start, lon_end)
         n12_n2_safe = (lat_max_traj < 49.0) and (lon_min_traj > -0.3)
