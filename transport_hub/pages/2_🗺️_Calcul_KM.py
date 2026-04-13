@@ -22,47 +22,57 @@ if uploaded_file:
     st.session_state["uploaded_bytes"] = uploaded_file.read()
     uploaded_file.seek(0)
 
-# === Lancement du calcul dans un thread ===
+# === Lancement ===
 if st.session_state.get("uploaded_bytes") and st.button("🚀 Lancer le calcul", type="primary"):
-    for key in ["km_result_bytes", "km_result_name", "km_stats", "calcul_result", "calcul_error"]:
+    for key in ["km_result_bytes", "km_result_name", "km_stats"]:
         st.session_state.pop(key, None)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp.write(st.session_state["uploaded_bytes"])
         tmp_path = tmp.name
 
-    st.session_state["calcul_en_cours"] = True
-    st.session_state["calcul_progress"] = (0, 1, "Démarrage...")
+    # Objet partagé mutable — le thread écrit dedans, Streamlit lit dedans
+    shared = {
+        "en_cours": True,
+        "progress": (0, 1, "Démarrage..."),
+        "result": None,
+        "error": None,
+    }
+    st.session_state["shared"] = shared
     st.session_state["tmp_path"] = tmp_path
-    st.session_state["calcul_peage"] = calculer_peage
-    st.session_state["calcul_super_pref"] = super_pref
 
-    def run_in_thread():
+    def run_in_thread(shared, tmp_path, calculer_peage, super_pref):
         try:
             from tools.km_calcul.run_km import run_calcul_km
 
             def on_progress(current, total, message):
-                st.session_state["calcul_progress"] = (current, total, message)
+                shared["progress"] = (current, total, message)
 
             result = run_calcul_km(
-                st.session_state["tmp_path"],
-                st.session_state["calcul_peage"],
-                super_pref=st.session_state["calcul_super_pref"],
+                tmp_path,
+                calculer_peage,
+                super_pref=super_pref,
                 progress_callback=on_progress,
             )
-            st.session_state["calcul_result"] = result
-        except Exception as e:
-            st.session_state["calcul_error"] = traceback.format_exc()
+            shared["result"] = result
+        except Exception:
+            shared["error"] = traceback.format_exc()
         finally:
-            st.session_state["calcul_en_cours"] = False
+            shared["en_cours"] = False
 
-    t = threading.Thread(target=run_in_thread, daemon=True)
+    t = threading.Thread(
+        target=run_in_thread,
+        args=(shared, tmp_path, calculer_peage, super_pref),
+        daemon=True,
+    )
     t.start()
     st.rerun()
 
 # === Affichage pendant le calcul ===
-if st.session_state.get("calcul_en_cours"):
-    current, total, message = st.session_state.get("calcul_progress", (0, 1, "..."))
+shared = st.session_state.get("shared")
+
+if shared and shared["en_cours"]:
+    current, total, message = shared["progress"]
     pct = current / total if total > 0 else 0
 
     st.info("⚙️ Calcul en cours... Ne fermez pas cette page.")
@@ -70,17 +80,18 @@ if st.session_state.get("calcul_en_cours"):
     st.markdown(f"**⚙️ Progression : {current}/{total}** — {message}")
 
     time.sleep(1)
-    st.rerun()  # ← maintient le WebSocket vivant et rafraîchit la progression
+    st.rerun()
 
-# === Post-traitement quand le thread est terminé ===
-if not st.session_state.get("calcul_en_cours") and "calcul_result" in st.session_state:
-    result   = st.session_state.pop("calcul_result")
+# === Post-traitement quand terminé ===
+elif shared and not shared["en_cours"] and (shared["result"] is not None or shared["error"]):
     tmp_path = st.session_state.pop("tmp_path", None)
+    st.session_state.pop("shared", None)
 
-    if st.session_state.get("calcul_error"):
-        st.error("❌ Une erreur critique est survenue durant le traitement.")
-        st.code(st.session_state.pop("calcul_error"))
-    elif result and result["success"]:
+    if shared["error"]:
+        st.error("❌ Une erreur critique est survenue.")
+        st.code(shared["error"])
+    elif shared["result"] and shared["result"]["success"]:
+        result = shared["result"]
         try:
             with open(result["output_path"], "rb") as f:
                 result_bytes = f.read()
@@ -94,9 +105,12 @@ if not st.session_state.get("calcul_en_cours") and "calcul_result" in st.session
 
                 if os.path.exists(result["output_path"]):
                     os.unlink(result["output_path"])
+
+                st.rerun()
         except Exception as e:
             st.error(f"⚠️ Erreur lecture résultat : {e}")
     else:
+        result = shared["result"]
         st.error(f"⚠️ Le calcul a été interrompu : {result.get('error') if result else 'inconnu'}")
         if result:
             st.code(result.get("error", ""))
