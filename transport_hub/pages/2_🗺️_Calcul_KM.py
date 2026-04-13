@@ -39,6 +39,7 @@ if st.session_state.get("uploaded_bytes") and st.button("🚀 Lancer le calcul",
                 pct = current / total if total > 0 else 0
                 progress_bar.progress(min(pct, 1.0))
                 status_text.markdown(f"**⚙️ Progression : {current}/{total}** — {message}")
+                time.sleep(0.05)
  
             result = run_calcul_km(
                 tmp_path,
