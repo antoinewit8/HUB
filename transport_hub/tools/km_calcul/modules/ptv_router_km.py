@@ -3,8 +3,10 @@ import time
 import os
 import re
 import json
+import streamlit as st
 from dotenv import load_dotenv
 from .route_optimizer import get_super_pref_logic
+
 
 load_dotenv()
 
@@ -253,6 +255,12 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
     query_params = [
         ("profile", VEHICLE_PROFILE),
         ("results", ",".join(results_values)),
+        # Profil camion 44T citerne/plateau — 2 essieux tracteur + 3 remorque
+        ("options[vehicleWeight]", "44000"),
+        ("options[numberOfAxles]", "5"),
+        ("options[height]", "400"),
+        ("options[length]", "1650"),
+        ("options[emissionStandard]", "EURO_6"),
     ]
     if calculer_peage:
         query_params.append(("options[currency]", "EUR"))
