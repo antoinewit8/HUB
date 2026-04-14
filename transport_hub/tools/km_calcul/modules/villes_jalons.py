@@ -246,19 +246,31 @@ def _is_massif_central_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
 
 def _is_ouest_to_nord_est(lat_start, lon_start, lat_end, lon_end) -> bool:
     """
-    Détecte un trajet Grand Ouest (lon < 0) ↔ Nord-Est/Ardennes (lat >= 49.5, lon >= 3.0).
+    Détecte un trajet Grand Ouest SUD (lon < -0.5, lat < 49.0) → Nord-Est/Ardennes.
     Force les axes N154/N31 gratuits (Évreux, Beauvais, Compiègne) pour éviter
     que PTV choisisse les autoroutes payantes autour de Paris (A13/A14/A86).
-    Couvre DOMFRONT, BOUVRON, CRAON, RETIERS, VITRÉ ↔ PETIT FAYT, ROUVROY, CUINCY...
+    Couvre DOMFRONT, BOUVRON, CRAON, RETIERS, VITRÉ → PETIT FAYT, ROUVROY, CUINCY...
+    Sens unique : départ au Sud-Ouest seulement (pas les routes Nord-Est → Ouest).
     """
-    def is_ouest(lat, lon):
-        return lon < 0.0 and 47.0 <= lat <= 50.5
+    def is_ouest_sud(lat, lon):
+        # Sud-Ouest : Bretagne, Pays de la Loire, Normandie sud
+        # lon < -0.5 pour exclure les villes proches de Paris (Chartres, Évreux...)
+        # lat < 49.0 pour exclure les villes normandes nord (ISIGNY, Cherbourg...)
+        return lon < -0.5 and 47.0 <= lat <= 49.0
 
     def is_nord_est(lat, lon):
         return lat >= 49.5 and lon >= 3.0
 
-    if not ((is_ouest(lat_start, lon_start) and is_nord_est(lat_end, lon_end))
-            or (is_ouest(lat_end, lon_end) and is_nord_est(lat_start, lon_start))):
+    # Sens unique strict : départ au Sud-Ouest ET arrivée au Nord-Est uniquement.
+    # On n'active pas l'axe dans le sens inverse (Nord-Est → Ouest) car les jalons
+    # Évreux/Beauvais font un détour inutile pour ces routes.
+    depart_ouest = is_ouest_sud(lat_start, lon_start) and is_nord_est(lat_end, lon_end)
+    depart_nord_est = is_nord_est(lat_start, lon_start) and is_ouest_sud(lat_end, lon_end)
+    if not (depart_ouest or depart_nord_est):
+        return False
+    # Garde-fou supplémentaire : si le départ est au Nord-Est (lat>49.5),
+    # on n'active pas l'axe car les jalons seraient en dessous du trajet
+    if depart_nord_est:
         return False
     return _haversine(lat_start, lon_start, lat_end, lon_end) >= 300
 
