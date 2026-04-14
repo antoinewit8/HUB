@@ -36,11 +36,16 @@ VILLES_JALONS = {
     "Laon":             (49.5780,  3.6450),   # N2 contournement est
     "Soissons":         (49.3700,  3.3450),   # N2 contournement sud
 
+    # Axe Vosges/Lorraine → Sud-Ouest (A6/Saône puis N des Massifs)
+    "Chalon-sur-Saône": (46.7810,  4.8520),   # A6/N6 carrefour Bourgogne→Sud
+    "Aurillac":         (44.9280,  2.4400),   # N122 Cantal→Quercy axe gratuit
+
     # Normandie → Nord-Est (axes gratuits N154/N31 pour éviter autoroutes Paris)
     "Évreux":           (49.0270,  1.1510),   # N154 axe gratuit nord-ouest Paris
     "Beauvais":         (49.4300,  2.0820),   # N31 axe gratuit
     "Compiègne":        (49.4150,  2.8240),   # N31/A1 axe gratuit
     "Chartres":         (48.4480,  1.4890),   # N10/N23 anti-détour Paris pour Vosges→Ouest
+    "Nogent-le-Rotrou": (48.3220,  0.8260),   # N23 entre Chartres et Le Mans, évite détour Paris
 
     # Ardennes / Avesnois
     "Vouziers":         (49.3850,  4.6850),   # D946 contournement
@@ -106,7 +111,8 @@ AXE_N2  = ["Soissons", "Laon", "Cambrai"]
 
 # Nouveaux axes : ordre = sens de parcours géographique
 AXE_NORD_OUEST    = ["Saint-Quentin", "Amiens", "Rouen", "Alençon", "Mayenne"]
-AXE_VOSGES_OUEST  = ["Vesoul", "Langres", "Troyes", "Orléans", "Chartres", "Le Mans"]
+AXE_VOSGES_OUEST  = ["Vesoul", "Langres", "Troyes", "Orléans", "Chartres", "Nogent-le-Rotrou", "Le Mans"]
+AXE_VOSGES_SUD_OUEST = ["Chalon-sur-Saône", "Issoire", "Aurillac"]
 AXE_LIMOUSIN      = ["Tulle", "Limoges", "La Souterraine", "Poitiers"]
 AXE_N88           = ["Puy-en-Velay", "Mende", "Rodez", "Cahors"]
 
@@ -178,16 +184,18 @@ def _is_north_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
 def _is_nord_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
     """
     Détecte un trajet Nord-Est (Hauts-de-France/Ardennes) ← Ouest (Bretagne/Normandie).
-    Sens unique : départ à l'Ouest uniquement, pour éviter que les jalons
-    Alençon/Mayenne créent un détour sud sur les routes Nord-Est → Ouest.
+    Sens unique : départ à l'Ouest uniquement.
+    Exclut les départs en Normandie nord (lat>48.5, lon>-1.5) : ces villes sont trop
+    proches des jalons Évreux/Beauvais et créent des détours inutiles.
     """
     def is_nord_est(lat, lon):
         return lat >= 49.0 and lon >= 3.5
 
     def is_ouest(lat, lon):
-        return lon <= -0.5 and 47.0 <= lat <= 49.5
+        if not (lon <= -0.5 and 47.0 <= lat <= 49.5): return False
+        if lat > 48.5 and lon > -1.5: return False  # exclure Normandie nord
+        return True
 
-    # Sens unique : départ Ouest → arrivée Nord-Est seulement
     if not (is_ouest(lat_start, lon_start) and is_nord_est(lat_end, lon_end)):
         return False
     return _haversine(lat_start, lon_start, lat_end, lon_end) >= 350
@@ -298,6 +306,25 @@ def _is_ardennes_avesnois(lat_start, lon_start, lat_end, lon_end) -> bool:
     return _haversine(lat_start, lon_start, lat_end, lon_end) >= 80
 
 
+
+def _is_vosges_to_sud_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
+    """
+    Détecte un trajet Vosges/Lorraine est (lon >= 6.3) → Sud-Ouest (Massif Central, Espagne).
+    Force l'axe A6/Saône→A75/Issoire→N122/Aurillac au lieu de l'A6→Lyon→A7→A9 payante.
+    Couvre XERTIGNY, CORCIEUX, SARREBOURG → MONTAUBAN, MOLLERUSSA, BORDEAUX...
+    """
+    def is_vosges_est(lat, lon):
+        return lon >= 6.3 and 47.0 <= lat <= 49.0
+
+    def is_sud_ouest(lat, lon):
+        return 41.0 <= lat <= 46.5 and lon <= 3.5
+
+    if not ((is_vosges_est(lat_start, lon_start) and is_sud_ouest(lat_end, lon_end))
+            or (is_vosges_est(lat_end, lon_end) and is_sud_ouest(lat_start, lon_start))):
+        return False
+    return _haversine(lat_start, lon_start, lat_end, lon_end) >= 400
+
+
 def _is_n88_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
     """
     Détecte un trajet Loire/Auvergne (Saint-Étienne, Roanne) ↔ Sud-Ouest (Tarn-et-Garonne, Lot).
@@ -353,7 +380,7 @@ def _is_lorraine_to_belgique(lat_start, lon_start, lat_end, lon_end) -> bool:
         return lon >= 6.0 and 47.5 <= lat <= 49.5
 
     def is_belgique(lat, lon):
-        return lat >= 49.5 and lon < 7.5
+        return lat >= 49.5 and lon >= 5.0  # lon>=5.0 exclut PETIT FAYT(3.78) et ROUVROY(4.37)
 
     return ((is_lorraine(lat_start, lon_start) and is_belgique(lat_end, lon_end))
             or (is_lorraine(lat_end, lon_end) and is_belgique(lat_start, lon_start)))
@@ -437,6 +464,7 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
     use_massif_central      = _is_massif_central_to_ouest(lat_start, lon_start, lat_end, lon_end)
     use_ouest_nord_est      = _is_ouest_to_nord_est(lat_start, lon_start, lat_end, lon_end)
     use_ardennes            = _is_ardennes_avesnois(lat_start, lon_start, lat_end, lon_end)
+    use_vosges_sud_ouest    = _is_vosges_to_sud_ouest(lat_start, lon_start, lat_end, lon_end)
     use_n88                 = _is_n88_axis(lat_start, lon_start, lat_end, lon_end)
     use_lorraine_belgique   = _is_lorraine_to_belgique(lat_start, lon_start, lat_end, lon_end)
     use_idf_ouest           = _is_idf_to_ouest(lat_start, lon_start, lat_end, lon_end)
@@ -494,6 +522,10 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
         _appliquer_axe_force("VOSGES-OUEST", AXE_VOSGES_OUEST, villes_proches,
                              lat_start, lon_start, lat_end, lon_end)
 
+    if use_vosges_sud_ouest:
+        _appliquer_axe_force("VOSGES-SUD-OUEST", AXE_VOSGES_SUD_OUEST, villes_proches,
+                             lat_start, lon_start, lat_end, lon_end, rayon=60)
+
     if use_limousin and not use_massif_central:
         # LIMOUSIN désactivé si MASSIF_CENTRAL actif : évite de forcer l'A20/Limoges
         # quand on veut l'A75 (Issoire) pour les routes Aveyron/Cantal → Grand Ouest
@@ -526,7 +558,7 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
                              lat_start, lon_start, lat_end, lon_end)
 
     # N12/N2 : seulement si aucun axe spécifique ne s'est déclenché
-    if not (use_nord_ouest or use_vosges_ouest or use_limousin or use_massif_central
+    if not (use_nord_ouest or use_vosges_ouest or use_vosges_sud_ouest or use_limousin or use_massif_central
             or use_ouest_nord_est or use_ardennes or use_n88 or use_lorraine_belgique or use_idf_ouest):
         lat_max_traj = max(lat_start, lat_end)
         lon_min_traj = min(lon_start, lon_end)
