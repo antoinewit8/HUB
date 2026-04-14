@@ -36,6 +36,12 @@ VILLES_JALONS = {
     "Laon":             (49.5780,  3.6450),   # N2 contournement est
     "Soissons":         (49.3700,  3.3450),   # N2 contournement sud
 
+    # Normandie → Nord-Est (axes gratuits N154/N31 pour éviter autoroutes Paris)
+    "Évreux":           (49.0270,  1.1510),   # N154 axe gratuit nord-ouest Paris
+    "Beauvais":         (49.4300,  2.0820),   # N31 axe gratuit
+    "Compiègne":        (49.4150,  2.8240),   # N31/A1 axe gratuit
+    "Chartres":         (48.4480,  1.4890),   # N10/N23 anti-détour Paris pour Vosges→Ouest
+
     # Ardennes / Avesnois
     "Vouziers":         (49.3850,  4.6850),   # D946 contournement
     "Hirson":           (49.9230,  4.0830),   # N2/D1029 - évite A26 pour Ardennes
@@ -100,7 +106,7 @@ AXE_N2  = ["Soissons", "Laon", "Cambrai"]
 
 # Nouveaux axes : ordre = sens de parcours géographique
 AXE_NORD_OUEST    = ["Saint-Quentin", "Amiens", "Rouen", "Alençon", "Mayenne"]
-AXE_VOSGES_OUEST  = ["Vesoul", "Langres", "Troyes", "Orléans", "Le Mans"]
+AXE_VOSGES_OUEST  = ["Vesoul", "Langres", "Troyes", "Orléans", "Chartres", "Le Mans"]
 AXE_LIMOUSIN      = ["Tulle", "Limoges", "La Souterraine", "Poitiers"]
 AXE_N88           = ["Puy-en-Velay", "Mende", "Rodez", "Cahors"]
 
@@ -109,6 +115,9 @@ AXE_MASSIF_CENTRAL_OUEST = ["Issoire", "Tours", "Angers"]
 
 # Axe Ardennes/Avesnois : force les routes locales pour les Ardennes et le Hainaut
 AXE_ARDENNES_AVESNOIS = ["Hirson", "Avesnes-sur-Helpe", "Maubeuge"]
+
+# Axe Ouest (Bretagne/Normandie) → Nord-Est (Ardennes/Hainaut) : force N154/N31 gratuits
+AXE_OUEST_NORD_EST = ["Évreux", "Beauvais", "Compiègne"]
 
 RAYON_DETECTION_KM = 10        # détection auto par projection : strict pour éviter les faux positifs
 RAYON_AXE_FORCE_KM = 45        # axes forcés : large pour couvrir les corridors qui font détour
@@ -185,13 +194,13 @@ def _is_nord_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
 def _is_vosges_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
     """
     Détecte un trajet Vosges/Est (longitude > 5.8) ↔ Ouest (longitude < -0.5).
-    Couvre CORCIEUX, XERTIGNY, CLERVAL ↔ MAYENNE, BOUVRON, PONTIVY...
+    Couvre CORCIEUX, XERTIGNY, CLERVAL ↔ MAYENNE, BOUVRON, PONTIVY, ISIGNY...
     """
     def is_est(lat, lon):
         return lon >= 5.8 and 47.0 <= lat <= 49.0
 
     def is_ouest(lat, lon):
-        return lon <= -0.5 and 47.0 <= lat <= 49.0
+        return lon <= -0.5 and 47.0 <= lat <= 49.5
 
     if not ((is_est(lat_start, lon_start) and is_ouest(lat_end, lon_end))
             or (is_est(lat_end, lon_end) and is_ouest(lat_start, lon_start))):
@@ -232,6 +241,26 @@ def _is_massif_central_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
             or (is_massif_est(lat_end, lon_end) and is_grand_ouest(lat_start, lon_start))):
         return False
     return _haversine(lat_start, lon_start, lat_end, lon_end) >= 350
+
+
+
+def _is_ouest_to_nord_est(lat_start, lon_start, lat_end, lon_end) -> bool:
+    """
+    Détecte un trajet Grand Ouest (lon < 0) ↔ Nord-Est/Ardennes (lat >= 49.5, lon >= 3.0).
+    Force les axes N154/N31 gratuits (Évreux, Beauvais, Compiègne) pour éviter
+    que PTV choisisse les autoroutes payantes autour de Paris (A13/A14/A86).
+    Couvre DOMFRONT, BOUVRON, CRAON, RETIERS, VITRÉ ↔ PETIT FAYT, ROUVROY, CUINCY...
+    """
+    def is_ouest(lat, lon):
+        return lon < 0.0 and 47.0 <= lat <= 50.5
+
+    def is_nord_est(lat, lon):
+        return lat >= 49.5 and lon >= 3.0
+
+    if not ((is_ouest(lat_start, lon_start) and is_nord_est(lat_end, lon_end))
+            or (is_ouest(lat_end, lon_end) and is_nord_est(lat_start, lon_start))):
+        return False
+    return _haversine(lat_start, lon_start, lat_end, lon_end) >= 300
 
 
 def _is_ardennes_avesnois(lat_start, lon_start, lat_end, lon_end) -> bool:
@@ -391,6 +420,7 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
     use_vosges_ouest        = _is_vosges_to_ouest(lat_start, lon_start, lat_end, lon_end)
     use_limousin            = _is_limousin_axis(lat_start, lon_start, lat_end, lon_end)
     use_massif_central      = _is_massif_central_to_ouest(lat_start, lon_start, lat_end, lon_end)
+    use_ouest_nord_est      = _is_ouest_to_nord_est(lat_start, lon_start, lat_end, lon_end)
     use_ardennes            = _is_ardennes_avesnois(lat_start, lon_start, lat_end, lon_end)
     use_n88                 = _is_n88_axis(lat_start, lon_start, lat_end, lon_end)
     use_lorraine_belgique   = _is_lorraine_to_belgique(lat_start, lon_start, lat_end, lon_end)
@@ -448,6 +478,10 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
         _appliquer_axe_force("MASSIF-CENTRAL-OUEST", AXE_MASSIF_CENTRAL_OUEST, villes_proches,
                              lat_start, lon_start, lat_end, lon_end)
 
+    if use_ouest_nord_est:
+        _appliquer_axe_force("OUEST-NORD-EST", AXE_OUEST_NORD_EST, villes_proches,
+                             lat_start, lon_start, lat_end, lon_end)
+
     if use_ardennes:
         _appliquer_axe_force("ARDENNES-AVESNOIS", AXE_ARDENNES_AVESNOIS, villes_proches,
                              lat_start, lon_start, lat_end, lon_end, rayon=30)
@@ -467,7 +501,7 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
 
     # N12/N2 : seulement si aucun axe spécifique ne s'est déclenché
     if not (use_nord_ouest or use_vosges_ouest or use_limousin or use_massif_central
-            or use_ardennes or use_n88 or use_lorraine_belgique or use_idf_ouest):
+            or use_ouest_nord_est or use_ardennes or use_n88 or use_lorraine_belgique or use_idf_ouest):
         lat_max_traj = max(lat_start, lat_end)
         lon_min_traj = min(lon_start, lon_end)
         n12_n2_safe = (lat_max_traj < 49.0) and (lon_min_traj > -0.3)
