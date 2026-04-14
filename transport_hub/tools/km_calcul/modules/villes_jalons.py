@@ -177,7 +177,9 @@ def _is_north_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
 
 def _is_nord_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
     """
-    Détecte un trajet Nord (Hauts-de-France/Ardennes/Belgique est) ↔ Ouest (Bretagne/Normandie).
+    Détecte un trajet Nord-Est (Hauts-de-France/Ardennes) ← Ouest (Bretagne/Normandie).
+    Sens unique : départ à l'Ouest uniquement, pour éviter que les jalons
+    Alençon/Mayenne créent un détour sud sur les routes Nord-Est → Ouest.
     """
     def is_nord_est(lat, lon):
         return lat >= 49.0 and lon >= 3.5
@@ -185,8 +187,8 @@ def _is_nord_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
     def is_ouest(lat, lon):
         return lon <= -0.5 and 47.0 <= lat <= 49.5
 
-    if not ((is_nord_est(lat_start, lon_start) and is_ouest(lat_end, lon_end))
-            or (is_nord_est(lat_end, lon_end) and is_ouest(lat_start, lon_start))):
+    # Sens unique : départ Ouest → arrivée Nord-Est seulement
+    if not (is_ouest(lat_start, lon_start) and is_nord_est(lat_end, lon_end)):
         return False
     return _haversine(lat_start, lon_start, lat_end, lon_end) >= 350
 
@@ -361,15 +363,16 @@ def _is_idf_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
     """
     Détecte un trajet depuis IDF/Picardie/Nord (lon 1.5-5.0, lat 48-50.5)
     vers l'Ouest (lon < -0.5). Force le passage par Mayenne/Le Mans.
+    Sens unique : départ IDF/Nord → arrivée Ouest seulement.
     """
     def is_idf_nord(lat, lon):
-        return 1.5 <= lon <= 5.0 and 48.0 <= lat <= 50.5
+        return 1.5 <= lon <= 5.0 and 48.0 <= lat <= 49.5  # lat<49.5 exclut Ardennes/Hainaut
 
     def is_ouest(lat, lon):
         return lon < -0.5 and 47.0 <= lat <= 49.5
 
-    return ((is_idf_nord(lat_start, lon_start) and is_ouest(lat_end, lon_end))
-            or (is_idf_nord(lat_end, lon_end) and is_ouest(lat_start, lon_start)))
+    # Sens unique : départ IDF/Nord → Ouest (pas l'inverse)
+    return is_idf_nord(lat_start, lon_start) and is_ouest(lat_end, lon_end)
 
 
 # Axes pour les nouveaux détecteurs
@@ -439,11 +442,22 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
     use_idf_ouest           = _is_idf_to_ouest(lat_start, lon_start, lat_end, lon_end)
 
     # Jalons exclus de la detection auto selon le contexte.
-    # Si l'axe MASSIF_CENTRAL est actif, les jalons de l'A20/Limousin sont contre-productifs :
-    # leur presence incite PTV a rester sur l'A20 au lieu de monter par l'A75 (Issoire->Tours).
     JALONS_EXCLUS_AUTO = set()
+
+    # Si MASSIF_CENTRAL actif : exclure jalons A20/Limousin (incitent PTV à rester sur A20)
     if use_massif_central:
         JALONS_EXCLUS_AUTO.update({"Tulle", "Limoges", "Bellac", "La Souterraine", "Poitiers", "Niort"})
+
+    # Si départ en zone Nord-Est (Ardennes/Hainaut, lat>=49.5, lon>=3.0) et arrivée à l'Ouest :
+    # exclure les jalons de l'axe Ouest (Évreux, Beauvais, Compiègne, Alençon, Chartres...)
+    # car ils sont géographiquement sur le segment direct mais créent un détour sud pour PTV.
+    def _is_nord_est_pt(lat, lon): return lat >= 49.5 and lon >= 3.0
+    def _is_ouest_pt(lat, lon): return lon < -0.5 and 47.0 <= lat <= 49.5
+    if ((_is_nord_est_pt(lat_start, lon_start) and _is_ouest_pt(lat_end, lon_end))
+            or (_is_nord_est_pt(lat_end, lon_end) and _is_ouest_pt(lat_start, lon_start))):
+        JALONS_EXCLUS_AUTO.update({"Évreux", "Beauvais", "Compiègne", "Chartres", "Alençon",
+                                    "Argentan", "Dreux", "Laval", "Le Mans", "Mayenne",
+                                    "Châteaubriant", "Angers", "Tours"})
 
     # 2. Detection auto par proximite au segment direct (rayon strict 10 km)
     lon_min = min(lon_start, lon_end)
