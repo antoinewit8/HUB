@@ -460,7 +460,7 @@ st.markdown('<div class="cb-divider"></div>', unsafe_allow_html=True)
 # ── Modules ───────────────────────────────────────────────────
 st.markdown('<div class="cb-section-title"><span class="dot"></span> Modules</div>', unsafe_allow_html=True)
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 
 modules = [
     ("🚛", "TX-FLEX",        "Analyse de flotte et performance transport",   "pages/1_🚛_Analyse_TX_FLEX.py"),
