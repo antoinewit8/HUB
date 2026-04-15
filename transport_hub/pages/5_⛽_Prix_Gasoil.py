@@ -125,14 +125,11 @@ st.markdown("""
 
 # ── Chargement des données ────────────────────────────────────
 from tools.fuel_scraper import get_all_prices, get_tarif_en_vigueur
-from tools.fuel_avg_scraper import get_monthly_averages, get_daily_prices
+from tools.fuel_avg_scraper import get_monthly_averages, get_daily_prices, get_weekly_prices
 
 with st.spinner("🔄 Récupération des prix officiels..."):
-    # Tarif en vigueur
-    tarif = get_tarif_en_vigueur()
-
-    # Historique
-    df = get_all_prices()
+    tarif  = get_tarif_en_vigueur()
+    df     = get_all_prices()
 
 # ── Affichage tarif en vigueur ────────────────────────────────
 if "prices" in tarif and tarif["prices"]:
@@ -160,8 +157,72 @@ else:
 st.markdown("<br>", unsafe_allow_html=True)
 
 if not df.empty:
-    tab_daily, tab_monthly, tab_statbel_daily = st.tabs(["🕒 Suivi Quotidien", "📊 Moyennes Mensuelles", "📈 Statbel Journalier"])
+    tab_week, tab_daily, tab_monthly, tab_statbel_daily = st.tabs([
+        "📅 Cette semaine", "🕒 Historique mensuel", "📊 Moyennes be.STAT", "📈 Journalier Statbel"
+    ])
 
+    # ── Onglet Cette semaine ──────────────────────────────────
+    with tab_week:
+        with st.spinner("🔄 Chargement prix hebdomadaires..."):
+            df_week = get_weekly_prices()
+
+        if not df_week.empty:
+            last = df_week.iloc[-1]
+            prev = df_week.iloc[-2] if len(df_week) >= 2 else last
+            diff = last["diesel_routier"] - prev["diesel_routier"]
+
+            trend_icon  = "📈" if diff > 0.001 else ("📉" if diff < -0.001 else "➡️")
+            trend_class = "trend-up" if diff > 0.001 else ("trend-down" if diff < -0.001 else "trend-flat")
+
+            st.markdown(f"""
+            <div class="price-card" style="max-width:340px; margin:1.5rem auto 2rem auto;">
+                <div class="label">Diesel Routier — semaine du {last['date'].strftime('%d/%m/%Y')}</div>
+                <div class="price">{last['diesel_routier']:.4f} €</div>
+                <div class="unit">€ / litre (TTC)</div>
+                <div class="{trend_class}" style="margin-top:0.5rem; font-size:1rem;">
+                    {trend_icon} {diff:+.4f} vs semaine précédente
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+            # Graphique 3 derniers mois
+            df_3m = df_week[df_week["date"] >= pd.Timestamp.now() - pd.DateOffset(months=3)].copy()
+            if not df_3m.empty:
+                fig_w = go.Figure()
+                fig_w.add_trace(go.Scatter(
+                    x=df_3m["date"], y=df_3m["diesel_routier"],
+                    mode="lines+markers",
+                    line=dict(color="#4A90D9", width=2),
+                    fill="tozeroy", fillcolor="rgba(74,144,217,0.08)",
+                    hovertemplate="%{x|%d/%m/%Y} — %{y:.4f} €/L<extra></extra>",
+                ))
+                fig_w.add_hline(
+                    y=df_3m["diesel_routier"].mean(),
+                    line_dash="dash", line_color="rgba(255,255,255,0.3)",
+                    annotation_text=f"Moy. 3 mois: {df_3m['diesel_routier'].mean():.4f}€",
+                    annotation_font_color="rgba(255,255,255,0.6)",
+                )
+                fig_w.update_layout(
+                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                    font=dict(color="#C0CDE0"),
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.05)", title=""),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.05)", title="€/L TTC", tickformat=".4f"),
+                    margin=dict(l=60, r=20, t=20, b=40), height=350,
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig_w, use_container_width=True)
+
+            # Tableau 8 dernières semaines
+            with st.expander("📋 8 dernières semaines"):
+                df_disp = df_week.tail(8).copy()
+                df_disp["date"] = df_disp["date"].dt.strftime("%d/%m/%Y")
+                df_disp.columns = ["Semaine", "€/L (TTC)"]
+                st.dataframe(df_disp.sort_values("Semaine", ascending=False),
+                             use_container_width=True, hide_index=True)
+        else:
+            st.warning("⚠️ Prix hebdomadaires non disponibles pour le moment.")
+            st.info("💡 Source : GlobalPetrolPrices.com — mise à jour chaque lundi.")
+
+    # ── Onglet Historique mensuel ─────────────────────────────
     with tab_daily:
         # ── Filtre type de carburant ──
         fuel_types = df["type"].unique().tolist()
