@@ -97,6 +97,100 @@ ZONE_CORRECTIONS = {
     "1000, Luxembourg": "Luxembourg, 1000, Luxembourg",
     "15000, Bulgaria": "Sofia, 1528, Bulgaria",
 }
+# Chefs-lieux belges par préfixe 2 chiffres du CP
+# Utilisé automatiquement quand destination = CP seul, sans ville
+BE_CHEFS_LIEUX = {
+    "10": ("Bruxelles",    "1000"),
+    "11": ("Bruxelles",    "1080"),
+    "12": ("Bruxelles",    "1200"),
+    "13": ("Wavre",        "1300"),
+    "14": ("Nivelles",     "1400"),
+    "15": ("Ottignies",    "1340"),
+    "16": ("Rixensart",    "1330"),
+    "17": ("Hal",          "1700"),
+    "18": ("Vilvoorde",    "1800"),
+    "19": ("Zaventem",     "1930"),
+    "20": ("Antwerpen",    "2000"),
+    "21": ("Antwerpen",    "2100"),
+    "22": ("Antwerpen",    "2200"),
+    "23": ("Turnhout",     "2300"),
+    "24": ("Herentals",    "2200"),
+    "25": ("Lier",         "2500"),
+    "26": ("Mechelen",     "2600"),
+    "27": ("Mechelen",     "2800"),
+    "28": ("Mechelen",     "2800"),
+    "29": ("Schoten",      "2900"),
+    "30": ("Leuven",       "3001"),
+    "31": ("Leuven",       "3010"),
+    "32": ("Aarschot",     "3200"),
+    "33": ("Tienen",       "3300"),
+    "34": ("Diest",        "3290"),
+    "35": ("Hasselt",      "3500"),
+    "36": ("Genk",         "3600"),
+    "37": ("Tongeren",     "3700"),
+    "38": ("Sint-Truiden", "3800"),
+    "39": ("Overpelt",     "3900"),
+    "40": ("Liège",        "4000"),
+    "41": ("Liège",        "4100"),
+    "42": ("Liège",        "4020"),
+    "43": ("Liège",        "4300"),
+    "44": ("Waremme",      "4300"),
+    "45": ("Huy",          "4500"),
+    "46": ("Nandrin",      "4550"),
+    "47": ("Eupen",        "4700"),
+    "48": ("Malmedy",      "4960"),
+    "49": ("Stavelot",     "4970"),
+    "50": ("Namur",        "5000"),
+    "51": ("Gembloux",     "5030"),
+    "52": ("Namur",        "5020"),
+    "53": ("Andenne",      "5300"),
+    "54": ("Dinant",       "5500"),
+    "55": ("Philippeville", "5600"),
+    "56": ("Charleroi",    "5600"),
+    "57": ("Nismes",       "5670"),
+    "58": ("Philippeville", "5600"),
+    "59": ("Ciney",        "5590"),
+    "60": ("Charleroi",    "6000"),
+    "61": ("Charleroi",    "6110"),
+    "62": ("Châtelet",     "6200"),
+    "63": ("Charleroi",    "6230"),
+    "64": ("Chimay",       "6460"),
+    "65": ("Mons",         "6500"),
+    "66": ("Mons",         "6600"),
+    "67": ("La Louvière",  "7100"),
+    "68": ("Tournai",      "7500"),
+    "69": ("Ath",          "7800"),
+    "70": ("Mons",         "7000"),
+    "71": ("La Louvière",  "7100"),
+    "72": ("Mons",         "7000"),
+    "73": ("Soignies",     "7060"),
+    "74": ("Tournai",      "7500"),
+    "75": ("Tournai",      "7500"),
+    "76": ("Ath",          "7800"),
+    "77": ("Enghien",      "7850"),
+    "78": ("Lessines",     "7860"),
+    "79": ("Péruwelz",     "7600"),
+    "80": ("Bruges",       "8000"),
+    "81": ("Bruges",       "8200"),
+    "82": ("Ostende",      "8400"),
+    "83": ("Roeselare",    "8800"),
+    "84": ("Ieper",        "8900"),
+    "85": ("Kortrijk",     "8500"),
+    "86": ("Waregem",      "8790"),
+    "87": ("Wielsbeke",    "8710"),
+    "88": ("Roeselare",    "8800"),
+    "89": ("Diksmuide",    "8600"),
+    "90": ("Gent",         "9000"),
+    "91": ("Gent",         "9100"),
+    "92": ("Aalst",        "9200"),
+    "93": ("Oudenaarde",   "9700"),
+    "94": ("Ninove",       "9400"),
+    "95": ("Geraardsbergen","9500"),
+    "96": ("Dendermonde",  "9200"),
+    "97": ("Ronse",        "9600"),
+    "98": ("Eeklo",        "9900"),
+    "99": ("Gent",         "9990"),
+}
 
 GPS_FIXES_ORIGIN = {
     "rumbek":  "Rumbeke, 8800, Belgium",
@@ -398,7 +492,16 @@ def parse_destination(city, postal_code, country):
 
     if city.lower() in ("all cities", "all", ""):
         base_zone = f"{cp_num}, {pays_full}"
-        return ZONE_CORRECTIONS.get(base_zone, base_zone)
+        # Vérifie ZONE_CORRECTIONS en premier
+        if base_zone in ZONE_CORRECTIONS:
+            return ZONE_CORRECTIONS[base_zone]
+        # Pour la Belgique sans ville : utilise le chef-lieu du préfixe
+        if pays_full == "Belgium" and len(cp_num) >= 2:
+            prefix = cp_num[:2]
+            if prefix in BE_CHEFS_LIEUX:
+                chef_lieu, cp_chef = BE_CHEFS_LIEUX[prefix]
+                return f"{chef_lieu}, {cp_chef}, Belgium"
+        return base_zone
     else:
         return f"{city}, {cp_num}, {pays_full}"
 
