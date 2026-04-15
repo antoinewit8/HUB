@@ -469,7 +469,7 @@ modules = [
     ("🔗", "Ressources",      "Fichiers, documents et liens partagés",        "pages/4_🔗_Ressources.py"),
 ]
 
-for i, (col, (icon, title, desc, page)) in enumerate(zip([c1, c2, c3], modules)):
+for i, (col, (icon, title, desc, page)) in enumerate(zip([c1, c2, c3, c4], modules)):
     with col:
         st.markdown(f"""
         <div class="cb-card cb-card-delay-{i+1}">
