@@ -2,75 +2,114 @@ import pandas as pd
 import requests
 import os
 from datetime import datetime
+from bs4 import BeautifulSoup
 
-def get_statbel_data(view_id: str = "90a3de47-97fc-4870-9936-f55ed85f15fd") -> pd.DataFrame:
+
+def get_weekly_prices() -> pd.DataFrame:
     """
-    Récupère les données de prix depuis be.STAT via l'ID de la vue.
+    Prix diesel hebdomadaires Belgique — GlobalPetrolPrices.com
+    Mis à jour chaque lundi.
+    """
+    url = "https://www.globalpetrolprices.com/Belgium/diesel_prices/"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        table = soup.find("table", {"id": "historical_data_detailed"})
+        if not table:
+            table = soup.find("table")
+        if not table:
+            return pd.DataFrame(columns=["date", "diesel_routier"])
+
+        rows = []
+        for tr in table.find_all("tr")[1:]:
+            cells = [td.get_text(strip=True) for td in tr.find_all("td")]
+            if len(cells) >= 2:
+                try:
+                    date = pd.to_datetime(cells[0])
+                    price = float(cells[1].replace(",", "."))
+                    if 0.5 < price < 5.0:
+                        rows.append({"date": date, "diesel_routier": price})
+                except Exception:
+                    continue
+
+        if rows:
+            return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+
+    except Exception as e:
+        print(f"⚠️ get_weekly_prices erreur: {e}")
+
+    return pd.DataFrame(columns=["date", "diesel_routier"])
+
+
+def get_daily_prices(full_history: bool = False) -> pd.DataFrame:
+    """
+    Prix journaliers depuis Statbel open data.
+    """
+    url = "https://statbel.fgov.be/sites/default/files/files/opendata/Consumptieprijzen/TH_CPI_BE.xlsx"
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        from io import BytesIO
+        df = pd.read_excel(BytesIO(resp.content))
+
+        # Chercher colonnes date + diesel
+        date_col = next((c for c in df.columns if "date" in str(c).lower() or "datum" in str(c).lower()), None)
+        diesel_col = next((c for c in df.columns if "diesel" in str(c).lower() or "gasoil" in str(c).lower()), None)
+
+        if date_col and diesel_col:
+            df = df[[date_col, diesel_col]].copy()
+            df.columns = ["date", "diesel_routier"]
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df = df.dropna().sort_values("date")
+            if not full_history:
+                df = df.tail(90)
+            return df.reset_index(drop=True)
+
+    except Exception as e:
+        print(f"⚠️ get_daily_prices erreur: {e}")
+
+    return pd.DataFrame(columns=["date", "diesel_routier"])
+
+
+def get_monthly_averages() -> pd.DataFrame:
+    """
+    Récupère les moyennes mensuelles du gasoil depuis be.STAT (Statbel).
     Fallback sur data/fuel_avg.csv si le site est inaccessible.
-    Vues suggérées :
-    - 90a3de47-97fc-4870-9936-f55ed85f15fd (Mensuel)
-    - 939c67bb-39fa-4f49-9d05-c446187bef1d (Quotidien complet)
-    - cee4903e-c302-45be-9e43-e4b724ffb592 (30 derniers jours)
     """
-    url = f"https://bestat.statbel.fgov.be/bestat/crosstable.xhtml?view={view_id}"
-    # Utilisation d'un chemin relatif au projet
-    csv_path = os.path.join(os.path.dirname(__file__), "..", "data", "fuel_avg.csv")
+    url = "https://bestat.economie.fgov.be/bestat/crosstable.xhtml?view=90a3de47-97fc-4870-9936-f55ed85f15fd"
+    csv_path = "data/fuel_avg.csv"
     
     try:
-        # Utilisation d'une session pour maintenir les cookies JSF
-        session = requests.Session()
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8'
-        }
-        
-        response = session.get(url, headers=headers, timeout=15)
+        # Tentative de lecture HTML (pd.read_html gère souvent les tableaux simples même en JSF)
+        # On utilise des headers pour éviter d'être bloqué
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=15)
         
         if response.status_code == 200:
-            # On force l'utilisation de l'analyseur 'lxml' si disponible pour plus de robustesse
-            dfs = pd.read_html(response.text, decimal=',', thousands='.', flavor='bs4')
+            dfs = pd.read_html(response.text, decimal=',', thousands='.')
             if dfs:
                 df = dfs[0]
                 
-                # Nettoyage des noms de colonnes
-                raw_cols = df.columns.tolist()
-                clean_mapping = {}
+                # Nettoyage standard pour be.STAT
+                # Colonnes attendues : 0: Période, 2: Gasoil chauffage (>2000L), 3: Diesel routier
+                df = df.iloc[:, [0, 2, 3]]
+                df.columns = ["date_raw", "gasoil_chauffage", "gasoil_routier"]
                 
-                # Identification de la colonne de date
-                col_date_idx = [i for i, c in enumerate(raw_cols) if any(x in str(c).lower() for x in ['période', 'mois', 'jour', 'date', '0'])][0]
-                date_col_name = raw_cols[col_date_idx]
-                clean_mapping[date_col_name] = "date_raw"
-
-                # Mapping des autres colonnes (types de diesel/gasoil)
-                for col in raw_cols:
-                    if col == date_col_name: continue
-                    # Nettoyage : "Gasoil de chauffage Extra (> 2000 l)" -> "Chauffage Extra >2000L"
-                    name = str(col).replace("Gasoil de chauffage", "Chauff.").replace("(litres)", "").replace(" l", "L")
-                    name = name.replace("  ", " ").strip()
-                    clean_mapping[col] = name
-
-                df = df.rename(columns=clean_mapping)
-
-                # Nettoyage des lignes (on garde ce qui ressemble à une date ou un code temporel)
-                df = df[df["date_raw"].str.contains(r'\d', na=False)].copy()
+                # Nettoyage des lignes de total ou vides
+                df = df[df["date_raw"].str.contains(r'\d{4}', na=False)].copy()
                 
-                # Conversion date flexible (gère 2024M01, DD/MM/YYYY, etc.)
-                df["date"] = pd.to_datetime(
-                    df["date_raw"].str.replace('M', '-'), 
-                    dayfirst=True, 
-                    errors='coerce'
-                )
+                # Conversion date (Format be.STAT : 2024M01 ou Janvier 2024)
+                # On simplifie pour le DataFrame
+                df["date"] = pd.to_datetime(df["date_raw"].str.replace('M', '-'), errors='coerce')
                 df = df.dropna(subset=["date"]).sort_values("date")
                 
-                # On garde 'date' en premier, puis toutes les autres colonnes nettoyées
-                cols_to_keep = ["date"] + [v for k, v in clean_mapping.items() if v != "date_raw"]
-                
-                # Pour la compatibilité avec les KPIs existants, on s'assure qu'une colonne s'appelle 'gasoil_routier'
-                if "Diesel" in df.columns:
-                    df = df.rename(columns={"Diesel": "gasoil_routier"})
-                
-                return df[cols_to_keep]
+                return df[["date", "gasoil_routier", "gasoil_chauffage"]]
 
     except Exception as e:
         print(f"DEBUG: Erreur scraping be.STAT : {e}")
@@ -85,13 +124,5 @@ def get_statbel_data(view_id: str = "90a3de47-97fc-4870-9936-f55ed85f15fd") -> p
         except Exception as e:
             print(f"DEBUG: Erreur lecture CSV local : {e}")
 
-    return pd.DataFrame()
-
-def get_monthly_averages() -> pd.DataFrame:
-    """Maintient la compatibilité avec l'existant."""
-    return get_statbel_data("90a3de47-97fc-4870-9936-f55ed85f15fd")
-
-def get_daily_prices(full_history: bool = False) -> pd.DataFrame:
-    """Récupère les prix journaliers (30j ou complet)."""
-    view_id = "939c67bb-39fa-4f49-9d05-c446187bef1d" if full_history else "cee4903e-c302-45be-9e43-e4b724ffb592"
-    return get_statbel_data(view_id)
+    # Retourne un DataFrame vide si tout échoue
+    return pd.DataFrame(columns=["date", "gasoil_routier", "gasoil_chauffage"])
