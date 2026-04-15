@@ -17,6 +17,17 @@ PAYS_MAP = {
     "FI": "Finland", "IE": "Ireland", "GR": "Greece",
     "F": "France", "B": "Belgium", "D": "Germany", "I": "Italy",
     "E": "Spain", "L": "Luxembourg", "A": "Austria", "P": "Portugal",
+    # Noms en clair
+    "FRANCE": "France", "BELGIQUE": "Belgium", "BELGIË": "Belgium",
+    "ALLEMAGNE": "Germany", "DEUTSCHLAND": "Germany",
+    "PAYS-BAS": "Netherlands", "NEDERLAND": "Netherlands",
+    "LUXEMBOURG": "Luxembourg", "ITALIE": "Italy", "ITALIA": "Italy",
+    "ESPAGNE": "Spain", "ESPAÑA": "Spain", "SUISSE": "Switzerland",
+    "SCHWEIZ": "Switzerland", "AUTRICHE": "Austria", "ÖSTERREICH": "Austria",
+    "ROYAUME-UNI": "United Kingdom", "POLOGNE": "Poland", "POLSKA": "Poland",
+    "PORTUGAL": "Portugal", "GRÈCE": "Greece", "NETHERLANDS": "Netherlands",
+    "GERMANY": "Germany", "SPAIN": "Spain", "ITALY": "Italy",
+    "AUSTRIA": "Austria", "SWITZERLAND": "Switzerland", "POLAND": "Poland",
 }
 
 CP_LENGTHS = {
