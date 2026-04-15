@@ -466,6 +466,7 @@ modules = [
     ("🚛", "TX-FLEX",        "Analyse de flotte et performance transport",   "pages/1_🚛_Analyse_TX_FLEX.py"),
     ("🗺️", "Calcul KM",      "Distances PTV et optimisation itinéraires",    "pages/2_🗺️_Calcul_KM.py"),
     ("📍", "Carte Manuelle",  "Visualisation interactive des trajets",        "pages/3_🗺️_Carte_Manuelle.py"),
+    ("🔗", "Ressources",      "Fichiers, documents et liens partagés",        "pages/4_🔗_Ressources.py"),
 ]
 
 for i, (col, (icon, title, desc, page)) in enumerate(zip([c1, c2, c3], modules)):
