@@ -363,7 +363,8 @@ def parse_origin_from_parts(city, postal_code, country):
     postal_code = str(postal_code or "").strip()
 
     pays_full = PAYS_MAP.get(country.upper(), country)
-    cp_num    = pad_postal_code(postal_code, country)
+    pays_iso  = next((k for k, v in PAYS_MAP.items() if v == pays_full and len(k) == 2 and k.isupper()), country)
+    cp_num    = pad_postal_code(postal_code, pays_iso)
 
     if city:
         return f"{city}, {cp_num}, {pays_full}"
@@ -392,7 +393,8 @@ def parse_destination(city, postal_code, country):
         pays_full = PAYS_MAP.get(cp_pays.upper(), pays_full or cp_pays)
 
     pays_prefix = cp_pays if cp_pays else country
-    cp_num = pad_postal_code(cp_num, pays_prefix)
+    pays_iso    = next((k for k, v in PAYS_MAP.items() if v == pays_full and len(k) == 2 and k.isupper()), pays_prefix)
+    cp_num      = pad_postal_code(cp_num, pays_iso)
 
     if city.lower() in ("all cities", "all", ""):
         base_zone = f"{cp_num}, {pays_full}"
