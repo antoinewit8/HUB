@@ -154,13 +154,13 @@ def geocode_address(address):
         pays_str    = match_ville_cp.group(3).strip()
         country_iso = PAYS_TO_ISO.get(pays_str.lower())
 
-        result = _geocode_by_text(f"{ville}, {pays_str}")
-        if result:
-            return result
         if country_iso:
             result = geocode_by_postal_code(cp, country_iso)
             if result:
                 return result
+        result = _geocode_by_text(f"{ville}, {pays_str}")
+        if result:
+            return result
         return _geocode_by_text(address)
 
     if match_cp_only:
