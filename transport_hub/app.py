@@ -16,280 +16,327 @@ init_session()
 # ── CSS Custom — Style CB Groupe ──────────────────────────────
 st.markdown("""
 <style>
-/* ============================================================
-   CB Groupe — Design Tokens
-   Source of truth for colors, type, spacing, radii, shadows,
-   gradients, and animations used across Transport Hub.
-   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* ── Fonts ───────────────────────────────────────────────── */
-/* Primary: Poppins (brand-supplied, shipped in fonts/).
-   Mono:    JetBrains Mono (Google Fonts). */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
-
-@font-face { font-family: 'Poppins'; font-weight: 100; font-style: normal;  src: url('fonts/Poppins-Thin.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 100; font-style: italic;  src: url('fonts/Poppins-ThinItalic.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 200; font-style: normal;  src: url('fonts/Poppins-ExtraLight.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 200; font-style: italic;  src: url('fonts/Poppins-ExtraLightItalic.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 300; font-style: normal;  src: url('fonts/Poppins-Light.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 300; font-style: italic;  src: url('fonts/Poppins-LightItalic.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 400; font-style: normal;  src: url('fonts/Poppins-Regular.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 400; font-style: italic;  src: url('fonts/Poppins-Italic.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 500; font-style: normal;  src: url('fonts/Poppins-Medium.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 500; font-style: italic;  src: url('fonts/Poppins-MediumItalic.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 600; font-style: normal;  src: url('fonts/Poppins-SemiBold.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 600; font-style: italic;  src: url('fonts/Poppins-SemiBoldItalic.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 700; font-style: normal;  src: url('fonts/Poppins-Bold.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 700; font-style: italic;  src: url('fonts/Poppins-BoldItalic.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 800; font-style: normal;  src: url('fonts/Poppins-ExtraBold.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 800; font-style: italic;  src: url('fonts/Poppins-ExtraBoldItalic.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 900; font-style: normal;  src: url('fonts/Poppins-Black.ttf') format('truetype'); font-display: swap; }
-@font-face { font-family: 'Poppins'; font-weight: 900; font-style: italic;  src: url('fonts/Poppins-BlackItalic.ttf') format('truetype'); font-display: swap; }
-
+/* ── Variables couleurs CB ── */
 :root {
-    /* ── Brand ─────────────────────────────────────────── */
-    --cb-navy:         #1B3A5C;
-    --cb-navy-light:   #244B73;
-    --cb-navy-dark:    #122840;
-    --cb-accent:       #4A90D9;
+    --font-sans: 'Poppins', 'Segoe UI', Arial, sans-serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+    --cb-navy: #1B3A5C;
+    --cb-navy-light: #244B73;
+    --cb-navy-dark: #122840;
+    --cb-accent: #4A90D9;
     --cb-accent-light: #6BA3E0;
-
-    /* ── Surfaces (app background stops) ───────────────── */
-    --cb-bg-0: #0F1923;  /* darkest — top-left of page gradient */
-    --cb-bg-1: #152A3E;  /* mid    — 40% */
-    --cb-bg-2: #1B3A5C;  /* bottom — 100%, == navy */
-    --cb-sidebar-0: #0E1B28;
-    --cb-sidebar-1: #152A3E;
-
-    /* ── Neutrals ──────────────────────────────────────── */
-    --cb-white:    #FFFFFF;
-    --cb-gray-50:  #F8F9FC;
+    --cb-white: #FFFFFF;
+    --cb-gray-50: #F8F9FC;
     --cb-gray-100: #EEF1F6;
-    --cb-gray-200: #D8DDE6;  /* fg on dark bg — secondary body */
-    --cb-gray-300: #C0CDE0;  /* fg on dark bg — primary body */
-    --cb-gray-400: #8E99A9;  /* meta / muted */
-    --cb-gray-600: #5A6577;  /* disabled / borders */
-
-    /* ── Semantic ──────────────────────────────────────── */
+    --cb-gray-200: #D8DDE6;
+    --cb-gray-400: #8E99A9;
+    --cb-gray-600: #5A6577;
     --cb-success: #2ECC71;
     --cb-warning: #F39C12;
-    --cb-danger:  #E74C3C;
-    --cb-info:    #4A90D9;   /* alias of accent */
-    --cb-purple:  #8E44AD;   /* map search pin only */
-
-    /* Map-specific (exception — light theme) */
-    --cb-map-origin: #27ae60;
-    --cb-map-dest:   #c0392b;
-    --cb-map-wp:     #3498db;
-    --cb-map-route:  #007cbf;
-    --cb-map-ghost:  #95a5a6;
-
-    /* ── Typography ────────────────────────────────────── */
-    --font-sans: 'Poppins', 'Segoe UI', 'Arial', sans-serif;
-    --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
-
-    /* Size scale */
-    --fs-hero:     2.6rem;  /* hero h1 */
-    --fs-h1:       2.2rem;
-    --fs-h2:       1.5rem;
-    --fs-h3:       1.25rem; /* section title */
-    --fs-card-title: 1.15rem;
-    --fs-kpi:      2rem;
-    --fs-kpi-lg:   2.5rem;
-    --fs-body:     1rem;
-    --fs-sm:       0.88rem;
-    --fs-meta:     0.8rem;
-    --fs-tiny:     0.78rem;
-    --fs-micro:    0.65rem;
-
-    --lh-tight: 1.2;
-    --lh-body:  1.5;
-
-    --fw-regular:  400;
-    --fw-medium:   500;
-    --fw-semibold: 600;
-    --fw-bold:     700;
-    --fw-black:    800;
-
-    --tracking-tight: -0.5px;
-    --tracking-wide:  1px;
-    --tracking-xwide: 3px;
-
-    /* ── Spacing scale (4-base) ────────────────────────── */
-    --sp-0: 0;
-    --sp-1: 4px;
-    --sp-2: 8px;
-    --sp-3: 12px;
-    --sp-4: 16px;
-    --sp-5: 24px;
-    --sp-6: 32px;
-    --sp-7: 40px;
-    --sp-8: 56px;
-
-    /* ── Radii ─────────────────────────────────────────── */
-    --r-sm:  6px;
-    --r-md:  10px;  /* buttons */
-    --r-lg:  12px;
-    --r-xl:  14px;  /* kpi cards */
-    --r-2xl: 16px;  /* feature cards */
-    --r-pill: 20px;
-    --r-full: 999px;
-
-    /* ── Borders ───────────────────────────────────────── */
-    --border-rest:  1px solid rgba(74, 144, 217, 0.15);
-    --border-hover: 1px solid rgba(74, 144, 217, 0.40);
-    --border-kpi:   1px solid rgba(74, 144, 217, 0.10);
-    --border-focus: 1px solid #4A90D9;
-
-    /* ── Shadows / glows ───────────────────────────────── */
-    --glow-soft:    0 0 20px rgba(74, 144, 217, 0.08);
-    --glow-medium:  0 0 30px rgba(74, 144, 217, 0.18);
-    --glow-hover:   0 12px 40px rgba(74, 144, 217, 0.15);
-    --glow-button:  0 4px 20px rgba(74, 144, 217, 0.25);
-    --glow-input:   0 0 10px rgba(74, 144, 217, 0.20);
-
-    /* ── Gradients ─────────────────────────────────────── */
-    --grad-page:    linear-gradient(160deg, #0F1923 0%, #152A3E 40%, #1B3A5C 100%);
-    --grad-sidebar: linear-gradient(180deg, #0E1B28 0%, #152A3E 100%);
-    --grad-card:    linear-gradient(145deg, rgba(21, 42, 62, 0.7), rgba(14, 27, 40, 0.9));
-    --grad-kpi:     linear-gradient(145deg, rgba(21, 42, 62, 0.5), rgba(14, 27, 40, 0.7));
-    --grad-button:  linear-gradient(135deg, #1B3A5C 0%, #244B73 100%);
-    --grad-divider: linear-gradient(90deg, transparent, rgba(74, 144, 217, 0.30), transparent);
-    --grad-card-topline: linear-gradient(90deg, transparent, #4A90D9, transparent);
-    --grad-shimmer: linear-gradient(90deg, #4A90D9, #6BA3E0, #4A90D9, #6BA3E0);
-    --grad-bar-ok:   linear-gradient(90deg, #2ECC71, #4A90D9);
-    --grad-bar-warn: linear-gradient(90deg, #F39C12, #e67e22);
-    --grad-bar-dng:  linear-gradient(90deg, #E74C3C, #c0392b);
-
-    /* ── Motion ────────────────────────────────────────── */
-    --ease-std:   cubic-bezier(0.25, 0.46, 0.45, 0.94);
-    --ease-out:   ease-out;
-    --dur-fast:   0.2s;
-    --dur-base:   0.3s;
-    --dur-card:   0.35s;
-    --dur-slow:   0.7s;
+    --cb-danger: #E74C3C;
 }
 
-/* ============================================================
-   Semantic element tokens — apply these directly to elements
-   ============================================================ */
-
-html, body {
-    font-family: var(--font-sans);
-    font-size: 16px;
-    line-height: var(--lh-body);
-    color: var(--cb-gray-300);
-    background: var(--grad-page);
-    background-attachment: fixed;
+/* ── Reset Streamlit background ── */
+.stApp {
+    background: linear-gradient(160deg, #0F1923 0%, #152A3E 40%, #1B3A5C 100%);
+    font-family: var(--font-sans) !important;
 }
 
-h1, .cb-h1 {
-    font-size: var(--fs-hero);
-    font-weight: var(--fw-bold);
-    line-height: var(--lh-tight);
-    letter-spacing: var(--tracking-tight);
-    color: var(--cb-white);
-    margin: 0;
+/* ── Sidebar ── */
+section[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0E1B28 0%, #152A3E 100%) !important;
+    border-right: 1px solid rgba(74, 144, 217, 0.15);
 }
 
-h2, .cb-h2 {
-    font-size: var(--fs-h1);
-    font-weight: var(--fw-bold);
-    line-height: var(--lh-tight);
-    color: var(--cb-white);
-    margin: 0;
+section[data-testid="stSidebar"] .stMarkdown p,
+section[data-testid="stSidebar"] .stMarkdown li,
+section[data-testid="stSidebar"] .stMarkdown h3 {
+    color: var(--cb-gray-200) !important;
 }
 
-h3, .cb-h3, .cb-section-title {
-    font-size: var(--fs-h3);
-    font-weight: var(--fw-semibold);
-    color: var(--cb-white);
-    margin: 0;
-}
-
-.cb-card-title {
-    font-size: var(--fs-card-title);
-    font-weight: var(--fw-semibold);
-    color: var(--cb-white);
-}
-
-.cb-kpi-value {
-    font-size: var(--fs-kpi);
-    font-weight: var(--fw-bold);
-    color: var(--cb-white);
-    line-height: var(--lh-tight);
-}
-
-.cb-kpi-value.accent { color: var(--cb-accent); }
-.cb-kpi-value.success { color: var(--cb-success); }
-.cb-kpi-value.danger { color: var(--cb-danger); }
-
-p, .cb-p {
-    font-size: var(--fs-body);
-    line-height: var(--lh-body);
-    color: var(--cb-gray-300);
-    margin: 0 0 var(--sp-3) 0;
-}
-
-.cb-sm, .cb-help {
-    font-size: var(--fs-sm);
-    color: var(--cb-gray-400);
-}
-
-.cb-meta {
-    font-size: var(--fs-meta);
-    color: var(--cb-gray-400);
-}
-
-.cb-tracked-label {
-    font-size: var(--fs-tiny);
-    font-weight: var(--fw-medium);
-    text-transform: uppercase;
-    letter-spacing: var(--tracking-wide);
-    color: var(--cb-gray-400);
-}
-
-.cb-sidebar-label {
-    font-size: var(--fs-sm);
-    font-weight: var(--fw-semibold);
-    letter-spacing: var(--tracking-wide);
-    color: var(--cb-accent);
-}
-
-code, .cb-code {
-    font-family: var(--font-mono);
-    font-size: 0.92em;
-}
-
-/* Shimmer treatment for single branded word in hero */
-.cb-shimmer {
-    background: var(--grad-shimmer);
-    background-size: 200% auto;
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
-    animation: cb-shimmer 4s linear infinite;
-}
-
-@keyframes cb-shimmer {
-    0%   { background-position: -200% center; }
-    100% { background-position:  200% center; }
-}
-
-@keyframes cb-fade-in-up {
+/* ── Animations keyframes ── */
+@keyframes fadeInUp {
     from { opacity: 0; transform: translateY(24px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes cb-fade-in-left {
+@keyframes fadeInLeft {
     from { opacity: 0; transform: translateX(-20px); }
     to   { opacity: 1; transform: translateX(0); }
 }
 
-@keyframes cb-pulse-glow {
+@keyframes shimmer {
+    0%   { background-position: -200% center; }
+    100% { background-position: 200% center; }
+}
+
+@keyframes pulse-glow {
     0%, 100% { box-shadow: 0 0 20px rgba(74, 144, 217, 0.08); }
     50%      { box-shadow: 0 0 30px rgba(74, 144, 217, 0.18); }
+}
+
+@keyframes borderGlow {
+    0%, 100% { border-color: rgba(74, 144, 217, 0.2); }
+    50%      { border-color: rgba(74, 144, 217, 0.45); }
+}
+
+/* ── Titre principal animé ── */
+.cb-hero {
+    animation: fadeInUp 0.7s ease-out;
+    padding: 2.5rem 0 1rem 0;
+}
+
+.cb-hero h1 {
+    font-size: 2.6rem;
+    font-weight: 700;
+    color: var(--cb-white);
+    margin: 0;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+}
+
+.cb-hero h1 span {
+    background: linear-gradient(90deg, var(--cb-accent), var(--cb-accent-light), var(--cb-accent), var(--cb-accent-light));
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 4s linear infinite;
+}
+
+.cb-hero p {
+    color: var(--cb-gray-400);
+    font-size: 1.05rem;
+    margin-top: 0.4rem;
+}
+
+/* ── Divider custom ── */
+.cb-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(74, 144, 217, 0.3), transparent);
+    margin: 1.8rem 0;
+    border: none;
+}
+
+/* ── Module cards ── */
+.cb-card {
+    background: linear-gradient(145deg, rgba(21, 42, 62, 0.7), rgba(14, 27, 40, 0.9));
+    border: 1px solid rgba(74, 144, 217, 0.15);
+    border-radius: 16px;
+    padding: 1.8rem 1.5rem;
+    transition: all 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    animation: fadeInUp 0.6s ease-out backwards;
+}
+
+.cb-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, var(--cb-accent), transparent);
+    opacity: 0;
+    transition: opacity 0.35s;
+}
+
+.cb-card:hover {
+    transform: translateY(-6px);
+    border-color: rgba(74, 144, 217, 0.4);
+    box-shadow: 0 12px 40px rgba(74, 144, 217, 0.15);
+}
+
+.cb-card:hover::before {
+    opacity: 1;
+}
+
+.cb-card-icon {
+    font-size: 2.2rem;
+    margin-bottom: 0.7rem;
+    display: block;
+}
+
+.cb-card h3 {
+    color: var(--cb-white);
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 0 0 0.4rem 0;
+}
+
+.cb-card p {
+    color: var(--cb-gray-400);
+    font-size: 0.88rem;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.cb-card-delay-1 { animation-delay: 0.1s; }
+.cb-card-delay-2 { animation-delay: 0.2s; }
+.cb-card-delay-3 { animation-delay: 0.3s; }
+.cb-card-delay-4 { animation-delay: 0.4s; }
+
+/* ── KPI Cards ── */
+.cb-kpi-card {
+    background: linear-gradient(145deg, rgba(21, 42, 62, 0.5), rgba(14, 27, 40, 0.7));
+    border: 1px solid rgba(74, 144, 217, 0.1);
+    border-radius: 14px;
+    padding: 1.4rem 1.3rem;
+    animation: pulse-glow 4s ease-in-out infinite, fadeInUp 0.7s ease-out backwards;
+    text-align: center;
+}
+
+.cb-kpi-card .kpi-label {
+    color: var(--cb-gray-400);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 0.5rem;
+}
+
+.cb-kpi-card .kpi-value {
+    color: var(--cb-white);
+    font-size: 2rem;
+    font-weight: 700;
+}
+
+.cb-kpi-card .kpi-value.accent {
+    color: var(--cb-accent);
+}
+
+.cb-kpi-delay-1 { animation-delay: 0.15s; }
+.cb-kpi-delay-2 { animation-delay: 0.3s; }
+.cb-kpi-delay-3 { animation-delay: 0.45s; }
+.cb-kpi-delay-4 { animation-delay: 0.6s; }
+
+/* ── Section titles ── */
+.cb-section-title {
+    color: var(--cb-white);
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    animation: fadeInLeft 0.5s ease-out;
+}
+
+.cb-section-title .dot {
+    width: 8px; height: 8px;
+    background: var(--cb-accent);
+    border-radius: 50%;
+    display: inline-block;
+    animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* ── Status badge ── */
+.cb-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 500;
+}
+
+.cb-status.online {
+    background: rgba(46, 204, 113, 0.12);
+    color: var(--cb-success);
+    border: 1px solid rgba(46, 204, 113, 0.25);
+}
+
+.cb-status-dot {
+    width: 6px; height: 6px;
+    background: var(--cb-success);
+    border-radius: 50%;
+    animation: pulse-glow 1.5s ease-in-out infinite;
+}
+
+/* ── Notes container ── */
+.cb-note {
+    background: rgba(21, 42, 62, 0.4);
+    border-left: 3px solid var(--cb-accent);
+    border-radius: 0 10px 10px 0;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.6rem;
+    animation: fadeInLeft 0.4s ease-out;
+}
+
+.cb-note .note-time {
+    color: var(--cb-accent);
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.cb-note .note-text {
+    color: var(--cb-gray-200);
+    font-size: 0.9rem;
+}
+
+/* ── Ratio bar ── */
+.cb-ratio-bar {
+    background: rgba(14, 27, 40, 0.6);
+    border-radius: 10px;
+    height: 12px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+}
+
+.cb-ratio-fill {
+    height: 100%;
+    border-radius: 10px;
+    transition: width 0.8s ease-out;
+    background: linear-gradient(90deg, var(--cb-success), var(--cb-accent));
+}
+
+.cb-ratio-fill.warn {
+    background: linear-gradient(90deg, var(--cb-warning), #e67e22);
+}
+
+.cb-ratio-fill.danger {
+    background: linear-gradient(90deg, var(--cb-danger), #c0392b);
+}
+
+/* ── Hide Streamlit default elements ── */
+.stDeployButton, #MainMenu, footer, header { display: none !important; }
+
+/* ── Streamlit metric override ── */
+[data-testid="stMetricValue"] {
+    color: var(--cb-white) !important;
+}
+[data-testid="stMetricLabel"] {
+    color: var(--cb-gray-400) !important;
+}
+
+/* ── Input styling ── */
+section[data-testid="stSidebar"] input {
+    background: rgba(14, 27, 40, 0.6) !important;
+    border-color: rgba(74, 144, 217, 0.2) !important;
+    color: white !important;
+}
+
+section[data-testid="stSidebar"] input:focus {
+    border-color: var(--cb-accent) !important;
+    box-shadow: 0 0 10px rgba(74, 144, 217, 0.2) !important;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+    background: linear-gradient(135deg, var(--cb-navy) 0%, var(--cb-navy-light) 100%) !important;
+    color: white !important;
+    border: 1px solid rgba(74, 144, 217, 0.3) !important;
+    border-radius: 10px !important;
+    padding: 0.5rem 1.2rem !important;
+    font-weight: 500 !important;
+    transition: all 0.3s ease !important;
+}
+
+.stButton > button:hover {
+    border-color: var(--cb-accent) !important;
+    box-shadow: 0 4px 20px rgba(74, 144, 217, 0.25) !important;
+    transform: translateY(-2px) !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -361,7 +408,6 @@ with k1:
     </div>""", unsafe_allow_html=True)
 
 with k2:
-    alert_color = "accent" if nb_alertes <= 3 else ""
     alert_style = f"color: var(--cb-danger);" if nb_alertes > 3 else ""
     st.markdown(f"""
     <div class="cb-kpi-card cb-kpi-delay-2">
@@ -418,16 +464,15 @@ st.markdown('<div class="cb-divider"></div>', unsafe_allow_html=True)
 # ── Modules ───────────────────────────────────────────────────
 st.markdown('<div class="cb-section-title"><span class="dot"></span> Modules</div>', unsafe_allow_html=True)
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3 = st.columns(3)
 
 modules = [
     ("🚛", "TX-FLEX",        "Analyse de flotte et performance transport",   "pages/1_🚛_Analyse_TX_FLEX.py"),
     ("🗺️", "Calcul KM",      "Distances PTV et optimisation itinéraires",    "pages/2_🗺️_Calcul_KM.py"),
     ("📍", "Carte Manuelle",  "Visualisation interactive des trajets",        "pages/3_🗺️_Carte_Manuelle.py"),
-    ("🔗", "Ressources",      "Fichiers, documents et liens partagés",        "pages/4_🔗_Ressources.py"),
 ]
 
-for i, (col, (icon, title, desc, page)) in enumerate(zip([c1, c2, c3, c4], modules)):
+for i, (col, (icon, title, desc, page)) in enumerate(zip([c1, c2, c3], modules)):
     with col:
         st.markdown(f"""
         <div class="cb-card cb-card-delay-{i+1}">
@@ -455,3 +500,4 @@ if st.session_state.notes:
             if st.button("✕", key=f"del_{i}"):
                 st.session_state.notes.pop(i)
                 st.rerun()
+                
