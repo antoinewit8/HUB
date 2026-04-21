@@ -229,7 +229,7 @@ DEST_CP_KEYWORDS = [
 DEST_VILLE_KEYWORDS = [
     "ville2", "ville", "city", "city of destination",
     "dest zone txt", "destination", "ville destination",
-    "ville dest",
+    "ville dest", "localite", "localité",
 ]
 
 # Mots-clés des lignes de groupe (ligne au-dessus des headers)
