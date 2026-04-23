@@ -5,3 +5,4 @@ tesseract-ocr-eng
 ghostscript
 pngquant
 unpaper
+poppler-utils
