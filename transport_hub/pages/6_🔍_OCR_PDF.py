@@ -11,11 +11,6 @@ st.title("🔍 OCR de PDF scannés")
 st.caption("Rend vos PDFs scannés cherchables et copiables grâce à OCRmyPDF + Tesseract")
 st.divider()
 
-# ── Diagnostic Tesseract ──
-st.code(f"tesseract path: {shutil.which('tesseract')}")
-result = subprocess.run(['tesseract', '--version'], capture_output=True, text=True)
-st.code(result.stdout or result.stderr)
-
 import ocrmypdf
 
 
