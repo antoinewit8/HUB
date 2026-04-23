@@ -411,30 +411,59 @@ def parse_missions(file) -> pd.DataFrame:
 #  PARSING FICHIER CA
 # ══════════════════════════════════════════════════════════════════
 
+# Noms de colonnes exacts du fichier CA
+# N° Dossier | Référence | Date chargement | Département | Type de transport |
+# Type de dossier | Client facturation | Pays client fac |
+# Adresse chargement | Localité chargement | C.P. chargement | ... |
+# Produit | Type produit | Etat vente | Prix transport | Suppléments |
+# S.G. | Heures d'attente | Total des ventes
+
+CA_COL_CANDIDATES = {
+    "dossier":        ["N° Dossier", "N°Dossier", "Dossier"],
+    "prix_transport": ["Prix transport", "Prix Transport"],
+    "total_vente":    ["Total des ventes", "Total ventes", "Total des vente"],
+    "client":         ["Client facturation", "Client Facturation", "Client"],
+    "etat_vente":     ["Etat vente", "État vente", "Etat"],
+    "supplements":    ["Suppléments", "Supplements"],
+    "sg":             ["S.G.", "SG"],
+    "heures_attente": ["Heures d'attente", "Heures attente"],
+    "date_charg":     ["Date chargement", "Date Chargement"],
+    "type_transport": ["Type de transport", "Type transport"],
+}
+
+
 def parse_ca(file) -> pd.DataFrame:
     """
-    Parse le fichier CA.
-    Retourne un DataFrame avec dossier, prix_transport, total_vente.
+    Parse le fichier CA avec mapping exact des colonnes de l'export.
+    Colonnes clés : N° Dossier / Prix transport / Total des ventes /
+                    Client facturation / Etat vente
     """
     df = pd.read_excel(file, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
 
-    col_dossier = detect_col(df, ["ndossier", "dossi", "dossier"])
-    col_prix    = detect_col(df, ["prixtransport", "prix", "transport"])
-    col_total   = detect_col(df, ["totalvente", "total", "vente", "montant"])
-    col_client  = detect_col(df, ["client", "factur"])
-    col_etat    = detect_col(df, ["etat", "état", "statut"])
+    cols_lower = {_norm_col(c): c for c in df.columns}
 
-    rename = {}
-    if col_dossier: rename[col_dossier] = "dossier"
-    if col_prix:    rename[col_prix]    = "prix_transport"
-    if col_total:   rename[col_total]   = "total_vente"
-    if col_client:  rename[col_client]  = "client"
-    if col_etat:    rename[col_etat]    = "etat_vente"
+    col_map = {}
+    for role, candidates in CA_COL_CANDIDATES.items():
+        found = None
+        for cand in candidates:
+            key = _norm_col(cand)
+            if key in cols_lower:
+                found = cols_lower[key]
+                break
+        col_map[role] = found
 
+    # Avertissement si colonnes CA critiques manquantes
+    critiques_ca = ["dossier", "prix_transport", "total_vente"]
+    manquantes_ca = [r for r in critiques_ca if col_map.get(r) is None]
+    if manquantes_ca:
+        st.warning(f"⚠️ Colonnes CA non détectées : {manquantes_ca} — "
+                   f"Colonnes disponibles : {list(df.columns)}")
+
+    rename = {v: k for k, v in col_map.items() if v}
     df = df.rename(columns=rename)
 
-    for col in ["dossier", "prix_transport", "total_vente", "client", "etat_vente"]:
+    for col in CA_COL_CANDIDATES.keys():
         if col not in df.columns:
             df[col] = ""
 
@@ -444,7 +473,7 @@ def parse_ca(file) -> pd.DataFrame:
 
     def to_float(s):
         try:
-            return float(str(s).replace(",", ".").replace(" ", "").replace("€", "").strip())
+            return float(str(s).replace(",", ".").replace(" ", "").replace(" ", "").replace("€", "").strip())
         except Exception:
             return 0.0
 
