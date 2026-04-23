@@ -85,6 +85,16 @@ with col1:
         value=False,
         help="Détecte et corrige l'orientation de chaque page"
     )
+    clean = st.checkbox(
+        "🧹 Nettoyer le scan (unpaper)",
+        value=False,
+        help="Supprime le bruit, les taches et bordures sales du scan"
+    )
+    clean_final = st.checkbox(
+        "✨ Appliquer le nettoyage au PDF final",
+        value=False,
+        help="Le nettoyage est visible dans le PDF (pas seulement pour l'OCR)"
+    )
 
 with col2:
     output_type = st.selectbox(
@@ -133,10 +143,12 @@ if st.button("🚀 Lancer l'OCR", type="primary"):
                 language=[selected_lang],
                 deskew=deskew,
                 rotate_pages=rotate,
+                clean=clean,               # ← ajouter
+                clean_final=clean_final,   # ← ajouter
                 output_type=output_type,
                 optimize=optimize,
                 force_ocr=force_ocr,
-                sidecar=sidecar_path,   # Texte extrait en parallèle
+                sidecar=sidecar_path,
                 progress_bar=False,
             )
 
