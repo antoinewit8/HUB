@@ -93,6 +93,34 @@ def geocode_address(address: str):
     return _ptv_geocode_address(address)
 
 
+@st.cache_data(show_spinner=False)
+def geocode_with_fallback(adresse_complete: str, ville: str, cp: str, pays: str) -> tuple | None:
+    """
+    Géocodage en cascade :
+    1. Adresse complète (rue + localité + CP + pays)
+    2. Localité + CP + pays  (sans la rue)
+    3. CP + pays             (sans la localité)
+    Retourne (lat, lon) ou None.
+    """
+    pays_full = PAYS_MAP.get(pays.upper(), pays) if pays else ""
+
+    candidates = []
+    if adresse_complete:
+        candidates.append(adresse_complete)
+    if ville and cp and pays_full:
+        candidates.append(f"{ville}, {cp}, {pays_full}")
+    elif ville and pays_full:
+        candidates.append(f"{ville}, {pays_full}")
+    if cp and pays_full:
+        candidates.append(f"{cp}, {pays_full}")
+
+    for addr in candidates:
+        result = _ptv_geocode_address(addr)
+        if result:
+            return result
+    return None
+
+
 def build_address_string(row: pd.Series) -> str:
     """
     Construit une adresse géocodable depuis les colonnes exactes de l'export missions :
@@ -392,6 +420,10 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
                 "adresse":   r["adresse_complete"],
                 "localite":  r.get("localite", ""),
                 "nom":       r.get("nom1", ""),
+                # champs bruts pour le fallback géocodage en cascade
+                "ville_raw": str(r.get("localite",    "") or "").strip(),
+                "cp_raw":    str(r.get("code_postal", "") or "").strip(),
+                "pays_raw":  str(r.get("code_pays",   "") or "").strip().upper(),
             })
 
         # Résumé textuel des stops
@@ -466,13 +498,24 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
     geo_cache = {}
 
     total_geo = len(unique_addresses)
+    # Construire un dict adresse_complete → (ville, cp, pays) pour le fallback
+    addr_meta = {}
+    for s in all_stops_flat:
+        if s["adresse"] not in addr_meta:
+            addr_meta[s["adresse"]] = (
+                s.get("ville_raw", ""),
+                s.get("cp_raw",    ""),
+                s.get("pays_raw",  ""),
+            )
+
     for i, addr in enumerate(unique_addresses):
         if progress_cb:
             progress_cb(f"🌍 Géocodage {i+1}/{total_geo} : {addr[:50]}...")
-        coords = geocode_address(addr)
+        ville_r, cp_r, pays_r = addr_meta.get(addr, ("", "", ""))
+        coords = geocode_with_fallback(addr, ville_r, cp_r, pays_r)
         geo_cache[addr] = coords
         if coords is None:
-            st.warning(f"⚠️ Géocodage échoué : {addr}")
+            st.warning(f"⚠️ Géocodage échoué (tous niveaux) : {addr}")
 
     # ── Calcul km totaux par dossier ──────────────────────────
     dossier_km = {}
