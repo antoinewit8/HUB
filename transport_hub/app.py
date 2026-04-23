@@ -319,33 +319,8 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════
-# ELEVATION
-# ══════════════════════════════════════════════════════════════
-st.markdown('<div class="cb-divider"></div>', unsafe_allow_html=True)
-st.markdown("<div class=\"cb-section-title\"><span class=\"dot\"></span> Niveaux d'élévation</div>", unsafe_allow_html=True)
-st.markdown("""
-<div class="cb-elevation-row">
-    <div><div class="cb-elev-card">Repos</div><div class="cb-elev-lbl">no shadow</div></div>
-    <div><div class="cb-elev-card glow">Pulse glow</div><div class="cb-elev-lbl">KPI · boucle 4s</div></div>
-    <div><div class="cb-elev-card hover">Hover</div><div class="cb-elev-lbl">0 12px 40px / 15%</div></div>
-</div>
-""", unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════
-# ICONOGRAPHIE
-# ══════════════════════════════════════════════════════════════
-st.markdown('<div class="cb-divider"></div>', unsafe_allow_html=True)
-st.markdown('<div class="cb-section-title"><span class="dot"></span> Iconographie</div>', unsafe_allow_html=True)
-emojis = [
-    ("🚛","fleet"), ("🗺️","map"), ("📍","pin"),  ("⛽","fuel"),
-    ("🔗","link"),  ("📂","upload"), ("📥","download"), ("📊","chart"),
-    ("⚙️","settings"), ("🔍","search"), ("🚀","launch"), ("🗑️","delete"),
-]
-cols = st.columns(6)
-for i, (emoji, cap) in enumerate(emojis):
-    with cols[i % 6]:
-        st.markdown(f'<div class="cb-emoji-cell"><span class="cb-emoji-icon">{emoji}</span><span class="cb-emoji-cap">{cap}</span></div>', unsafe_allow_html=True)
+
 
 # ══════════════════════════════════════════════════════════════
 # INFO + NOTES
