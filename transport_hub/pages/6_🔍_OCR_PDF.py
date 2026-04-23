@@ -1,10 +1,8 @@
 import streamlit as st
 import tempfile
 import os
-import io
 import subprocess
 from pathlib import Path
-import shutil
 
 st.set_page_config(page_title="OCR & Amélioration PDF", page_icon="🔍", layout="wide")
 
@@ -14,15 +12,9 @@ st.markdown("""
 :root {
     --cb-navy: #1B3A5C;
     --cb-navy-light: #244B73;
-    --cb-navy-dark: #122840;
     --cb-accent: #4A90D9;
     --cb-accent-light: #6BA3E0;
-    --cb-white: #FFFFFF;
-    --cb-gray-200: #D8DDE6;
     --cb-gray-400: #8E99A9;
-    --cb-success: #2ECC71;
-    --cb-warning: #F39C12;
-    --cb-danger: #E74C3C;
 }
 .stApp { background: linear-gradient(160deg, #0F1923 0%, #152A3E 40%, #1B3A5C 100%); }
 section[data-testid="stSidebar"] {
@@ -35,8 +27,10 @@ section[data-testid="stSidebar"] {
     border-radius: 14px;
     padding: 1.2rem 1.4rem;
     margin-bottom: 1rem;
+    color: #D8DDE6;
+    line-height: 1.6;
 }
-.cb-card h4 { color: var(--cb-accent-light); margin: 0 0 0.5rem 0; font-size: 0.95rem; }
+.cb-card h4 { color: var(--cb-accent-light); margin: 0 0 0.8rem 0; font-size: 1rem; }
 .stButton > button {
     background: linear-gradient(135deg, var(--cb-navy) 0%, var(--cb-navy-light) 100%) !important;
     color: white !important;
@@ -55,32 +49,22 @@ section[data-testid="stSidebar"] {
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🔍 Amélioration & OCR de PDF scannés")
-st.caption("Améliore la qualité visuelle de vos scans + ajoute une couche texte cherchable")
-st.divider()
-
-# ─── Imports lourds ─────────────────────────────────────────────────────────
+# ─── Imports ─────────────────────────────────────────────────────────────────
 try:
     from pdf2image import convert_from_bytes
     from PIL import Image, ImageEnhance, ImageFilter
     import img2pdf
     import ocrmypdf
-    DEPS_OK = True
 except ImportError as e:
-    st.error(f"❌ Dépendance manquante : `{e}` — vérifiez `requirements.txt`")
-    DEPS_OK = False
+    st.error(f"❌ Dépendance manquante : `{e}`")
     st.stop()
 
-# ─── Langues disponibles ────────────────────────────────────────────────────
+# ─── Langues disponibles ─────────────────────────────────────────────────────
 def get_available_langs() -> list[str]:
     try:
-        result = subprocess.run(
-            ["tesseract", "--list-langs"],
-            capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(["tesseract", "--list-langs"], capture_output=True, text=True, timeout=10)
         lines = result.stdout.strip().splitlines()
-        langs = [l.strip() for l in lines if l.strip() and not l.startswith("List") and l.strip() != "osd"]
-        return sorted(langs)
+        return sorted([l.strip() for l in lines if l.strip() and not l.startswith("List") and l.strip() != "osd"])
     except Exception:
         return ["fra", "eng"]
 
@@ -91,226 +75,305 @@ LANG_LABELS = {
 available_langs = get_available_langs()
 lang_options = {LANG_LABELS.get(l, l): l for l in available_langs}
 
-# ─── Upload ─────────────────────────────────────────────────────────────────
-uploaded = st.file_uploader(
-    "📂 Chargez votre PDF scanné",
-    type=["pdf"],
-    help="PDF issu d'un scan — flou, faible contraste, écriture peu lisible"
-)
-
-if not uploaded:
-    st.info("👆 Chargez un PDF pour démarrer")
-    st.stop()
-
-st.success(f"✅ **{uploaded.name}** — {uploaded.size / 1024:.0f} Ko")
+# ─── Titre ───────────────────────────────────────────────────────────────────
+st.title("🔍 OCR & Amélioration PDF")
+st.caption("Deux outils indépendants pour vos PDFs scannés")
 st.divider()
 
-# ─── Options ────────────────────────────────────────────────────────────────
-st.subheader("⚙️ Paramètres")
+tab_ocr, tab_enhance = st.tabs(["📄 OCR — Texte sélectionnable", "✨ Amélioration visuelle"])
 
-col1, col2, col3 = st.columns(3)
 
-with col1:
-    st.markdown('<div class="cb-card"><h4>🖼️ Amélioration image</h4>', unsafe_allow_html=True)
-    enhance = st.checkbox("Activer l'amélioration visuelle", value=True,
-                          help="Applique des filtres sur chaque page pour améliorer la lisibilité")
-    contrast = st.slider("Contraste", 0.5, 3.0, 1.8, 0.1,
-                         help="1.0 = original · >1 = plus contrasté")
-    sharpness = st.slider("Netteté", 0.5, 3.0, 2.0, 0.1,
-                          help="1.0 = original · >1 = plus net")
-    brightness = st.slider("Luminosité", 0.5, 2.0, 1.1, 0.1,
-                            help="1.0 = original · >1 = plus lumineux")
-    grayscale = st.checkbox("Convertir en niveaux de gris", value=False,
-                            help="Réduit le poids du fichier, améliore les scans en N&B")
-    st.markdown('</div>', unsafe_allow_html=True)
+# ════════════════════════════════════════════════════════════════════════════
+# ONGLET 1 — OCR
+# ════════════════════════════════════════════════════════════════════════════
+with tab_ocr:
 
-with col2:
-    st.markdown('<div class="cb-card"><h4>🔍 OCR</h4>', unsafe_allow_html=True)
-    do_ocr = st.checkbox("Ajouter couche texte (OCR)", value=True,
-                         help="Rend le PDF cherchable et copiable")
-    if lang_options:
-        selected_label = st.selectbox("Langue", list(lang_options.keys()))
-        selected_lang = lang_options[selected_label]
+    st.markdown("""
+    <div class="cb-card">
+    <h4>📄 À quoi ça sert ?</h4>
+    Votre PDF scanné est une image — le texte n'est pas sélectionnable ni modifiable dans Adobe.<br>
+    L'OCR ajoute une <strong>couche texte invisible</strong> par-dessus le scan : vous pourrez ensuite
+    sélectionner, copier et modifier le texte directement dans <strong>Adobe Acrobat</strong>.
+    </div>
+    """, unsafe_allow_html=True)
+
+    uploaded_ocr = st.file_uploader(
+        "📂 Chargez votre PDF scanné",
+        type=["pdf"],
+        key="upload_ocr",
+        help="PDF dont le texte n'est pas sélectionnable"
+    )
+
+    if not uploaded_ocr:
+        st.info("👆 Chargez un PDF pour démarrer l'OCR")
     else:
-        selected_lang = "fra"
-    deskew = st.checkbox("Redresser les pages (deskew)", value=True)
-    rotate = st.checkbox("Rotation automatique", value=False)
-    force_ocr = st.checkbox("Forcer l'OCR", value=False,
-                            help="Re-OCRise même si du texte existe déjà")
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.success(f"✅ **{uploaded_ocr.name}** — {uploaded_ocr.size / 1024:.0f} Ko")
+        st.divider()
 
-with col3:
-    st.markdown('<div class="cb-card"><h4>📄 Sortie</h4>', unsafe_allow_html=True)
-    dpi = st.select_slider("Résolution (DPI)", options=[150, 200, 300, 400], value=300,
-                           help="300 DPI recommandé — 400 = qualité max mais lent")
-    output_type = st.selectbox("Format", ["pdfa", "pdf", "pdfa-2", "pdfa-3"], index=0)
-    sidecar = st.checkbox("Générer fichier texte (.txt)", value=False,
-                          help="Exporte le texte OCR extrait en parallèle")
-    st.markdown('</div>', unsafe_allow_html=True)
+        col1, col2 = st.columns(2)
 
-st.divider()
-
-# ─── Traitement ─────────────────────────────────────────────────────────────
-if st.button("🚀 Lancer le traitement", type="primary"):
-
-    pdf_bytes = uploaded.read()
-    output_name = Path(uploaded.name).stem + "_ameliore.pdf"
-
-    progress = st.progress(0, text="Lecture du PDF…")
-    status_box = st.empty()
-
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-
-            # ── Étape 1 : Conversion PDF → images ──────────────────────────
-            progress.progress(10, text="Conversion en images…")
-            pages = convert_from_bytes(pdf_bytes, dpi=dpi)
-            total_pages = len(pages)
-            status_box.info(f"📄 {total_pages} page(s) détectée(s)")
-
-            enhanced_images = []
-
-            for i, page in enumerate(pages):
-                pct = 10 + int((i / total_pages) * 50)
-                progress.progress(pct, text=f"Amélioration page {i+1}/{total_pages}…")
-
-                if enhance:
-                    # Niveaux de gris
-                    if grayscale:
-                        page = page.convert("L").convert("RGB")
-
-                    # Contraste
-                    page = ImageEnhance.Contrast(page).enhance(contrast)
-
-                    # Luminosité
-                    page = ImageEnhance.Brightness(page).enhance(brightness)
-
-                    # Netteté
-                    page = ImageEnhance.Sharpness(page).enhance(sharpness)
-
-                    # Filtre de netteté supplémentaire si valeur élevée
-                    if sharpness >= 2.0:
-                        page = page.filter(ImageFilter.SHARPEN)
-
-                enhanced_images.append(page)
-
-            # ── Étape 2 : Recompilation en PDF ─────────────────────────────
-            progress.progress(65, text="Recompilation du PDF…")
-
-            image_paths = []
-            for i, img in enumerate(enhanced_images):
-                img_path = os.path.join(tmpdir, f"page_{i:04d}.jpg")
-                img.save(img_path, "JPEG", quality=95, optimize=True)
-                image_paths.append(img_path)
-
-            enhanced_pdf_path = os.path.join(tmpdir, "enhanced.pdf")
-            with open(enhanced_pdf_path, "wb") as f:
-                f.write(img2pdf.convert(image_paths))
-
-            # ── Étape 3 : OCR ──────────────────────────────────────────────
-            if do_ocr:
-                progress.progress(75, text="OCR en cours…")
-
-                output_path  = os.path.join(tmpdir, "output.pdf")
-                sidecar_path = os.path.join(tmpdir, "sidecar.txt") if sidecar else None
-
-                exit_code = ocrmypdf.ocr(
-                    enhanced_pdf_path,
-                    output_path,
-                    language=[selected_lang],
-                    deskew=deskew,
-                    rotate_pages=rotate,
-                    output_type=output_type,
-                    optimize=0,          # on a déjà optimisé les images
-                    force_ocr=force_ocr,
-                    sidecar=sidecar_path,
-                    progress_bar=False,
-                )
-
-                if exit_code != ocrmypdf.ExitCode.ok:
-                    status_box.error(f"OCRmyPDF a retourné le code : {exit_code}")
-                    st.stop()
-
-                final_path = output_path
+        with col1:
+            if lang_options:
+                selected_label = st.selectbox("🌐 Langue du document", list(lang_options.keys()), key="lang_ocr")
+                selected_lang = lang_options[selected_label]
             else:
-                final_path = enhanced_pdf_path
+                selected_lang = "fra"
+            deskew    = st.checkbox("📐 Redresser les pages penchées", value=True, key="deskew_ocr")
+            rotate    = st.checkbox("🔄 Correction automatique de l'orientation", value=False, key="rotate_ocr")
+            force_ocr = st.checkbox("⚡ Forcer l'OCR (texte déjà présent)", value=False, key="force_ocr")
 
-            # ── Étape 4 : Résultat ─────────────────────────────────────────
-            progress.progress(95, text="Finalisation…")
+        with col2:
+            output_type = st.selectbox("📄 Format de sortie", ["pdfa", "pdf", "pdfa-2", "pdfa-3"],
+                                       index=0, key="output_ocr",
+                                       help="PDF/A recommandé pour l'archivage long terme")
+            sidecar = st.checkbox("📝 Générer un fichier texte (.txt)", value=False, key="sidecar_ocr",
+                                  help="Exporte le texte OCR extrait en fichier séparé")
 
-            with open(final_path, "rb") as f:
-                result_bytes = f.read()
+        st.divider()
 
-            sidecar_text = ""
-            if sidecar and do_ocr and sidecar_path and os.path.exists(sidecar_path):
-                with open(sidecar_path, "r", encoding="utf-8", errors="ignore") as f:
-                    sidecar_text = f.read()
+        if st.button("🚀 Lancer l'OCR", type="primary", key="btn_ocr"):
+            pdf_bytes   = uploaded_ocr.read()
+            output_name = Path(uploaded_ocr.name).stem + "_OCR.pdf"
+            progress    = st.progress(0, text="Préparation…")
+            status_box  = st.empty()
 
-            progress.progress(100, text="✅ Traitement terminé !")
-            status_box.success("Traitement terminé avec succès !")
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    input_path   = os.path.join(tmpdir, "input.pdf")
+                    output_path  = os.path.join(tmpdir, "output.pdf")
+                    sidecar_path = os.path.join(tmpdir, "sidecar.txt") if sidecar else None
 
-            # ── Résultats ──────────────────────────────────────────────────
-            st.divider()
-            st.subheader("📥 Résultat")
+                    with open(input_path, "wb") as f:
+                        f.write(pdf_bytes)
 
-            m1, m2, m3 = st.columns(3)
-            orig_ko   = len(pdf_bytes) / 1024
-            result_ko = len(result_bytes) / 1024
-            delta     = result_ko - orig_ko
-            sign      = "+" if delta > 0 else ""
+                    progress.progress(20, text="OCR en cours…")
 
-            m1.metric("Pages traitées", f"{total_pages}")
-            m2.metric("Taille originale", f"{orig_ko:.0f} Ko")
-            m3.metric("Taille finale", f"{result_ko:.0f} Ko", delta=f"{sign}{delta:.0f} Ko")
-
-            st.download_button(
-                label="⬇️ Télécharger le PDF amélioré",
-                data=result_bytes,
-                file_name=output_name,
-                mime="application/pdf",
-                type="primary",
-                use_container_width=True,
-            )
-
-            if sidecar_text.strip():
-                with st.expander("📝 Texte extrait (sidecar)", expanded=False):
-                    st.text_area(
-                        "Texte OCR",
-                        value=sidecar_text[:5000] + ("…" if len(sidecar_text) > 5000 else ""),
-                        height=300,
-                    )
-                    st.download_button(
-                        "⬇️ Télécharger le texte (.txt)",
-                        data=sidecar_text.encode("utf-8"),
-                        file_name=Path(uploaded.name).stem + "_texte.txt",
-                        mime="text/plain",
+                    exit_code = ocrmypdf.ocr(
+                        input_path,
+                        output_path,
+                        language=[selected_lang],
+                        deskew=deskew,
+                        rotate_pages=rotate,
+                        output_type=output_type,
+                        optimize=0,
+                        force_ocr=force_ocr,
+                        sidecar=sidecar_path,
+                        progress_bar=False,
                     )
 
-    except ocrmypdf.exceptions.PriorOcrFoundError:
-        progress.empty()
-        st.warning("⚠️ Ce PDF contient déjà une couche texte. Activez **'Forcer l'OCR'** pour le re-traiter.")
-    except ocrmypdf.exceptions.MissingDependencyError as e:
-        progress.empty()
-        st.error(f"❌ Dépendance manquante : {e}")
-    except Exception as e:
-        progress.empty()
-        st.error(f"❌ Erreur : {e}")
-        raise e
+                    progress.progress(90, text="Finalisation…")
 
-# ─── Infos ───────────────────────────────────────────────────────────────────
-with st.expander("ℹ️ Comment ça fonctionne ?"):
-    st.markdown(f"""
-**Pipeline de traitement :**
-1. 🖼️ Conversion de chaque page PDF en image haute résolution (DPI choisi)
-2. ✨ Application des filtres Pillow : contraste, luminosité, netteté
-3. 📄 Recompilation en PDF
-4. 🔍 OCR via OCRmyPDF + Tesseract (couche texte invisible)
+                    if exit_code == ocrmypdf.ExitCode.ok:
+                        with open(output_path, "rb") as f:
+                            result_bytes = f.read()
 
-**Langues installées :** `{', '.join(available_langs) or 'aucune détectée'}`
+                        sidecar_text = ""
+                        if sidecar_path and os.path.exists(sidecar_path):
+                            with open(sidecar_path, "r", encoding="utf-8", errors="ignore") as f:
+                                sidecar_text = f.read()
 
-**Conseils :**
-- Pour un scan flou : augmenter la **netteté** à 2.5+
-- Pour un scan sombre : augmenter la **luminosité** à 1.3+
-- Pour un scan avec fond grisâtre : augmenter le **contraste** à 2.0+
-- Pour réduire le poids : activer **niveaux de gris** si le document est en N&B
+                        progress.progress(100, text="✅ OCR terminé !")
+                        status_box.success("✅ OCR terminé — le texte est maintenant sélectionnable dans Adobe.")
+
+                        st.divider()
+                        m1, m2, m3 = st.columns(3)
+                        orig_ko   = len(pdf_bytes) / 1024
+                        result_ko = len(result_bytes) / 1024
+                        delta     = result_ko - orig_ko
+                        sign      = "+" if delta > 0 else ""
+                        m1.metric("Taille originale", f"{orig_ko:.0f} Ko")
+                        m2.metric("Taille OCRisée",   f"{result_ko:.0f} Ko", delta=f"{sign}{delta:.0f} Ko")
+                        m3.metric("Langue utilisée",  selected_label)
+
+                        st.download_button(
+                            "⬇️ Télécharger le PDF OCRisé",
+                            data=result_bytes,
+                            file_name=output_name,
+                            mime="application/pdf",
+                            type="primary",
+                            use_container_width=True,
+                        )
+
+                        if sidecar_text.strip():
+                            with st.expander("📝 Aperçu du texte extrait", expanded=False):
+                                st.text_area("Texte OCR",
+                                             value=sidecar_text[:5000] + ("…" if len(sidecar_text) > 5000 else ""),
+                                             height=300)
+                                st.download_button(
+                                    "⬇️ Télécharger le texte (.txt)",
+                                    data=sidecar_text.encode("utf-8"),
+                                    file_name=Path(uploaded_ocr.name).stem + "_texte.txt",
+                                    mime="text/plain",
+                                )
+                    else:
+                        status_box.error(f"OCRmyPDF a retourné le code : {exit_code}")
+
+            except ocrmypdf.exceptions.PriorOcrFoundError:
+                progress.empty()
+                st.warning("⚠️ Ce PDF contient déjà une couche texte. Activez **'Forcer l'OCR'**.")
+            except ocrmypdf.exceptions.MissingDependencyError as e:
+                progress.empty()
+                st.error(f"❌ Dépendance manquante : {e}")
+            except Exception as e:
+                progress.empty()
+                st.error(f"❌ Erreur : {e}")
+                raise e
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# ONGLET 2 — AMÉLIORATION VISUELLE
+# ════════════════════════════════════════════════════════════════════════════
+with tab_enhance:
+
+    st.markdown("""
+    <div class="cb-card">
+    <h4>✨ À quoi ça sert ?</h4>
+    Améliore la <strong>qualité visuelle</strong> d'un scan flou, sombre ou peu lisible.<br>
+    Agit sur le contraste, la luminosité et la netteté de chaque page.<br>
+    Optionnellement, ajoute aussi la couche OCR sur le PDF amélioré.
+    </div>
+    """, unsafe_allow_html=True)
+
+    uploaded_enh = st.file_uploader(
+        "📂 Chargez votre PDF scanné",
+        type=["pdf"],
+        key="upload_enh",
+        help="PDF flou, sombre ou avec écriture peu lisible"
+    )
+
+    if not uploaded_enh:
+        st.info("👆 Chargez un PDF pour démarrer l'amélioration")
+    else:
+        st.success(f"✅ **{uploaded_enh.name}** — {uploaded_enh.size / 1024:.0f} Ko")
+        st.divider()
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.markdown("**🖼️ Filtres image**")
+            contrast   = st.slider("Contraste",  0.5, 3.0, 1.8, 0.1, key="contrast_enh",
+                                   help="1.0 = original · >1.5 recommandé pour scans pâles")
+            sharpness  = st.slider("Netteté",    0.5, 3.0, 2.0, 0.1, key="sharp_enh",
+                                   help="1.0 = original · >2.0 pour scans flous")
+            brightness = st.slider("Luminosité", 0.5, 2.0, 1.1, 0.1, key="bright_enh",
+                                   help="1.0 = original · >1.2 pour scans sombres")
+            grayscale  = st.checkbox("Convertir en niveaux de gris", value=False, key="gray_enh",
+                                     help="Recommandé pour les documents N&B — réduit le poids")
+
+        with col2:
+            st.markdown("**⚙️ Rendu**")
+            dpi          = st.select_slider("Résolution (DPI)", options=[150, 200, 300, 400],
+                                            value=300, key="dpi_enh",
+                                            help="300 = recommandé · 400 = qualité max (plus lent)")
+            jpeg_quality = st.slider("Qualité JPEG", 70, 100, 92, 1, key="jpeg_enh",
+                                     help="92 = bon équilibre · 100 = qualité max")
+
+        with col3:
+            st.markdown("**🔍 OCR optionnel**")
+            do_ocr_enh = st.checkbox("Ajouter couche OCR après amélioration", value=False, key="ocr_enh",
+                                     help="Rend le PDF résultant cherchable et modifiable dans Adobe")
+            if do_ocr_enh and lang_options:
+                selected_label_enh = st.selectbox("Langue", list(lang_options.keys()), key="lang_enh")
+                selected_lang_enh  = lang_options[selected_label_enh]
+            else:
+                selected_lang_enh = "fra"
+
+        st.divider()
+
+        with st.expander("💡 Conseils selon votre type de scan"):
+            st.markdown("""
+| Problème | Contraste | Luminosité | Netteté | Autre |
+|---|---|---|---|---|
+| Scan pâle / délavé | **2.5** | 1.1 | 2.0 | — |
+| Scan sombre | 1.8 | **1.4** | 2.0 | — |
+| Scan flou | 1.8 | 1.1 | **2.5** | — |
+| Fond grisâtre | **2.2** | 1.0 | 1.8 | — |
+| Document N&B | 2.0 | 1.0 | 2.0 | ✅ Niveaux de gris |
 """)
+
+        if st.button("🚀 Lancer l'amélioration", type="primary", key="btn_enh"):
+            pdf_bytes   = uploaded_enh.read()
+            output_name = Path(uploaded_enh.name).stem + "_ameliore.pdf"
+            progress    = st.progress(0, text="Lecture du PDF…")
+            status_box  = st.empty()
+
+            try:
+                with tempfile.TemporaryDirectory() as tmpdir:
+
+                    # ── Conversion PDF → images ─────────────────────────────
+                    progress.progress(10, text="Conversion en images…")
+                    pages = convert_from_bytes(pdf_bytes, dpi=dpi)
+                    total_pages = len(pages)
+                    status_box.info(f"📄 {total_pages} page(s) à traiter")
+
+                    image_paths = []
+                    for i, page in enumerate(pages):
+                        pct = 10 + int((i / total_pages) * 55)
+                        progress.progress(pct, text=f"Amélioration page {i+1}/{total_pages}…")
+
+                        if grayscale:
+                            page = page.convert("L").convert("RGB")
+                        page = ImageEnhance.Contrast(page).enhance(contrast)
+                        page = ImageEnhance.Brightness(page).enhance(brightness)
+                        page = ImageEnhance.Sharpness(page).enhance(sharpness)
+                        if sharpness >= 2.0:
+                            page = page.filter(ImageFilter.SHARPEN)
+
+                        img_path = os.path.join(tmpdir, f"page_{i:04d}.jpg")
+                        page.save(img_path, "JPEG", quality=jpeg_quality, optimize=True)
+                        image_paths.append(img_path)
+
+                    # ── Recompilation PDF ───────────────────────────────────
+                    progress.progress(68, text="Recompilation du PDF…")
+                    enhanced_pdf_path = os.path.join(tmpdir, "enhanced.pdf")
+                    with open(enhanced_pdf_path, "wb") as f:
+                        f.write(img2pdf.convert(image_paths))
+
+                    # ── OCR optionnel ───────────────────────────────────────
+                    if do_ocr_enh:
+                        progress.progress(78, text="OCR en cours…")
+                        output_path = os.path.join(tmpdir, "output.pdf")
+                        ocrmypdf.ocr(
+                            enhanced_pdf_path,
+                            output_path,
+                            language=[selected_lang_enh],
+                            deskew=False,
+                            optimize=0,
+                            force_ocr=True,
+                            progress_bar=False,
+                        )
+                        final_path = output_path
+                    else:
+                        final_path = enhanced_pdf_path
+
+                    # ── Résultat ────────────────────────────────────────────
+                    progress.progress(95, text="Finalisation…")
+                    with open(final_path, "rb") as f:
+                        result_bytes = f.read()
+
+                    progress.progress(100, text="✅ Terminé !")
+                    status_box.success("✅ Amélioration terminée !")
+
+                    st.divider()
+                    m1, m2, m3 = st.columns(3)
+                    orig_ko   = len(pdf_bytes) / 1024
+                    result_ko = len(result_bytes) / 1024
+                    delta     = result_ko - orig_ko
+                    sign      = "+" if delta > 0 else ""
+                    m1.metric("Pages traitées",   f"{total_pages}")
+                    m2.metric("Taille originale", f"{orig_ko:.0f} Ko")
+                    m3.metric("Taille finale",    f"{result_ko:.0f} Ko", delta=f"{sign}{delta:.0f} Ko")
+
+                    st.download_button(
+                        "⬇️ Télécharger le PDF amélioré",
+                        data=result_bytes,
+                        file_name=output_name,
+                        mime="application/pdf",
+                        type="primary",
+                        use_container_width=True,
+                    )
+
+            except Exception as e:
+                progress.empty()
+                st.error(f"❌ Erreur : {e}")
+                raise e
