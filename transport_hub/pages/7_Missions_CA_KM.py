@@ -93,31 +93,102 @@ def geocode_address(address: str):
     return _ptv_geocode_address(address)
 
 
-@st.cache_data(show_spinner=False)
+# Correspondance code court → ISO2 pour l'endpoint by-postal-code
+PAYS_TO_ISO2 = {
+    "F": "FR", "B": "BE", "D": "DE", "L": "LU", "I": "IT",
+    "E": "ES", "A": "AT", "P": "PT", "CH": "CH", "GB": "GB",
+    "NL": "NL", "FR": "FR", "BE": "BE", "DE": "DE", "LU": "LU",
+    "IT": "IT", "ES": "ES", "AT": "AT", "PT": "PT",
+}
+
+def _ptv_by_text(query: str) -> tuple | None:
+    """Appel direct PTV by-text, sans cache."""
+    if not query:
+        return None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                "https://api.myptv.com/geocoding/v1/locations/by-text",
+                params={"searchText": query},
+                headers=HEADERS,
+                timeout=15,
+            )
+            if resp.status_code == 429:
+                time.sleep(RETRY_DELAY * attempt)
+                continue
+            if resp.status_code != 200:
+                return None
+            locs = resp.json().get("locations", [])
+            if locs:
+                pos = locs[0]["referencePosition"]
+                return (pos["latitude"], pos["longitude"])
+            return None
+        except Exception:
+            time.sleep(RETRY_DELAY)
+    return None
+
+
+def _ptv_by_postal_code(cp: str, iso2: str) -> tuple | None:
+    """Appel direct PTV by-postal-code, sans cache."""
+    if not cp or not iso2:
+        return None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            resp = requests.get(
+                "https://api.myptv.com/geocoding/v1/locations/by-postal-code",
+                params={"postalCode": cp, "countryCode": iso2},
+                headers=HEADERS,
+                timeout=15,
+            )
+            if resp.status_code == 429:
+                time.sleep(RETRY_DELAY * attempt)
+                continue
+            if resp.status_code in (400, 404):
+                return None
+            if resp.status_code != 200:
+                return None
+            locs = resp.json().get("locations", [])
+            if locs:
+                pos = locs[0]["referencePosition"]
+                return (pos["latitude"], pos["longitude"])
+            return None
+        except Exception:
+            time.sleep(RETRY_DELAY)
+    return None
+
+
 def geocode_with_fallback(adresse_complete: str, ville: str, cp: str, pays: str) -> tuple | None:
     """
-    Géocodage en cascade :
-    1. Adresse complète (rue + localité + CP + pays)
-    2. Localité + CP + pays  (sans la rue)
-    3. CP + pays             (sans la localité)
+    Géocodage en cascade — appels directs PTV sans cache intermédiaire :
+    1. ville + CP + pays  (le plus fiable : pas de bruit de rue)
+    2. CP seul via by-postal-code
+    3. ville + pays
+    4. Adresse complète en dernier recours
     Retourne (lat, lon) ou None.
     """
     pays_full = PAYS_MAP.get(pays.upper(), pays) if pays else ""
+    iso2      = PAYS_TO_ISO2.get(pays.upper(), pays.upper() if len(pays) == 2 else "")
 
-    candidates = []
-    if adresse_complete:
-        candidates.append(adresse_complete)
+    # Niveau 1 : ville + CP + pays (requête propre, très bien géocodée par PTV)
     if ville and cp and pays_full:
-        candidates.append(f"{ville}, {cp}, {pays_full}")
-    elif ville and pays_full:
-        candidates.append(f"{ville}, {pays_full}")
-    if cp and pays_full:
-        candidates.append(f"{cp}, {pays_full}")
+        r = _ptv_by_text(f"{ville}, {cp}, {pays_full}")
+        if r: return r
 
-    for addr in candidates:
-        result = _ptv_geocode_address(addr)
-        if result:
-            return result
+    # Niveau 2 : by-postal-code (endpoint dédié, très fiable)
+    if cp and iso2:
+        r = _ptv_by_postal_code(cp, iso2)
+        if r: return r
+
+    # Niveau 3 : ville + pays
+    if ville and pays_full:
+        r = _ptv_by_text(f"{ville}, {pays_full}")
+        if r: return r
+
+    # Niveau 4 : adresse complète (parfois trop de bruit pour PTV)
+    if adresse_complete:
+        r = _ptv_by_text(adresse_complete)
+        if r: return r
+
     return None
 
 
@@ -483,11 +554,14 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
     for _, row in df_ch.iterrows():
         for s in row["stops_data"]:
             all_stops_flat.append({
-                "dossier":  row["dossier"],
-                "activite": s["activite"],
-                "datetime": s["datetime"],
-                "adresse":  s["adresse"],
-                "localite": s["localite"],
+                "dossier":   row["dossier"],
+                "activite":  s["activite"],
+                "datetime":  s["datetime"],
+                "adresse":   s["adresse"],
+                "localite":  s["localite"],
+                "ville_raw": s.get("ville_raw", ""),
+                "cp_raw":    s.get("cp_raw",    ""),
+                "pays_raw":  s.get("pays_raw",  ""),
             })
 
     # Trier globalement par datetime
