@@ -143,15 +143,14 @@ if st.button("🚀 Lancer l'OCR", type="primary"):
                 language=[selected_lang],
                 deskew=deskew,
                 rotate_pages=rotate,
-                clean=clean,               # ← ajouter
-                clean_final=clean_final,   # ← ajouter
                 output_type=output_type,
-                optimize=optimize,
+                optimize=0,            # ← 0 = aucune compression des images
+                jpeg_quality=100,      # ← qualité JPEG maximale
+                png_quality=100,       # ← qualité PNG maximale  
                 force_ocr=force_ocr,
                 sidecar=sidecar_path,
                 progress_bar=False,
             )
-
             progress.progress(90, text="Finalisation…")
 
             if exit_code == ocrmypdf.ExitCode.ok:
