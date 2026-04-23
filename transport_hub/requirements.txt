@@ -12,4 +12,7 @@ jinja2
 pdfplumber
 beautifulsoup4
 xlrd==2.0.1
+pdf2image
+img2pdf
+Pillow
 ocrmypdf
