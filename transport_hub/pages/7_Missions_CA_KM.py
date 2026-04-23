@@ -793,6 +793,18 @@ if file_missions and file_ca:
             st.error(f"❌ Erreur lecture fichiers : {e}")
             st.stop()
 
+    with st.expander("🔍 Debug colonnes détectées", expanded=False):
+        st.markdown("**Fichier Missions** — colonnes brutes :")
+        _df_m_raw = pd.read_excel(file_missions, dtype=str, nrows=2)
+        st.write(list(_df_m_raw.columns))
+        st.markdown("**Fichier CA** — colonnes brutes :")
+        _df_ca_raw2 = pd.read_excel(file_ca, dtype=str, nrows=2)
+        st.write(list(_df_ca_raw2.columns))
+        st.markdown("**Fichier CA** — 3 premières lignes :")
+        st.dataframe(_df_ca_raw2)
+        st.markdown(f"**CA parsé** — colonnes : `{list(df_ca_raw.columns)}`")
+        st.dataframe(df_ca_raw.head(5))
+
     df_cons = consolidate(df_missions, df_ca_raw)
 
     # ── KPIs rapides ──────────────────────────────────────────
