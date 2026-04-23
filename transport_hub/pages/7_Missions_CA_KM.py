@@ -95,30 +95,35 @@ def geocode_address(address: str):
 
 def build_address_string(row: pd.Series) -> str:
     """
-    Construit une adresse géocodable en réutilisant parse_origin_from_parts
-    de excel_handler_km (PAYS_MAP, CP_LENGTHS, CITY_CORRECTIONS, ZONE_CORRECTIONS).
+    Construit une adresse géocodable depuis les colonnes exactes de l'export missions :
+      Localité (M) + Code postal (L) + Code pays (J) → via parse_origin_from_parts
+      + préfixe rue si Adresse (H) et/ou Numéro (I) présents.
+
+    Réutilise PAYS_MAP, CP_LENGTHS, CITY_CORRECTIONS de excel_handler_km.
     """
-    ville  = str(row.get("localite",     "") or "").strip()
-    cp     = str(row.get("code_postal",  "") or "").strip()
-    pays   = str(row.get("code_pays",    "") or "").strip().upper()
-    adresse= str(row.get("adresse",      "") or "").strip()
-    numero = str(row.get("numero",       "") or "").strip()
-    nom    = str(row.get("nom1",         "") or "").strip()
+    def clean(v): 
+        v = str(v or "").strip()
+        return "" if v.lower() in ("nan", "none") else v
 
-    # Nettoyage des valeurs "nan"
-    def clean(v): return "" if v.lower() == "nan" else v
-    ville, cp, pays, adresse, numero, nom = (clean(x) for x in [ville, cp, pays, adresse, numero, nom])
+    ville   = clean(row.get("localite",    ""))
+    cp      = clean(row.get("code_postal", ""))
+    pays    = clean(row.get("code_pays",   "")).upper()
+    adresse = clean(row.get("adresse",     ""))
+    numero  = clean(row.get("numero",      ""))
+    nom     = clean(row.get("nom1",        ""))
 
-    # Adresse complète via la même fonction que excel_handler_km
+    # Construction via parse_origin_from_parts (gère PAYS_MAP + CP_LENGTHS + corrections)
     addr = parse_origin_from_parts(ville, cp, pays)
 
-    # Si on a une rue en plus, on la préfixe (utile pour le géocodage précis)
-    rue = f"{numero} {adresse}".strip() if numero else adresse
+    # Rue = "Numéro Adresse" si les deux sont présents
+    rue = " ".join(p for p in [numero, adresse] if p).strip()
+
     if rue and addr:
         addr = f"{rue}, {addr}"
     elif rue:
         addr = rue
 
+    # Fallback sur le nom de l'entreprise si rien d'autre
     return addr if addr else nom
 
 
@@ -190,56 +195,101 @@ def normalize_activite(val: str) -> str:
     return str(val).strip().upper()
 
 
+def _norm_col(s: str) -> str:
+    """Normalise un nom de colonne : minuscules, sans accents, sans caractères spéciaux."""
+    s = str(s).strip().lower()
+    for src, dst in [("é","e"),("è","e"),("ê","e"),("à","a"),("â","a"),
+                     ("ô","o"),("û","u"),("î","i"),("ù","u"),("ç","c")]:
+        s = s.replace(src, dst)
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
 def detect_col(df: pd.DataFrame, keywords: list) -> str | None:
-    """Trouve la première colonne dont le nom normalisé contient un des mots-clés."""
+    """Trouve la première colonne dont le nom normalisé correspond à un mot-clé (exact ou contenance)."""
     for col in df.columns:
-        col_n = str(col).strip().lower().replace(" ", "").replace(".", "").replace("°", "")
+        col_n = _norm_col(col)
         for kw in keywords:
-            if kw in col_n:
+            kw_n = _norm_col(kw)
+            if kw_n == col_n or kw_n in col_n:
                 return col
     return None
 
 
+# ── Noms de colonnes exacts de l'export missions ───────────────────────────
+# A: N° Dossier  B: Activité    C: Date        D: Heure
+# E: Type de transport          F: Nom 1        G: Nom 2
+# H: Adresse     I: Numéro      J: Code pays    K: Département
+# L: Code postal M: Localité    N: Produit
+# O: Chauffeur   Q: Immat. tracteur  R: Remorque
+
+MISSIONS_COL_CANDIDATES = {
+    "dossier":     ["N° Dossier", "N°Dossier", "N Dossier", "Dossier", "ndossier"],
+    "activite":    ["Activité", "Activite", "Activité / Enregistrement"],
+    "date":        ["Date"],
+    "heure":       ["Heure"],
+    "transport":   ["Type de transport", "Type transport"],
+    "nom1":        ["Nom 1", "Nom1", "Nom"],
+    "nom2":        ["Nom 2", "Nom2"],
+    "adresse":     ["Adresse", "Address"],
+    "numero":      ["Numéro", "Numero", "N°"],
+    "code_pays":   ["Code pays", "Code Pays", "Pays", "Country"],
+    "departement": ["Département", "Departement"],
+    "code_postal": ["Code postal", "Code Postal", "Code Postal "],
+    "localite":    ["Localité", "Localite", "Ville", "City"],
+    "produit":     ["Produit"],
+    "chauffeur":   ["Chauffeur", "Driver"],
+    "tracteur":    ["Immat. tracteur", "Immat tracteur", "Immat.tracteur",
+                    "Tracteur", "Immatriculation"],
+    "remorque":    ["Remorque"],
+}
+
+
 def parse_missions(file) -> pd.DataFrame:
     """
-    Parse le fichier missions.
-    Retourne un DataFrame avec les colonnes standardisées.
+    Parse le fichier missions en mappant exactement les colonnes de l'export
+    (N° Dossier / Activité / Date / Heure / Nom 1 / Adresse / Numéro /
+     Code pays / Code postal / Localité / Chauffeur / Immat. tracteur).
     """
     df = pd.read_excel(file, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
 
-    # ── Détection colonnes ─────────────────────────────────────
-    col_map = {
-        "dossier":      detect_col(df, ["ndossier", "dossi", "dossier", "no"]),
-        "activite":     detect_col(df, ["activit", "activ"]),
-        "date":         detect_col(df, ["date"]),
-        "heure":        detect_col(df, ["heure"]),
-        "nom1":         detect_col(df, ["nom1", "nom 1", "nom"]),
-        "adresse":      detect_col(df, ["adresse", "address"]),
-        "numero":       detect_col(df, ["numéro", "numero", "n°rue"]),
-        "code_pays":    detect_col(df, ["codepays", "pays", "country"]),
-        "departement":  detect_col(df, ["département", "departement", "dept"]),
-        "code_postal":  detect_col(df, ["codepostal", "postal", "cp"]),
-        "localite":     detect_col(df, ["localit", "ville", "city"]),
-        "produit":      detect_col(df, ["produit", "product"]),
-        "chauffeur":    detect_col(df, ["chauffeur", "driver"]),
-        "tracteur":     detect_col(df, ["tracteur", "immat", "vehic"]),
-        "transport":    detect_col(df, ["transport", "type"]),
-    }
+    # ── Mapping : correspondance exacte insensible casse d'abord, fallback partiel ──
+    cols_lower = {_norm_col(c): c for c in df.columns}
 
-    # Renommage vers noms standardisés
+    col_map = {}
+    for role, candidates in MISSIONS_COL_CANDIDATES.items():
+        found = None
+        # 1. Correspondance exacte normalisée
+        for cand in candidates:
+            key = _norm_col(cand)
+            if key in cols_lower:
+                found = cols_lower[key]
+                break
+        # 2. Fallback : contenance
+        if not found:
+            found = detect_col(df, candidates)
+        col_map[role] = found
+
+    # Avertissement colonnes manquantes importantes
+    critiques = ["dossier", "activite", "date", "heure", "code_pays", "code_postal", "localite"]
+    manquantes = [r for r in critiques if col_map.get(r) is None]
+    if manquantes:
+        st.warning(f"⚠️ Colonnes non détectées dans le fichier missions : {manquantes}\n"
+                   f"Colonnes disponibles : {list(df.columns)}")
+
+    # Renommage
     rename = {v: k for k, v in col_map.items() if v}
     df = df.rename(columns=rename)
 
-    # Colonnes manquantes → vide
-    for col in col_map.keys():
+    # Colonnes absentes → chaîne vide
+    for col in MISSIONS_COL_CANDIDATES.keys():
         if col not in df.columns:
             df[col] = ""
 
-    # ── Nettoyage ──────────────────────────────────────────────
+    # ── Nettoyage lignes ───────────────────────────────────────
     df["dossier"] = df["dossier"].str.strip()
     df = df[df["dossier"].notna() & (df["dossier"] != "") & (df["dossier"] != "nan")]
-    df = df[df["dossier"].str.match(r"^\d+$", na=False)]  # garder seulement les lignes avec N° numérique
+    df = df[df["dossier"].str.match(r"^\d+", na=False)]
 
     df["activite_norm"] = df["activite"].apply(normalize_activite)
 
@@ -252,7 +302,7 @@ def parse_missions(file) -> pd.DataFrame:
     except Exception:
         df["datetime"] = pd.NaT
 
-    # ── Adresse complète ───────────────────────────────────────
+    # ── Adresse complète géocodable ────────────────────────────
     df["adresse_complete"] = df.apply(build_address_string, axis=1)
 
     return df
