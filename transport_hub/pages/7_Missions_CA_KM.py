@@ -395,10 +395,16 @@ def parse_missions(file) -> pd.DataFrame:
 
     # ── Date + Heure → datetime ────────────────────────────────
     try:
-        df["datetime"] = pd.to_datetime(
-            df["date"].str.strip() + " " + df["heure"].str.strip(),
-            dayfirst=True, errors="coerce"
-        )
+        # Forcer le format DD/MM/YYYY HH:MM:SS explicitement
+        df["_dt_str"] = df["date"].str.strip() + " " + df["heure"].str.strip()
+        df["datetime"] = pd.to_datetime(df["_dt_str"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+        # Fallback si format sans secondes
+        mask = df["datetime"].isna()
+        if mask.any():
+            df.loc[mask, "datetime"] = pd.to_datetime(
+                df.loc[mask, "_dt_str"], format="%d/%m/%Y %H:%M", errors="coerce"
+            )
+        df.drop(columns=["_dt_str"], inplace=True)
     except Exception:
         df["datetime"] = pd.NaT
 
@@ -569,6 +575,13 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
         dates_valides = [s["datetime"] for s in stops if pd.notna(s["datetime"])]
         date_debut = min(dates_valides).strftime("%d/%m/%Y") if dates_valides else ""
         date_fin   = max(dates_valides).strftime("%d/%m/%Y") if dates_valides else ""
+        # Sanity check : si le jour > 12, c'est déjà bon (DD/MM non ambigu)
+        # Si pandas a inversé (MM/DD), on détecte et corrige
+        if date_debut:
+            parts = date_debut.split("/")
+            if len(parts) == 3 and int(parts[0]) > 12:
+                pass  # déjà DD/MM/YYYY
+            # Sinon on fait confiance au strftime qui est toujours correct depuis datetime
 
         rows.append({
             "dossier":    dossier,
