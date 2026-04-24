@@ -399,41 +399,21 @@ def parse_missions(file) -> pd.DataFrame:
 
     df["activite_norm"] = df["activite"].apply(normalize_activite)
 
-    # ── Date + Heure → datetime ────────────────────────────────
+    # ── Date + Heure → datetime (format source DD/MM/YYYY, tout en str) ──
     import datetime as _dt
 
-    def _parse_dt(date_val, heure_val):
-        # Cas 1 : date est déjà un objet datetime/date Python (Excel natif)
-        if isinstance(date_val, (_dt.datetime, _dt.date)):
-            d = pd.Timestamp(date_val)
-        else:
-            d_str = str(date_val or "").strip()
-            if not d_str or d_str.lower() == "nan":
-                return pd.NaT
-            d = None
-            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y"):
-                try:
-                    d = pd.Timestamp(_dt.datetime.strptime(d_str, fmt))
-                    break
-                except Exception:
-                    pass
-            if d is None:
-                return pd.NaT
-
-        # Cas 1 : heure est un objet time Python (Excel natif)
-        if isinstance(heure_val, _dt.time):
-            return d.replace(hour=heure_val.hour, minute=heure_val.minute, second=heure_val.second)
-        elif isinstance(heure_val, _dt.datetime):
-            return d.replace(hour=heure_val.hour, minute=heure_val.minute, second=heure_val.second)
-        else:
-            h_str = str(heure_val or "").strip()
-            for fmt in ("%H:%M:%S", "%H:%M"):
-                try:
-                    t = _dt.datetime.strptime(h_str, fmt)
-                    return d.replace(hour=t.hour, minute=t.minute, second=t.second)
-                except Exception:
-                    pass
-        return d
+    def _parse_dt(date_str, heure_str):
+        date_str  = str(date_str  or "").strip()
+        heure_str = str(heure_str or "").strip()
+        if not date_str or date_str.lower() == "nan":
+            return pd.NaT
+        combined = f"{date_str} {heure_str}".strip()
+        for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+            try:
+                return pd.Timestamp(_dt.datetime.strptime(combined, fmt))
+            except Exception:
+                pass
+        return pd.NaT
 
     df["datetime"] = df.apply(
         lambda r: _parse_dt(r.get("date", ""), r.get("heure", "")), axis=1
