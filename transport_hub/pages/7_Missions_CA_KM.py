@@ -37,8 +37,9 @@ load_dotenv()
 #  CONFIG PTV
 # ══════════════════════════════════════════════════════════════════
 
-PTV_API_KEY  = os.environ.get("PTV_API_KEY", "")
+PTV_API_KEY  = os.environ.get("PTV_API_KEY", "METS_TA_CLE_ICI")
 PTV_BASE_URL = "https://api.myptv.com/routing/v1"
+GEOCODE_URL  = "https://api.myptv.com/geocoding/v1"
 HEADERS      = {"apiKey": PTV_API_KEY}
 MAX_RETRIES  = 3
 RETRY_DELAY  = 2
@@ -108,7 +109,7 @@ def _ptv_by_text(query: str) -> tuple | None:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = requests.get(
-                "https://api.myptv.com/geocoding/v1/locations/by-text",
+                f"{GEOCODE_URL}/locations/by-text",
                 params={"searchText": query},
                 headers=HEADERS,
                 timeout=15,
@@ -135,7 +136,7 @@ def _ptv_by_postal_code(cp: str, iso2: str) -> tuple | None:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = requests.get(
-                "https://api.myptv.com/geocoding/v1/locations/by-postal-code",
+                f"{GEOCODE_URL}/locations/by-postal-code",
                 params={"postalCode": cp, "countryCode": iso2},
                 headers=HEADERS,
                 timeout=15,
@@ -240,7 +241,7 @@ def calculate_route(coords_list: list) -> dict | None:
 
     query_params = [
         ("profile", VEHICLE),
-        ("results", "NONE"),
+        ("results", "POLYLINE"),
     ]
     for i, (lat, lon) in enumerate(coords_list):
         if 0 < i < len(coords_list) - 1:
@@ -1074,7 +1075,7 @@ if file_missions and file_ca:
             # Test calculate_route avec 2 coords connues
             coords_test = [(50.506, 5.654), (50.495, 4.164)]  # SPRIMONT → HOUDENG
             import requests as _req
-            qp = [("profile", VEHICLE), ("results", "NONE"),
+            qp = [("profile", VEHICLE), ("results", "POLYLINE"),
                   ("waypoints", f"{coords_test[0][0]},{coords_test[0][1]}"),
                   ("waypoints", f"{coords_test[1][0]},{coords_test[1][1]}")]
             try:
@@ -1177,4 +1178,3 @@ else:
 
     > ⚙️ La clé PTV doit être configurée dans le fichier `.env` (`PTV_API_KEY`).
     """)
-  
