@@ -400,51 +400,44 @@ def parse_missions(file) -> pd.DataFrame:
     df["activite_norm"] = df["activite"].apply(normalize_activite)
 
     # ── Date + Heure → datetime ────────────────────────────────
-    # Le fichier Excel peut avoir des dates en format natif Excel (datetime)
-    # ou en string DD/MM/YYYY. On gère les deux cas.
-    try:
-        def _parse_date_heure(date_val, heure_val):
-            """Combine date + heure en datetime, gère format Excel natif et string."""
-            import datetime as _dt
-            # Si date est déjà un datetime/date Excel natif
-            if isinstance(date_val, (_dt.datetime, _dt.date)):
-                d = pd.Timestamp(date_val)
-            else:
-                d_str = str(date_val or "").strip()
-                if not d_str or d_str == "nan":
-                    return pd.NaT
-                # Essayer les formats courants DD/MM/YYYY et YYYY-MM-DD
-                for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-                    try:
-                        d = pd.Timestamp(datetime.datetime.strptime(d_str, fmt))
-                        break
-                    except Exception:
-                        continue
-                else:
-                    return pd.NaT
+    import datetime as _dt
 
-            # Heure
-            if isinstance(heure_val, (_dt.datetime, _dt.time)):
-                h = pd.Timestamp(heure_val) if isinstance(heure_val, _dt.datetime) else None
-                if h:
-                    return d.replace(hour=heure_val.hour, minute=heure_val.minute)
-                return d.replace(hour=heure_val.hour, minute=heure_val.minute)
-            else:
-                h_str = str(heure_val or "").strip()
-                for fmt in ("%H:%M:%S", "%H:%M"):
-                    try:
-                        t = datetime.datetime.strptime(h_str, fmt)
-                        return d.replace(hour=t.hour, minute=t.minute, second=t.second)
-                    except Exception:
-                        continue
-            return d
+    def _parse_dt(date_val, heure_val):
+        # Cas 1 : date est déjà un objet datetime/date Python (Excel natif)
+        if isinstance(date_val, (_dt.datetime, _dt.date)):
+            d = pd.Timestamp(date_val)
+        else:
+            d_str = str(date_val or "").strip()
+            if not d_str or d_str.lower() == "nan":
+                return pd.NaT
+            d = None
+            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    d = pd.Timestamp(_dt.datetime.strptime(d_str, fmt))
+                    break
+                except Exception:
+                    pass
+            if d is None:
+                return pd.NaT
 
-        # Relire le fichier sans dtype=str pour les colonnes date/heure
-        df["datetime"] = df.apply(
-            lambda r: _parse_date_heure(r.get("date",""), r.get("heure","")), axis=1
-        )
-    except Exception as e:
-        df["datetime"] = pd.NaT
+        # Cas 1 : heure est un objet time Python (Excel natif)
+        if isinstance(heure_val, _dt.time):
+            return d.replace(hour=heure_val.hour, minute=heure_val.minute, second=heure_val.second)
+        elif isinstance(heure_val, _dt.datetime):
+            return d.replace(hour=heure_val.hour, minute=heure_val.minute, second=heure_val.second)
+        else:
+            h_str = str(heure_val or "").strip()
+            for fmt in ("%H:%M:%S", "%H:%M"):
+                try:
+                    t = _dt.datetime.strptime(h_str, fmt)
+                    return d.replace(hour=t.hour, minute=t.minute, second=t.second)
+                except Exception:
+                    pass
+        return d
+
+    df["datetime"] = df.apply(
+        lambda r: _parse_dt(r.get("date", ""), r.get("heure", "")), axis=1
+    )
 
     # ── Adresse complète géocodable ────────────────────────────
     df["adresse_complete"] = df.apply(build_address_string, axis=1)
