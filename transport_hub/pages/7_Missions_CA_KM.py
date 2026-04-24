@@ -350,11 +350,9 @@ def parse_missions(file) -> pd.DataFrame:
     (N° Dossier / Activité / Date / Heure / Nom 1 / Adresse / Numéro /
      Code pays / Code postal / Localité / Chauffeur / Immat. tracteur).
     """
-    # Lire sans dtype=str pour préserver les types natifs Excel (dates, heures)
     df = pd.read_excel(file)
     df.columns = [str(c).strip() for c in df.columns]
-    # Convertir toutes les colonnes en str SAUF Date et Heure (types natifs préservés)
-    date_cols_raw = [c for c in df.columns if _norm_col(c) in ("date", "heure")]
+    date_cols_raw = {c for c in df.columns if _norm_col(c) in ('date', 'heure')}
     for col in df.columns:
         if col not in date_cols_raw:
             df[col] = df[col].astype(str)
@@ -399,25 +397,47 @@ def parse_missions(file) -> pd.DataFrame:
 
     df["activite_norm"] = df["activite"].apply(normalize_activite)
 
-    # ── Date + Heure → datetime (format source DD/MM/YYYY, tout en str) ──
+    # ── Date + Heure → datetime ─────────────────────────────────
     import datetime as _dt
 
-    def _parse_dt(date_str, heure_str):
-        date_str  = str(date_str  or "").strip()
-        heure_str = str(heure_str or "").strip()
-        if not date_str or date_str.lower() == "nan":
+    def _to_date(v):
+        if isinstance(v, (_dt.datetime, pd.Timestamp)):
+            return pd.Timestamp(v).normalize()
+        if isinstance(v, _dt.date):
+            return pd.Timestamp(v)
+        s = str(v or "").strip()
+        if not s or s.lower() == "nan":
             return pd.NaT
-        combined = f"{date_str} {heure_str}".strip()
-        for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y"):
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
             try:
-                return pd.Timestamp(_dt.datetime.strptime(combined, fmt))
+                return pd.Timestamp(_dt.datetime.strptime(s[:10], fmt))
             except Exception:
                 pass
         return pd.NaT
 
-    df["datetime"] = df.apply(
-        lambda r: _parse_dt(r.get("date", ""), r.get("heure", "")), axis=1
-    )
+    def _to_hms(v):
+        if isinstance(v, _dt.time):
+            return v.hour, v.minute, v.second
+        if isinstance(v, (_dt.datetime, pd.Timestamp)):
+            t = pd.Timestamp(v); return t.hour, t.minute, t.second
+        if isinstance(v, float) and not pd.isna(v):
+            total = int(round(v * 86400)); h, r = divmod(total, 3600); m, s = divmod(r, 60)
+            return min(h, 23), m, s
+        s = str(v or "").strip()
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                t = _dt.datetime.strptime(s, fmt); return t.hour, t.minute, t.second
+            except Exception:
+                pass
+        return 0, 0, 0
+
+    def _combine(dv, hv):
+        d = _to_date(dv)
+        if pd.isna(d): return pd.NaT
+        h, m, s = _to_hms(hv)
+        return d.replace(hour=h, minute=m, second=s)
+
+    df["datetime"] = df.apply(lambda r: _combine(r.get("date"), r.get("heure")), axis=1)
 
     # ── Adresse complète géocodable ────────────────────────────
     df["adresse_complete"] = df.apply(build_address_string, axis=1)
