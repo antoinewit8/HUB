@@ -352,10 +352,16 @@ def parse_missions(file) -> pd.DataFrame:
     """
     df = pd.read_excel(file)
     df.columns = [str(c).strip() for c in df.columns]
+    # Identifier les colonnes date/heure AVANT conversion en str
+    # On compare après normalisation pour gérer majuscules/accents
     date_cols_raw = {c for c in df.columns if _norm_col(c) in ('date', 'heure')}
     for col in df.columns:
         if col not in date_cols_raw:
             df[col] = df[col].astype(str)
+    # Après renommage, les colonnes date/heure s'appelleront "date" et "heure"
+    # On garde une référence aux colonnes originales pour le parsing
+    _date_col_orig  = next((c for c in date_cols_raw if _norm_col(c) == "date"),  None)
+    _heure_col_orig = next((c for c in date_cols_raw if _norm_col(c) == "heure"), None)
 
     # ── Mapping : correspondance exacte insensible casse d'abord, fallback partiel ──
     cols_lower = {_norm_col(c): c for c in df.columns}
@@ -443,7 +449,9 @@ def parse_missions(file) -> pd.DataFrame:
         h, m, s = _to_hms(hv)
         return d.replace(hour=h, minute=m, second=s)
 
-    df["datetime"] = df.apply(lambda r: _combine(r.get("date"), r.get("heure")), axis=1)
+    _dc = _date_col_orig  or "date"
+    _hc = _heure_col_orig or "heure"
+    df["datetime"] = df.apply(lambda r: _combine(r.get(_dc), r.get(_hc)), axis=1)
 
     # ── Adresse complète géocodable ────────────────────────────
     df["adresse_complete"] = df.apply(build_address_string, axis=1)
