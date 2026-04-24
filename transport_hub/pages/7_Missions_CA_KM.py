@@ -928,28 +928,71 @@ if file_missions and file_ca:
             st.error(f"❌ Erreur lecture fichiers : {e}")
             st.stop()
 
-    with st.expander("🔍 Debug colonnes détectées", expanded=False):
-        st.markdown("**Fichier Missions** — colonnes brutes :")
-        _df_m_raw = pd.read_excel(file_missions, dtype=str, nrows=2)
-        st.write(list(_df_m_raw.columns))
-        st.markdown("**Fichier CA** — colonnes brutes :")
-        _df_ca_raw2 = pd.read_excel(file_ca, dtype=str, nrows=2)
-        st.write(list(_df_ca_raw2.columns))
-        st.markdown("**Fichier CA** — 3 premières lignes :")
-        st.dataframe(_df_ca_raw2)
-        st.markdown(f"**CA parsé** — colonnes : `{list(df_ca_raw.columns)}`")
-        st.dataframe(df_ca_raw.head(5))
-
     df_cons = consolidate(df_missions, df_ca_raw)
+
+    # ── Filtre période ────────────────────────────────────────
+    st.markdown("### 📅 Période")
+
+    # Détecter les mois disponibles depuis date_debut
+    df_cons["_date_dt"] = pd.to_datetime(df_cons["date_debut"], format="%d/%m/%Y", errors="coerce")
+    mois_dispo = (
+        df_cons["_date_dt"].dropna()
+        .dt.to_period("M")
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+    MOIS_FR = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+               "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+    mois_labels = {p: f"{MOIS_FR[p.month]} {p.year}" for p in mois_dispo}
+
+    if mois_dispo:
+        col_p1, col_p2 = st.columns([1, 3])
+        with col_p1:
+            filtre_mode = st.radio("Mode", ["Mois complet", "Plage libre"], horizontal=True)
+        with col_p2:
+            if filtre_mode == "Mois complet":
+                mois_sel = st.selectbox(
+                    "Mois :",
+                    options=mois_dispo,
+                    format_func=lambda p: mois_labels.get(p, str(p)),
+                    index=len(mois_dispo) - 1,
+                )
+                date_debut_filtre = mois_sel.to_timestamp("D", how="start")
+                date_fin_filtre   = mois_sel.to_timestamp("D", how="end")
+            else:
+                import calendar
+                min_date = df_cons["_date_dt"].min().date()
+                max_date = df_cons["_date_dt"].max().date()
+                c_d1, c_d2 = st.columns(2)
+                date_debut_filtre = pd.Timestamp(c_d1.date_input("Du", value=min_date, min_value=min_date, max_value=max_date))
+                date_fin_filtre   = pd.Timestamp(c_d2.date_input("Au", value=max_date, min_value=min_date, max_value=max_date))
+                date_fin_filtre   = date_fin_filtre + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+        df_cons_f = df_cons[
+            df_cons["_date_dt"].notna() &
+            (df_cons["_date_dt"] >= date_debut_filtre) &
+            (df_cons["_date_dt"] <= date_fin_filtre)
+        ].copy()
+    else:
+        df_cons_f = df_cons.copy()
+
+    st.divider()
 
     # ── KPIs rapides ──────────────────────────────────────────
     st.markdown("### 📊 Aperçu")
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("📁 Dossiers", len(df_cons))
-    k2.metric("🚛 Chauffeurs",    df_cons["chauffeur"].nunique())
-    k3.metric("📍 Stops totaux",  int(df_cons["nb_stops"].sum()))
-    k4.metric("💶 CA Total (Prix transp.)", f"{df_cons['prix_transport'].sum():,.0f} €")
-    k5.metric("💶 CA Total (Total vente)",  f"{df_cons['total_vente'].sum():,.0f} €")
+    ca_total = df_cons_f["total_vente"].sum()
+    prix_total = df_cons_f["prix_transport"].sum()
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("📁 Dossiers",      len(df_cons_f))
+    k2.metric("🚛 Chauffeurs",    df_cons_f["chauffeur"].nunique())
+    k3.metric("📍 Stops totaux",  int(df_cons_f["nb_stops"].sum()))
+    k4.metric("💶 Prix Transport", f"{prix_total:,.0f} €")
+    k5.metric("💶 Total Ventes",  f"{ca_total:,.0f} €")
+    # Rentabilité : CA moyen par dossier
+    ca_moy = ca_total / len(df_cons_f) if len(df_cons_f) > 0 else 0
+    k6.metric("📈 CA moy/dossier", f"{ca_moy:,.0f} €")
 
     st.divider()
 
@@ -957,7 +1000,7 @@ if file_missions and file_ca:
     st.markdown("### 📋 Tableau consolidé")
 
     # Filtre chauffeur
-    chauffeurs_dispo = sorted(df_cons["chauffeur"].dropna().unique().tolist())
+    chauffeurs_dispo = sorted(df_cons_f["chauffeur"].dropna().unique().tolist())
     chauffeurs_dispo = [c for c in chauffeurs_dispo if c and c != "nan"]
 
     filtre_chauffeur = st.multiselect(
@@ -967,21 +1010,31 @@ if file_missions and file_ca:
         placeholder="Tous les chauffeurs"
     )
 
-    df_display = df_cons.copy()
+    df_display = df_cons_f.copy()
     if filtre_chauffeur:
         df_display = df_display[df_display["chauffeur"].isin(filtre_chauffeur)]
 
     # ── KPIs du filtre chauffeur ──────────────────────────────
     if filtre_chauffeur:
         st.markdown("##### 📊 Aperçu — sélection chauffeur(s)")
-        fk1, fk2, fk3, fk4, fk5 = st.columns(5)
-        fk1.metric("📁 Dossiers",         len(df_display))
-        fk2.metric("📍 Stops",            int(df_display["nb_stops"].sum()))
-        fk3.metric("💶 Prix Transport",   f"{df_display['prix_transport'].sum():,.0f} €")
-        fk4.metric("💶 Total Ventes",     f"{df_display['total_vente'].sum():,.0f} €")
-        # Ratio CA par dossier
-        ca_moy = df_display["total_vente"].mean()
-        fk5.metric("📈 CA moyen/dossier", f"{ca_moy:,.0f} €")
+        fk1, fk2, fk3, fk4, fk5, fk6 = st.columns(6)
+        _tv = df_display["total_vente"].sum()
+        _pt = df_display["prix_transport"].sum()
+        _nd = len(df_display)
+        fk1.metric("📁 Dossiers",          _nd)
+        fk2.metric("📍 Stops",             int(df_display["nb_stops"].sum()))
+        fk3.metric("💶 Prix Transport",    f"{_pt:,.0f} €")
+        fk4.metric("💶 Total Ventes",      f"{_tv:,.0f} €")
+        fk5.metric("📈 CA moy/dossier",    f"{(_tv / _nd if _nd else 0):,.0f} €")
+        # Rentabilité €/km (disponible après calcul PTV)
+        if "df_result" in st.session_state:
+            _dr = st.session_state["df_result"]
+            _dr_ch = _dr[_dr["chauffeur"].isin(filtre_chauffeur)]
+            _km = _dr_ch["km_total"].sum()
+            _rent = _dr_ch["total_vente"].sum() / _km if _km > 0 else 0
+            fk6.metric("⚡ Rentabilité", f"{_rent:.2f} €/km")
+        else:
+            fk6.metric("⚡ Rentabilité", "— (après PTV)")
 
     cols_show = ["dossier", "chauffeur", "tracteur", "date_debut", "date_fin",
                  "client", "etat_vente", "nb_stops", "stops_texte",
@@ -1040,7 +1093,7 @@ if file_missions and file_ca:
                 status_text.text(msg)
 
             try:
-                res = compute_ptv_for_driver(df_cons, chauffeur, progress_cb=_progress)
+                res = compute_ptv_for_driver(df_cons_f, chauffeur, progress_cb=_progress)
                 all_results.extend(res)
 
                 # Extraire km à vide détails
@@ -1084,11 +1137,14 @@ if file_missions and file_ca:
         km_vide_sum  = df_result["km_vide"].sum()
         pct_vide     = (km_vide_sum / km_total_sum * 100) if km_total_sum > 0 else 0
 
-        kp1, kp2, kp3, kp4 = st.columns(4)
+        _ca_ptv   = df_result["total_vente"].sum()
+        _rent_ptv = _ca_ptv / km_total_sum if km_total_sum > 0 else 0
+        kp1, kp2, kp3, kp4, kp5 = st.columns(5)
         kp1.metric("📏 KM Totaux (PTV)", f"{km_total_sum:,.0f} km")
         kp2.metric("⚡ KM À Vide",        f"{km_vide_sum:,.0f} km")
         kp3.metric("% À Vide",            f"{pct_vide:.1f}%")
-        kp4.metric("💶 CA Total",          f"{df_result['total_vente'].sum():,.0f} €")
+        kp4.metric("💶 CA Total",          f"{_ca_ptv:,.0f} €")
+        kp5.metric("📈 Rentabilité",       f"{_rent_ptv:.2f} €/km")
 
         # Tableau résultats
         tab1, tab2, tab3 = st.tabs(["📋 Détail dossiers", "👤 Résumé par chauffeur", "⚡ Détail KM à vide"])
@@ -1114,8 +1170,15 @@ if file_missions and file_ca:
                 Prix_Transport= ("prix_transport",   "sum"),
                 Total_Vente   = ("total_vente",      "sum"),
             ).round(1)
-            df_resume_ptv.columns = ["Chauffeur", "Nb Dossiers", "KM Total",
-                                      "KM À Vide", "Prix Transport €", "Total Vente €"]
+            df_resume_ptv["Rentabilité €/km"] = (
+                df_resume_ptv["Total_Vente"] / df_resume_ptv["KM_Total"].replace(0, np.nan)
+            ).round(2)
+            df_resume_ptv["% KM Vide"] = (
+                df_resume_ptv["KM_Vide"] / df_resume_ptv["KM_Total"].replace(0, np.nan) * 100
+            ).round(1)
+            df_resume_ptv.columns = ["Chauffeur", "Nb Dossiers", "KM Total", "KM À Vide",
+                                      "Prix Transport €", "Total Vente €",
+                                      "Rentabilité €/km", "% KM Vide"]
             st.dataframe(df_resume_ptv, use_container_width=True)
 
         with tab3:
