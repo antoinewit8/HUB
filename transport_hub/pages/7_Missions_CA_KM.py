@@ -930,57 +930,25 @@ if file_missions and file_ca:
 
     df_cons = consolidate(df_missions, df_ca_raw)
 
-    # ── Filtre période ────────────────────────────────────────
-    st.markdown("### 📅 Période")
-
-    # Détecter les mois disponibles depuis date_debut
+    # ── Période détectée automatiquement ─────────────────────
     df_cons["_date_dt"] = pd.to_datetime(df_cons["date_debut"], format="%d/%m/%Y", errors="coerce")
-    mois_dispo = (
-        df_cons["_date_dt"].dropna()
-        .dt.to_period("M")
-        .drop_duplicates()
-        .sort_values()
-        .tolist()
-    )
+    df_cons_f = df_cons.copy()
+
     MOIS_FR = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
                "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
-    mois_labels = {p: f"{MOIS_FR[p.month]} {p.year}" for p in mois_dispo}
-
-    if mois_dispo:
-        col_p1, col_p2 = st.columns([1, 3])
-        with col_p1:
-            filtre_mode = st.radio("Mode", ["Mois complet", "Plage libre"], horizontal=True)
-        with col_p2:
-            if filtre_mode == "Mois complet":
-                mois_sel = st.selectbox(
-                    "Mois :",
-                    options=mois_dispo,
-                    format_func=lambda p: mois_labels.get(p, str(p)),
-                    index=len(mois_dispo) - 1,
-                )
-                date_debut_filtre = mois_sel.to_timestamp("D", how="start")
-                date_fin_filtre   = mois_sel.to_timestamp("D", how="end")
-            else:
-                import calendar
-                min_date = df_cons["_date_dt"].min().date()
-                max_date = df_cons["_date_dt"].max().date()
-                c_d1, c_d2 = st.columns(2)
-                date_debut_filtre = pd.Timestamp(c_d1.date_input("Du", value=min_date, min_value=min_date, max_value=max_date))
-                date_fin_filtre   = pd.Timestamp(c_d2.date_input("Au", value=max_date, min_value=min_date, max_value=max_date))
-                date_fin_filtre   = date_fin_filtre + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-
-        df_cons_f = df_cons[
-            df_cons["_date_dt"].notna() &
-            (df_cons["_date_dt"] >= date_debut_filtre) &
-            (df_cons["_date_dt"] <= date_fin_filtre)
-        ].copy()
+    dates_valides = df_cons["_date_dt"].dropna()
+    if not dates_valides.empty:
+        d_min = dates_valides.min()
+        d_max = dates_valides.max()
+        if d_min.month == d_max.month and d_min.year == d_max.year:
+            periode_label = f"{MOIS_FR[d_min.month]} {d_min.year}"
+        else:
+            periode_label = f"{d_min.strftime('%d/%m/%Y')} → {d_max.strftime('%d/%m/%Y')}"
     else:
-        df_cons_f = df_cons.copy()
-
-    st.divider()
+        periode_label = "Période inconnue"
 
     # ── KPIs rapides ──────────────────────────────────────────
-    st.markdown("### 📊 Aperçu")
+    st.markdown(f"### 📊 Aperçu — {periode_label}")
     ca_total = df_cons_f["total_vente"].sum()
     prix_total = df_cons_f["prix_transport"].sum()
 
