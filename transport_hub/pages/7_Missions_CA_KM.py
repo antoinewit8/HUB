@@ -654,43 +654,49 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
         }
 
     # ── Collecter toutes les adresses à géocoder ─────────────
-    # Format: {addr: (ville, cp, pays)}
-    addr_meta = {}
-    for dos, seq in dossier_sequences.items():
-        if seq["addr_ch"]:
-            addr_meta[seq["addr_ch"]] = (seq["loc_ch"], seq["cp_ch"], seq["pays_ch"])
-        if seq["addr_de"]:
-            addr_meta[seq["addr_de"]] = (seq["loc_de"], seq["cp_de"], seq["pays_de"])
-        for s in seq["stops_mid"]:
-            addr = s.get("adresse", "")
-            if addr:
-                addr_meta[addr] = (s.get("ville_raw",""), s.get("cp_raw",""), s.get("pays_raw",""))
+    # Clé = (ville, cp, pays) — on géocode directement avec les composants bruts
+    # sans passer par adresse_charg_geo qui peut être NaN après le merge
+    # geo_cache keyed sur (ville, cp, pays) → coords
+    geo_cache = {}  # (ville, cp, pays) → (lat, lon) | None
 
-    geo_cache = {}
-    total_geo = len(addr_meta)
-    for i, (addr, (ville_r, cp_r, pays_r)) in enumerate(addr_meta.items()):
+    points_to_geocode = {}  # (ville, cp, pays) → True (déduplique)
+    for dos, seq in dossier_sequences.items():
+        if seq["loc_ch"] or seq["cp_ch"]:
+            points_to_geocode[(seq["loc_ch"], seq["cp_ch"], seq["pays_ch"])] = True
+        if seq["loc_de"] or seq["cp_de"]:
+            points_to_geocode[(seq["loc_de"], seq["cp_de"], seq["pays_de"])] = True
+        for s in seq["stops_mid"]:
+            k = (s.get("ville_raw",""), s.get("cp_raw",""), s.get("pays_raw",""))
+            if k[0] or k[1]:
+                points_to_geocode[k] = True
+
+    total_geo = len(points_to_geocode)
+    for i, (ville_r, cp_r, pays_r) in enumerate(points_to_geocode.keys()):
+        label = f"{ville_r} {cp_r}".strip()
         if progress_cb:
-            progress_cb(f"🌍 Géocodage {i+1}/{total_geo} : {addr[:50]}...")
-        coords = geocode_with_fallback(addr, ville_r, cp_r, pays_r)
-        geo_cache[addr] = coords
+            progress_cb(f"🌍 Géocodage {i+1}/{total_geo} : {label}...")
+        # Construire adresse display pour le warning
+        addr_display = parse_origin_from_parts(ville_r, cp_r, pays_r)
+        coords = geocode_with_fallback(addr_display, ville_r, cp_r, pays_r)
+        geo_cache[(ville_r, cp_r, pays_r)] = coords
         if coords is None:
-            st.warning(f"⚠️ Géocodage échoué (tous niveaux) : {addr}")
+            st.warning(f"⚠️ Géocodage échoué : {addr_display}")
 
     # ── Calcul km totaux par dossier ──────────────────────────
     dossier_km = {}
     for dos, seq in dossier_sequences.items():
         coords_seq = []
         # 1. Point de chargement (CA)
-        c_ch = geo_cache.get(seq["addr_ch"])
+        c_ch = geo_cache.get((seq["loc_ch"], seq["cp_ch"], seq["pays_ch"]))
         if c_ch:
             coords_seq.append(c_ch)
         # 2. Stops intermédiaires (DOUANE etc.)
         for s in seq["stops_mid"]:
-            c = geo_cache.get(s.get("adresse",""))
+            c = geo_cache.get((s.get("ville_raw",""), s.get("cp_raw",""), s.get("pays_raw","")))
             if c:
                 coords_seq.append(c)
         # 3. Point de déchargement (CA)
-        c_de = geo_cache.get(seq["addr_de"])
+        c_de = geo_cache.get((seq["loc_de"], seq["cp_de"], seq["pays_de"]))
         if c_de:
             coords_seq.append(c_de)
 
@@ -715,8 +721,8 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
         seq_act = dossier_sequences[dos_actuel]
         seq_suiv = dossier_sequences[dos_suivant]
 
-        coords_fin   = geo_cache.get(seq_act["addr_de"])
-        coords_debut = geo_cache.get(seq_suiv["addr_ch"])
+        coords_fin   = geo_cache.get((seq_act["loc_de"],  seq_act["cp_de"],   seq_act["pays_de"]))
+        coords_debut = geo_cache.get((seq_suiv["loc_ch"], seq_suiv["cp_ch"],  seq_suiv["pays_ch"]))
 
         if coords_fin and coords_debut:
             if progress_cb:
