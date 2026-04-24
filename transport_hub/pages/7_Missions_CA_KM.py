@@ -652,7 +652,8 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
     Retourne une liste de dicts enrichis.
     """
     df_ch = df_cons[df_cons["chauffeur"] == chauffeur].copy()
-    df_ch = df_ch.sort_values("date_debut").reset_index(drop=True)
+    df_ch["_sort_date"] = pd.to_datetime(df_ch["date_debut"], format="%d/%m/%Y", errors="coerce")
+    df_ch = df_ch.sort_values("_sort_date").reset_index(drop=True)
 
     def _c(v): 
         v = str(v or "").strip()
@@ -752,8 +753,10 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
 
     # ── Calcul km à vide inter-dossiers ───────────────────────
     # Trier les dossiers du chauffeur chronologiquement
-    dossiers_ordonnes = sorted(dossier_sequences.keys(),
-        key=lambda d: dossier_sequences[d]["date_debut"])
+    dossiers_ordonnes = sorted(
+        dossier_sequences.keys(),
+        key=lambda d: pd.to_datetime(dossier_sequences[d]["date_debut"], format="%d/%m/%Y", errors="coerce")
+    )
 
     empty_legs = []
     for i in range(len(dossiers_ordonnes) - 1):
