@@ -865,6 +865,18 @@ if file_missions and file_ca:
     if filtre_chauffeur:
         df_display = df_display[df_display["chauffeur"].isin(filtre_chauffeur)]
 
+    # ── KPIs du filtre chauffeur ──────────────────────────────
+    if filtre_chauffeur:
+        st.markdown("##### 📊 Aperçu — sélection chauffeur(s)")
+        fk1, fk2, fk3, fk4, fk5 = st.columns(5)
+        fk1.metric("📁 Dossiers",         len(df_display))
+        fk2.metric("📍 Stops",            int(df_display["nb_stops"].sum()))
+        fk3.metric("💶 Prix Transport",   f"{df_display['prix_transport'].sum():,.0f} €")
+        fk4.metric("💶 Total Ventes",     f"{df_display['total_vente'].sum():,.0f} €")
+        # Ratio CA par dossier
+        ca_moy = df_display["total_vente"].mean()
+        fk5.metric("📈 CA moyen/dossier", f"{ca_moy:,.0f} €")
+
     cols_show = ["dossier", "chauffeur", "tracteur", "date_debut", "date_fin",
                  "client", "etat_vente", "nb_stops", "stops_texte",
                  "prix_transport", "total_vente"]
