@@ -419,16 +419,26 @@ def parse_missions(file) -> pd.DataFrame:
 # S.G. | Heures d'attente | Total des ventes
 
 CA_COL_CANDIDATES = {
-    "dossier":        ["N° Dossier", "N°Dossier", "Dossier"],
-    "prix_transport": ["Prix transport", "Prix Transport"],
-    "total_vente":    ["Total des ventes", "Total ventes", "Total des vente"],
-    "client":         ["Client facturation", "Client Facturation", "Client"],
-    "etat_vente":     ["Etat vente", "État vente", "Etat"],
-    "supplements":    ["Suppléments", "Supplements"],
-    "sg":             ["S.G.", "SG"],
-    "heures_attente": ["Heures d'attente", "Heures attente"],
-    "date_charg":     ["Date chargement", "Date Chargement"],
-    "type_transport": ["Type de transport", "Type transport"],
+    "dossier":          ["N° Dossier", "N°Dossier", "Dossier"],
+    "prix_transport":   ["Prix transport", "Prix Transport"],
+    "total_vente":      ["Total des ventes", "Total ventes", "Total des vente"],
+    "client":           ["Client facturation", "Client Facturation", "Client"],
+    "etat_vente":       ["Etat vente", "État vente", "Etat"],
+    "supplements":      ["Suppléments", "Supplements"],
+    "sg":               ["S.G.", "SG"],
+    "heures_attente":   ["Heures d'attente", "Heures attente"],
+    "date_charg":       ["Date chargement", "Date Chargement"],
+    "type_transport":   ["Type de transport", "Type transport"],
+    # Coordonnées géographiques chargement
+    "adr_charg":        ["Adresse chargement", "Adresse Chargement"],
+    "localite_charg":   ["Localité chargement", "Localite chargement"],
+    "cp_charg":         ["C.P. chargement", "CP chargement", "Code postal chargement"],
+    "pays_charg":       ["Pays chargement", "Pays Chargement"],
+    # Coordonnées géographiques déchargement
+    "adr_decharg":      ["Adresse déchargement", "Adresse dechargement"],
+    "localite_decharg": ["Localité déchargement", "Localite dechargement"],
+    "cp_decharg":       ["C.P. déchargement", "CP dechargement", "Code postal dechargement"],
+    "pays_decharg":     ["Pays déchargement", "Pays dechargement"],
 }
 
 
@@ -480,12 +490,34 @@ def parse_ca(file) -> pd.DataFrame:
     df["prix_transport"] = df["prix_transport"].apply(to_float)
     df["total_vente"]    = df["total_vente"].apply(to_float)
 
-    # Déduplique par dossier (somme si multi-lignes)
+    # ── Construire adresses géocodables depuis les colonnes CA ──
+    def _clean(v): 
+        v = str(v or "").strip()
+        return "" if v.lower() in ("nan", "none") else v
+
+    def _addr_from_ca(row, prefix):
+        localite = _clean(row.get(f"localite_{prefix}", ""))
+        cp       = _clean(row.get(f"cp_{prefix}", ""))
+        pays     = _clean(row.get(f"pays_{prefix}", "")).upper()
+        return parse_origin_from_parts(localite, cp, pays)
+
+    df["adresse_charg_geo"]   = df.apply(lambda r: _addr_from_ca(r, "charg"),   axis=1)
+    df["adresse_decharg_geo"] = df.apply(lambda r: _addr_from_ca(r, "decharg"), axis=1)
+
+    # Déduplique par dossier (somme CA, garder première adresse)
     df_agg = df.groupby("dossier", as_index=False).agg(
-        prix_transport=("prix_transport", "sum"),
-        total_vente=("total_vente", "sum"),
-        client=("client", "first"),
-        etat_vente=("etat_vente", "first"),
+        prix_transport      = ("prix_transport",    "sum"),
+        total_vente         = ("total_vente",       "sum"),
+        client              = ("client",            "first"),
+        etat_vente          = ("etat_vente",        "first"),
+        adresse_charg_geo   = ("adresse_charg_geo", "first"),
+        adresse_decharg_geo = ("adresse_decharg_geo","first"),
+        localite_charg      = ("localite_charg",    "first"),
+        localite_decharg    = ("localite_decharg",  "first"),
+        cp_charg            = ("cp_charg",          "first"),
+        cp_decharg          = ("cp_decharg",        "first"),
+        pays_charg          = ("pays_charg",        "first"),
+        pays_decharg        = ("pays_decharg",      "first"),
     )
 
     return df_agg
@@ -550,9 +582,13 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
 
     df_cons = pd.DataFrame(rows)
 
-    # Join CA
-    df_cons = df_cons.merge(df_ca[["dossier", "prix_transport", "total_vente", "client", "etat_vente"]],
-                            on="dossier", how="left")
+    # Join CA — inclure les adresses charg/decharg pour le calcul PTV
+    ca_cols = ["dossier", "prix_transport", "total_vente", "client", "etat_vente",
+               "adresse_charg_geo", "adresse_decharg_geo",
+               "localite_charg", "localite_decharg",
+               "cp_charg", "cp_decharg", "pays_charg", "pays_decharg"]
+    ca_cols_dispo = [c for c in ca_cols if c in df_ca.columns]
+    df_cons = df_cons.merge(df_ca[ca_cols_dispo], on="dossier", how="left")
     df_cons["prix_transport"] = df_cons["prix_transport"].fillna(0.0)
     df_cons["total_vente"]    = df_cons["total_vente"].fillna(0.0)
 
@@ -568,53 +604,73 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
     """
     Pour un chauffeur donné :
     1. Trie ses dossiers par date de début
-    2. Calcule km totaux par dossier (tous les stops)
-    3. Calcule km à vide entre DECHARGER → CHARGER suivant (inter-dossiers inclus)
+    2. Construit la séquence complète : CHARGEMENT (CA) → stops missions → DECHARGEMENT (CA)
+    3. Calcule km totaux par dossier via PTV
+    4. Calcule km à vide entre DECHARGEMENT → CHARGEMENT suivant (inter-dossiers)
 
     Retourne une liste de dicts enrichis.
     """
     df_ch = df_cons[df_cons["chauffeur"] == chauffeur].copy()
     df_ch = df_ch.sort_values("date_debut").reset_index(drop=True)
 
+    def _c(v): 
+        v = str(v or "").strip()
+        return "" if v.lower() in ("nan","none") else v
+
     results = []
 
-    # Aplatir tous les stops du chauffeur dans l'ordre chronologique
-    all_stops_flat = []
+    # ── Construire pour chaque dossier la séquence complète ──
+    # Structure : {dossier: {"charg": (addr, localite, cp, pays),
+    #                        "decharg": (addr, localite, cp, pays),
+    #                        "stops_mid": [...stops missions intermédiaires...]}}
+    dossier_sequences = {}
     for _, row in df_ch.iterrows():
-        for s in row["stops_data"]:
-            all_stops_flat.append({
-                "dossier":   row["dossier"],
-                "activite":  s["activite"],
-                "datetime":  s["datetime"],
-                "adresse":   s["adresse"],
-                "localite":  s["localite"],
-                "ville_raw": s.get("ville_raw", ""),
-                "cp_raw":    s.get("cp_raw",    ""),
-                "pays_raw":  s.get("pays_raw",  ""),
-            })
+        dos = row["dossier"]
 
-    # Trier globalement par datetime
-    all_stops_flat.sort(key=lambda x: x["datetime"] if pd.notna(x["datetime"]) else pd.Timestamp.max)
+        # Adresses CA (chargement et déchargement)
+        addr_ch  = _c(row.get("adresse_charg_geo",   ""))
+        addr_de  = _c(row.get("adresse_decharg_geo",  ""))
+        loc_ch   = _c(row.get("localite_charg",       ""))
+        loc_de   = _c(row.get("localite_decharg",     ""))
+        cp_ch    = _c(row.get("cp_charg",             ""))
+        cp_de    = _c(row.get("cp_decharg",           ""))
+        pays_ch  = _c(row.get("pays_charg",           ""))
+        pays_de  = _c(row.get("pays_decharg",         ""))
 
-    # ── Géocodage de tous les stops uniques ──────────────────
-    unique_addresses = list({s["adresse"] for s in all_stops_flat if s["adresse"]})
-    geo_cache = {}
+        # Stops intermédiaires depuis le fichier missions (DOUANE, stops mult.)
+        stops_mid = []
+        for s in row.get("stops_data", []):
+            act = s.get("activite", "")
+            # On garde les stops qui ne sont ni le 1er CHARGEMENT ni le dernier DECHARGEMENT
+            # car ceux-là viennent du CA — on garde DOUANE et multi-stops intermédiaires
+            if act in ("DOUANE",):
+                stops_mid.append(s)
 
-    total_geo = len(unique_addresses)
-    # Construire un dict adresse_complete → (ville, cp, pays) pour le fallback
+        dossier_sequences[dos] = {
+            "addr_ch":   addr_ch,  "loc_ch":  loc_ch,  "cp_ch":  cp_ch,  "pays_ch":  pays_ch,
+            "addr_de":   addr_de,  "loc_de":  loc_de,  "cp_de":  cp_de,  "pays_de":  pays_de,
+            "stops_mid": stops_mid,
+            "date_debut": row["date_debut"],
+        }
+
+    # ── Collecter toutes les adresses à géocoder ─────────────
+    # Format: {addr: (ville, cp, pays)}
     addr_meta = {}
-    for s in all_stops_flat:
-        if s["adresse"] not in addr_meta:
-            addr_meta[s["adresse"]] = (
-                s.get("ville_raw", ""),
-                s.get("cp_raw",    ""),
-                s.get("pays_raw",  ""),
-            )
+    for dos, seq in dossier_sequences.items():
+        if seq["addr_ch"]:
+            addr_meta[seq["addr_ch"]] = (seq["loc_ch"], seq["cp_ch"], seq["pays_ch"])
+        if seq["addr_de"]:
+            addr_meta[seq["addr_de"]] = (seq["loc_de"], seq["cp_de"], seq["pays_de"])
+        for s in seq["stops_mid"]:
+            addr = s.get("adresse", "")
+            if addr:
+                addr_meta[addr] = (s.get("ville_raw",""), s.get("cp_raw",""), s.get("pays_raw",""))
 
-    for i, addr in enumerate(unique_addresses):
+    geo_cache = {}
+    total_geo = len(addr_meta)
+    for i, (addr, (ville_r, cp_r, pays_r)) in enumerate(addr_meta.items()):
         if progress_cb:
             progress_cb(f"🌍 Géocodage {i+1}/{total_geo} : {addr[:50]}...")
-        ville_r, cp_r, pays_r = addr_meta.get(addr, ("", "", ""))
         coords = geocode_with_fallback(addr, ville_r, cp_r, pays_r)
         geo_cache[addr] = coords
         if coords is None:
@@ -622,61 +678,63 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
 
     # ── Calcul km totaux par dossier ──────────────────────────
     dossier_km = {}
-    for _, row in df_ch.iterrows():
-        dos = row["dossier"]
-        stops = row["stops_data"]
+    for dos, seq in dossier_sequences.items():
         coords_seq = []
-        for s in stops:
-            c = geo_cache.get(s["adresse"])
+        # 1. Point de chargement (CA)
+        c_ch = geo_cache.get(seq["addr_ch"])
+        if c_ch:
+            coords_seq.append(c_ch)
+        # 2. Stops intermédiaires (DOUANE etc.)
+        for s in seq["stops_mid"]:
+            c = geo_cache.get(s.get("adresse",""))
             if c:
                 coords_seq.append(c)
+        # 3. Point de déchargement (CA)
+        c_de = geo_cache.get(seq["addr_de"])
+        if c_de:
+            coords_seq.append(c_de)
 
         if len(coords_seq) >= 2:
             if progress_cb:
-                progress_cb(f"📍 Calcul km dossier {dos}...")
+                progress_cb(f"📍 Calcul km dossier {dos} ({seq['loc_ch']} → {seq['loc_de']})...")
             res = calculate_route(coords_seq)
             dossier_km[dos] = res["km"] if res else None
         else:
             dossier_km[dos] = None
 
-    # ── Calcul km à vide (DECHARGER → CHARGER suivant) ───────
-    empty_legs = []  # {"dossier_depart", "dossier_arrivee", "from_addr", "to_addr", "km_vide"}
+    # ── Calcul km à vide inter-dossiers ───────────────────────
+    # Trier les dossiers du chauffeur chronologiquement
+    dossiers_ordonnes = sorted(dossier_sequences.keys(),
+        key=lambda d: dossier_sequences[d]["date_debut"])
 
-    last_decharge = None  # {"dossier", "adresse", "coords", "localite"}
+    empty_legs = []
+    for i in range(len(dossiers_ordonnes) - 1):
+        dos_actuel  = dossiers_ordonnes[i]
+        dos_suivant = dossiers_ordonnes[i + 1]
 
-    for stop in all_stops_flat:
-        act  = stop["activite"]
-        addr = stop["adresse"]
-        coords = geo_cache.get(addr)
+        seq_act = dossier_sequences[dos_actuel]
+        seq_suiv = dossier_sequences[dos_suivant]
 
-        if act == "DECHARGEMENT":
-            last_decharge = {
-                "dossier":  stop["dossier"],
-                "adresse":  addr,
-                "coords":   coords,
-                "localite": stop["localite"],
-            }
+        coords_fin   = geo_cache.get(seq_act["addr_de"])
+        coords_debut = geo_cache.get(seq_suiv["addr_ch"])
 
-        elif act == "CHARGEMENT" and last_decharge is not None:
-            # Km à vide entre le dernier déchargement et ce chargement
-            if last_decharge["coords"] and coords:
-                if progress_cb:
-                    progress_cb(f"⚡ Km à vide : {last_decharge['localite']} → {stop['localite']}...")
-                res = calculate_route([last_decharge["coords"], coords])
-                km_vide = res["km"] if res else None
-            else:
-                km_vide = None
+        if coords_fin and coords_debut:
+            if progress_cb:
+                progress_cb(f"⚡ Km à vide : {seq_act['loc_de']} → {seq_suiv['loc_ch']}...")
+            res = calculate_route([coords_fin, coords_debut])
+            km_vide = res["km"] if res else None
+        else:
+            km_vide = None
 
-            empty_legs.append({
-                "dossier_depart":  last_decharge["dossier"],
-                "dossier_arrivee": stop["dossier"],
-                "from_addr":       last_decharge["adresse"],
-                "from_localite":   last_decharge["localite"],
-                "to_addr":         addr,
-                "to_localite":     stop["localite"],
-                "km_vide":         km_vide,
-            })
-            last_decharge = None  # reset
+        empty_legs.append({
+            "dossier_depart":  dos_actuel,
+            "dossier_arrivee": dos_suivant,
+            "from_addr":       seq_act["addr_de"],
+            "from_localite":   seq_act["loc_de"],
+            "to_addr":         seq_suiv["addr_ch"],
+            "to_localite":     seq_suiv["loc_ch"],
+            "km_vide":         km_vide,
+        })
 
     # ── Assemblage résultats par dossier ──────────────────────
     for _, row in df_ch.iterrows():
@@ -959,6 +1017,19 @@ if file_missions and file_ca:
 
         df_result = pd.DataFrame(all_results)
         df_vide   = pd.DataFrame(all_vide)
+
+        # ── Debug : afficher ce qui a été calculé ────────────
+        with st.expander("🔍 Debug résultats bruts PTV", expanded=True):
+            st.write(f"**Import modules OK :** {_IMPORTS_OK}")
+            st.write(f"**Nb résultats :** {len(all_results)}")
+            if all_results:
+                st.write("**km_total (10 premiers) :**", df_result["km_total"].head(10).tolist())
+                st.write("**km_vide (10 premiers) :**", df_result["km_vide"].head(10).tolist())
+                # Tester geocode direct sur une adresse simple
+                test_coords = geocode_with_fallback("", "SPRIMONT", "4140", "B")
+                st.write(f"**Test géocode SPRIMONT/4140/B :** {test_coords}")
+                test_coords2 = _ptv_geocode_address("SPRIMONT, 4140, Belgium")
+                st.write(f"**Test _ptv_geocode_address direct :** {test_coords2}")
 
         st.session_state["df_result"] = df_result
         st.session_state["df_vide"]   = df_vide
