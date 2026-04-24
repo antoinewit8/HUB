@@ -883,8 +883,12 @@ def export_excel(df_result: pd.DataFrame, df_vide: pd.DataFrame) -> bytes:
             prix_transport= ("prix_transport",    "sum"),
             total_vente   = ("total_vente",       "sum"),
         ).round(1)
-        df_resume.columns = ["Chauffeur", "Nb Dossiers", "KM Total", "KM À Vide",
-                              "Prix Transport (€)", "Total Vente (€)"]
+        df_resume["KM Complet"] = df_resume["km_total"] + df_resume["km_vide"]
+        df_resume["% KM Vide"]  = (df_resume["km_vide"] / df_resume["KM Complet"].replace(0, np.nan) * 100).round(1)
+        df_resume["Rentabilité €/km"] = (df_resume["total_vente"] / df_resume["KM Complet"].replace(0, np.nan)).round(2)
+        df_resume.columns = ["Chauffeur", "Nb Dossiers", "KM Chargés", "KM À Vide",
+                              "Prix Transport (€)", "Total Vente (€)",
+                              "KM Complet", "% KM Vide", "Rentabilité €/km"]
         df_resume.to_excel(writer, sheet_name="Résumé Chauffeurs", index=False)
         _style_sheet(writer.sheets["Résumé Chauffeurs"], len(df_resume))
 
@@ -1161,14 +1165,16 @@ if file_missions and file_ca:
         km_vide_sum  = df_result["km_vide"].sum()
         pct_vide     = (km_vide_sum / km_total_sum * 100) if km_total_sum > 0 else 0
 
-        _ca_ptv   = df_result["total_vente"].sum()
-        _rent_ptv = _ca_ptv / km_total_sum if km_total_sum > 0 else 0
-        kp1, kp2, kp3, kp4, kp5 = st.columns(5)
-        kp1.metric("📏 KM Totaux (PTV)", f"{km_total_sum:,.0f} km")
-        kp2.metric("⚡ KM À Vide",        f"{km_vide_sum:,.0f} km")
-        kp3.metric("% À Vide",            f"{pct_vide:.1f}%")
-        kp4.metric("💶 CA Total",          f"{_ca_ptv:,.0f} €")
-        kp5.metric("📈 Rentabilité",       f"{_rent_ptv:.2f} €/km")
+        _ca_ptv      = df_result["total_vente"].sum()
+        _km_complet  = km_total_sum + km_vide_sum
+        _rent_ptv    = _ca_ptv / _km_complet if _km_complet > 0 else 0
+        kp1, kp2, kp3, kp4, kp5, kp6 = st.columns(6)
+        kp1.metric("📏 KM Chargés",        f"{km_total_sum:,.0f} km")
+        kp2.metric("⚡ KM À Vide",          f"{km_vide_sum:,.0f} km")
+        kp3.metric("🔄 KM Total complet",  f"{_km_complet:,.0f} km")
+        kp4.metric("% À Vide",              f"{pct_vide:.1f}%")
+        kp5.metric("💶 CA Total",            f"{_ca_ptv:,.0f} €")
+        kp6.metric("📈 Rentabilité",         f"{_rent_ptv:.2f} €/km")
 
         # Tableau résultats
         tab1, tab2, tab3 = st.tabs(["📋 Détail dossiers", "👤 Résumé par chauffeur", "⚡ Détail KM à vide"])
@@ -1194,15 +1200,16 @@ if file_missions and file_ca:
                 Prix_Transport= ("prix_transport",   "sum"),
                 Total_Vente   = ("total_vente",      "sum"),
             ).round(1)
-            df_resume_ptv["Rentabilité €/km"] = (
-                df_resume_ptv["Total_Vente"] / df_resume_ptv["KM_Total"].replace(0, np.nan)
-            ).round(2)
+            df_resume_ptv["KM Complet"] = df_resume_ptv["KM_Total"] + df_resume_ptv["KM_Vide"]
             df_resume_ptv["% KM Vide"] = (
-                df_resume_ptv["KM_Vide"] / df_resume_ptv["KM_Total"].replace(0, np.nan) * 100
+                df_resume_ptv["KM_Vide"] / df_resume_ptv["KM Complet"].replace(0, np.nan) * 100
             ).round(1)
-            df_resume_ptv.columns = ["Chauffeur", "Nb Dossiers", "KM Total", "KM À Vide",
+            df_resume_ptv["Rentabilité €/km"] = (
+                df_resume_ptv["Total_Vente"] / df_resume_ptv["KM Complet"].replace(0, np.nan)
+            ).round(2)
+            df_resume_ptv.columns = ["Chauffeur", "Nb Dossiers", "KM Chargés", "KM À Vide",
                                       "Prix Transport €", "Total Vente €",
-                                      "Rentabilité €/km", "% KM Vide"]
+                                      "KM Complet", "% KM Vide", "Rentabilité €/km"]
             st.dataframe(df_resume_ptv, use_container_width=True)
 
         with tab3:
