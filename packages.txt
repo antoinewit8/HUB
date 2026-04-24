@@ -1,0 +1,8 @@
+libreoffice
+tesseract-ocr
+tesseract-ocr-fra
+tesseract-ocr-eng
+ghostscript
+pngquant
+unpaper
+poppler-utils

@@ -4,3 +4,15 @@ plotly>=5.18.0
 openpyxl>=3.1.0
 loguru>=0.7.0
 python-dotenv>=1.0.0
+fastapi
+uvicorn
+httpx
+pydantic
+jinja2
+pdfplumber
+beautifulsoup4
+xlrd==2.0.1
+pdf2image
+img2pdf
+Pillow
+ocrmypdf

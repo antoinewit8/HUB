@@ -1,0 +1,5 @@
+libreoffice
+tesseract-ocr
+tesseract-ocr-fra
+tesseract-ocr-eng
+ghostscript

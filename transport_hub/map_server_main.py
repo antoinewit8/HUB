@@ -10,25 +10,21 @@ from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
-import uvicorn, uuid, json, os, httpx
+import uvicorn, uuid, json, os, httpx, pathlib
 from dotenv import load_dotenv
-from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
+BASE_DIR = pathlib.Path(__file__).resolve().parent
+
 app = FastAPI(title="Arcelor Route Map Server")
 
-# --- AJOUTEZ CE BLOC ICI ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Autorise tous les sites web (dont votre Streamlit) à appeler cette API
-    allow_credentials=True,
-    allow_methods=["*"],  # Autorise toutes les méthodes (GET, POST, etc.)
-    allow_headers=["*"],
-)
+STATIC_DIR = BASE_DIR / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
 
 ROUTES_FILE = "data/routes.json"
 os.makedirs("data", exist_ok=True)
@@ -51,7 +47,7 @@ def load_pref_routes() -> list:
     with open(PREF_ROUTES_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-def find_pref_waypoints(origin: str, dest: str, super_mode: bool = False) -> list:
+def find_pref_waypoints(origin: str, dest: str) -> list:
     """Retourne les waypoints préférentiels pour un trajet, ou []."""
     prefs = load_pref_routes()
     o = origin.strip().lower()
@@ -59,13 +55,8 @@ def find_pref_waypoints(origin: str, dest: str, super_mode: bool = False) -> lis
     for route in prefs:
         if (route["origine"].strip().lower() == o
                 and route["destination"].strip().lower() == d):
-            
-            # Support de la structure enrichie (super_waypoints)
-            key = "super_waypoints" if super_mode and "super_waypoints" in route else "waypoints"
-            wps_raw = route.get(key, [])
-            
             wps = []
-            for wp in wps_raw:
+            for wp in route.get("waypoints", []):
                 parts = wp.split(",")
                 if len(parts) == 2:
                     wps.append({
@@ -142,7 +133,6 @@ class RouteRecalc(BaseModel):
     dest:           str
     avoid_tolls:    bool = False
     avoid_highways: bool = False
-    super_pref:     bool = False
 
 class WaypointItem(BaseModel):
     lat: float
@@ -152,7 +142,6 @@ class RecalcDragRequest(BaseModel):
     waypoints:      List[WaypointItem]
     avoid_tolls:    bool = False
     avoid_highways: bool = False
-    super_pref:     bool = False
     route_id:       Optional[str] = None
 
 
@@ -230,7 +219,7 @@ async def _geocode(address: str) -> Optional[list]:
         resp = await client.get(
             "https://api.myptv.com/geocoding/v1/locations/by-text",
             headers={"apiKey": PTV_API_KEY},
-            params={"searchText": address, "countryFilter": "FR,BE,LU,DE,ES,NL,GB"},
+            params={"searchText": address, "countryFilter": "FRA,BEL,LUX,DEU,ESP"},
             timeout=15,
         )
     if resp.status_code != 200:
@@ -241,7 +230,7 @@ async def _geocode(address: str) -> Optional[list]:
     loc = results[0]["referencePosition"]
     return [loc["latitude"], loc["longitude"]]
 
-async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: bool, super_pref: bool = False) -> dict:
+async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: bool) -> dict:
     """Appel PTV routing v1 GET — waypoints répétés en query string."""
     query_params = [
         ("profile", "EUR_TRAILER_TRUCK"),
@@ -259,7 +248,7 @@ async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: boo
             query_params.append(("waypoints", f"{lat},{lng}"))
 
     avoid = []
-    if avoid_tolls or super_pref: avoid.append("TOLL")
+    if avoid_tolls:    avoid.append("TOLL_ROADS")
     if avoid_highways: avoid.append("HIGHWAYS")
     if avoid:
         query_params.append(("options[avoid]", ",".join(avoid)))
@@ -289,36 +278,6 @@ async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: boo
 async def health():
     return {"status": "ok"}
 
-@app.get("/api/geocode")
-async def api_geocode(q: str):
-    """Route API pour la recherche d'adresse depuis le frontend."""
-    if not q:
-        raise HTTPException(status_code=400, detail="Requête vide")
-        
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            "https://api.myptv.com/geocoding/v1/locations/by-text",
-            headers={"apiKey": PTV_API_KEY},
-            params={"searchText": q, "countryFilter": "FR,BE,LU,DE,ES,NL,GB"},
-            timeout=15,
-        )
-        
-    if resp.status_code != 200:
-        raise HTTPException(status_code=500, detail="Erreur avec l'API PTV")
-        
-    results = resp.json().get("locations", [])
-    if not results:
-        raise HTTPException(status_code=404, detail="Adresse introuvable")
-        
-    best_match = results[0]
-    loc = best_match["referencePosition"]
-    label = best_match.get("address", {}).get("formattedAddress", q)
-
-    return {
-        "lat": loc["latitude"],
-        "lng": loc["longitude"],
-        "label": label
-    }
 
 # ── Créer une route ──────────────────────────────────────────────────────────
 @app.post("/api/create_route")
@@ -328,13 +287,16 @@ async def create_route(route: RouteCreate):
     # ✅ CORRIGÉ : route_data créé AVANT d'être utilisé
     route_data = route.dict()
     route_data["polyline_original"] = route.polyline  # immuable, jamais écrasé
-    route_data["polyline_current"]  = route.polyline  # modifiable par drag
+    route_data["polyline_current"]  = route.polyline 
+    route_data["distance_km_original"] = route.distance_km
+    route_data["duration_h_original"]  = route.duration_h
+    route_data["prix_peage_original"]  = route.prix_peage 
 
     routes = {route_id: route_data}
     save_routes(routes)
 
-        url = f"{MAP_SERVER_URL}/carte?id={route_id}"
-        return {"url": url, "id": route_id}
+    url = f"{MAP_SERVER_URL}/carte?id={route_id}"
+    return {"url": url, "id": route_id}
 
 
 # ── Afficher la carte ────────────────────────────────────────────────────────
@@ -366,14 +328,14 @@ async def recalculate(data: RouteRecalc):
     if not origin_coords or not dest_coords:
         raise HTTPException(status_code=400, detail="Géocodage impossible")
 
-    pref_wps = find_pref_waypoints(data.origin, data.dest, super_mode=data.super_pref)
+    pref_wps = find_pref_waypoints(data.origin, data.dest)
 
     waypoints_list = [f"{origin_coords[0]},{origin_coords[1]}"]
     for wp in pref_wps:
         waypoints_list.append(f"{wp['lat']},{wp['lng']}")
     waypoints_list.append(f"{dest_coords[0]},{dest_coords[1]}")
 
-    ptv = await _call_ptv(waypoints_list, data.avoid_tolls, data.avoid_highways, super_pref=data.super_pref)
+    ptv = await _call_ptv(waypoints_list, data.avoid_tolls, data.avoid_highways)
 
     distance_m, duration_s = _extract_distance_duration(ptv)
     prix_peage = _extract_toll(ptv)
@@ -419,9 +381,29 @@ async def recalculate_drag(data: RecalcDragRequest):
 
     print(f"RÉSULTAT PTV : dist={distance_m}m, dur={duration_s}s, peage={prix_peage}, coords={len(coords)} points")
 
-    # ✅ On écrase seulement polyline_current, jamais polyline_original
     if data.route_id and FIREBASE_URL:
+        # ── 1) Lire la route existante pour préserver les originaux ──
+        try:
+            existing = httpx.get(
+                f"{FIREBASE_URL}/routes/{data.route_id}.json",
+                timeout=10
+            ).json() or {}
+        except Exception as e:
+            print(f"Erreur lecture Firebase: {e}")
+            existing = {}
+
+        # ── 2) Sauvegarder les originaux s'ils n'existent pas encore ──
+        originals_patch = {}
+        if "distance_km_original" not in existing:
+            originals_patch["distance_km_original"] = existing.get("distance_km")
+        if "duration_h_original" not in existing:
+            originals_patch["duration_h_original"] = existing.get("duration_h")
+        if "prix_peage_original" not in existing:
+            originals_patch["prix_peage_original"] = existing.get("prix_peage")
+
+        # ── 3) Écrire originaux + nouvelles valeurs en un seul patch ──
         update_data = {
+            **originals_patch,
             "polyline_current": coords,
             "distance_km":      round(distance_m / 1000, 1),
             "duration_h":       round(duration_s / 3600, 2),
@@ -444,56 +426,62 @@ async def recalculate_drag(data: RecalcDragRequest):
     }
 
 
+
 # ── Reset route → retour à l'itinéraire original ─────────────────────────────
 @app.post("/api/reset_route/{route_id}")
 async def reset_route(route_id: str):
-    """Remet polyline_current = polyline_original dans Firebase."""
     if not FIREBASE_URL:
         raise HTTPException(400, "Firebase non configuré")
 
     try:
         r = httpx.get(
-            f"{FIREBASE_URL}/routes/{route_id}/polyline_original.json",
+            f"{FIREBASE_URL}/routes/{route_id}.json",
             timeout=10
         )
         if r.status_code != 200 or not r.json():
+            raise HTTPException(404, "Route introuvable")
+
+        route = r.json()
+        original_poly = route.get("polyline_original")
+        if not original_poly:
             raise HTTPException(404, "polyline_original introuvable")
 
-        original = r.json()
+        # ✅ Restaurer polyline ET stats
+        reset_data = {
+            "polyline_current": original_poly,
+            "distance_km":      route.get("distance_km_original", route.get("distance_km")),
+            "duration_h":       route.get("duration_h_original",  route.get("duration_h")),
+            "prix_peage":       route.get("prix_peage_original",  route.get("prix_peage")),
+        }
 
         httpx.patch(
             f"{FIREBASE_URL}/routes/{route_id}.json",
-            json={"polyline_current": original},
+            json=reset_data,
             timeout=10
         )
-        return {"status": "reset", "points": len(original)}
+        return {
+            "status": "reset",
+            "points": len(original_poly),
+            "distance_km": reset_data["distance_km"],
+            "duration_h":  reset_data["duration_h"],
+            "prix_peage":  reset_data["prix_peage"],
+        }
 
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, f"Erreur reset: {e}")
     
-
 @app.get("/api/geocode")
 async def geocode(q: str):
     if not q or len(q) < 3:
         raise HTTPException(400, "Requête trop courte")
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={"q": q, "format": "json", "limit": 5},
-            headers={"User-Agent": "ArcelorMapServer/1.0"},
-            timeout=10,
-        )
-    if r.status_code != 200:
-        raise HTTPException(502, "Nominatim indisponible")
-    results = r.json()
-    if not results:
+    coords = await _geocode(q)
+    if not coords:
         raise HTTPException(404, "Adresse introuvable")
-    return [
-        {"display_name": item.get("display_name", ""), "lat": float(item["lat"]), "lon": float(item["lon"])}
-        for item in results
-    ]
+    return {"lat": coords[0], "lng": coords[1], "label": q}
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════

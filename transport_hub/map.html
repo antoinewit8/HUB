@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trajet: {{ route.origin }} → {{ route.dest }}</title>
+
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+
+    <style>
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f8; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+
+        #info-box {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(255,255,255,0.95); backdrop-filter: blur(10px);
+            padding: 25px; border-radius: 12px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15); z-index: 10;
+            width: 320px; max-height: 90vh; overflow-y: auto;
+            border: 1px solid #e1e8ed;
+        }
+        h3 { margin: 0 0 20px 0; font-size: 18px; color: #2c3e50; line-height: 1.4; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        .stat-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 16px; color: #34495e; font-weight: 500; }
+        .badge { font-weight: bold; color: #2c3e50; font-size: 17px; background: #ecf0f1; padding: 6px 10px; border-radius: 6px; text-align: right; min-width: 80px; }
+        .badge-blue { color: #2980b9; background: #e1f0fa; }
+        #wp-container { margin-top: 25px; background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #e9ecef; }
+        h4 { margin: 0 0 12px 0; font-size: 14px; color: #7f8c8d; text-transform: uppercase; letter-spacing: 0.5px; }
+        .wp-item { display: flex; justify-content: space-between; align-items: center; background: white; padding: 10px; margin-bottom: 8px; border-radius: 6px; border-left: 4px solid #3498db; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .wp-remove { color: #e74c3c; cursor: pointer; font-size: 16px; padding: 0 5px; transition: 0.2s; }
+        .wp-remove:hover { color: #c0392b; transform: scale(1.2); }
+        .wp-empty { font-size: 13px; color: #95a5a6; font-style: italic; margin: 0; text-align: center; }
+        .instructions { font-size: 13px; color: #7f8c8d; margin-top: 20px; line-height: 1.5; }
+        .btn { margin-top: 10px; padding: 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; width: 100%; font-weight: bold; transition: 0.2s; }
+        .btn-danger { background: #e74c3c; color: white; }
+        .btn-danger:hover { background: #c0392b; }
+        .btn-reset { background: #f39c12; color: white; }
+        .btn-reset:hover { background: #d68910; }
+        .btn-reset:disabled { background: #bdc3c7; cursor: not-allowed; }
+        #route-state { font-size: 12px; text-align: center; padding: 5px 10px; border-radius: 20px; margin-bottom: 15px; font-weight: bold; }
+        .state-original { background: #d5f5e3; color: #1e8449; }
+        .state-modified { background: #fdebd0; color: #d35400; }
+        #loading-indicator { display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.7); color: white; padding: 15px 25px; border-radius: 8px; z-index: 100; font-size: 15px; font-weight: bold; }
+        #search-box { margin-top: 20px; border-top: 1px solid #e1e8ed; padding-top: 15px; }
+        #search-box h4 { margin: 0 0 10px 0; font-size: 13px; color: #7f8c8d; text-transform: uppercase; letter-spacing: 0.5px; }
+        #search-input { width: 100%; padding: 9px 10px; border: 1px solid #dce1e7; border-radius: 6px; font-size: 14px; box-sizing: border-box; outline: none; transition: border 0.2s; }
+        #search-input:focus { border-color: #3498db; }
+        #search-btn { margin-top: 8px; padding: 9px; width: 100%; background: #3498db; color: white; border: none; border-radius: 6px; font-size: 14px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        #search-btn:hover { background: #2980b9; }
+        #search-btn:disabled { background: #bdc3c7; cursor: not-allowed; }
+        #search-error { font-size: 12px; color: #e74c3c; margin-top: 6px; display: none; }
+        .search-popup .maplibregl-popup-content { padding: 12px; border-radius: 8px; font-family: 'Segoe UI', Arial, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.2); min-width: 180px; }
+        .popup-label { font-size: 13px; font-weight: bold; color: #2c3e50; margin-bottom: 10px; word-break: break-word; }
+        .popup-btn { display: block; width: 100%; padding: 8px; margin-bottom: 6px; border: none; border-radius: 5px; font-size: 13px; font-weight: bold; cursor: pointer; transition: 0.2s; }
+        .popup-btn-origin { background: #2ecc71; color: white; }
+        .popup-btn-origin:hover { background: #27ae60; }
+        .popup-btn-dest { background: #e74c3c; color: white; }
+        .popup-btn-dest:hover { background: #c0392b; }
+        .popup-btn-cancel { background: #ecf0f1; color: #7f8c8d; }
+        .popup-btn-cancel:hover { background: #dce1e7; }
+    </style>
+</head>
+<body>
+
+    <div id="info-box">
+        <h3>📍 {{ route.origin }} <br>🏁 {{ route.dest }}</h3>
+        <div id="route-state" class="state-original">✅ Itinéraire original</div>
+        <div class="stat-row">Distance <span class="badge badge-blue" id="dist">{{ route.distance_km }} km</span></div>
+        <div class="stat-row">Durée    <span class="badge"            id="dur" >{{ route.duration_h }} h</span></div>
+        <div class="stat-row">Péage    <span class="badge"            id="toll">{{ route.prix_peage }} €</span></div>
+
+        <div id="wp-container">
+            <h4>🗺️ Étapes du trajet</h4>
+            <div id="wp-list">
+                <p class="wp-empty">Aucune étape ajoutée.</p>
+            </div>
+            <button class="btn btn-danger" onclick="clearWaypoints()">🗑️ Tout effacer</button>
+            <button class="btn btn-reset" id="btn-reset" onclick="resetToOriginal()" disabled>
+                🔄 Revenir à l'itinéraire original
+            </button>
+        </div>
+
+        <div id="search-box">
+            <h4>🔍 Rechercher une adresse</h4>
+            <input id="search-input" type="text" placeholder="Ex : 14 rue de la Paix, Paris" autocomplete="off" />
+            <button id="search-btn" onclick="searchAddress()">Rechercher</button>
+            <div id="search-error">❌ Adresse introuvable</div>
+        </div>
+
+        <div class="instructions">
+            <b>Astuces :</b><br>
+            🖱️ <b>Déplacer</b> le départ/arrivée à la souris.<br>
+            ➕ <b>Clic-droit</b> sur la carte pour ajouter une étape.<br>
+            🔍 <b>Rechercher</b> une adresse pour la définir comme départ ou arrivée.<br>
+            🔄 <b>Reset</b> pour revenir au tracé d'origine.<br>
+        </div>
+    </div>
+
+    <div id="loading-indicator">⏳ Calcul en cours...</div>
+    <div id="map"></div>
+
+    <script>
+        const routeId   = "{{ route_id }}";
+        const serverUrl = "{{ server_url }}";
+
+        const initPolylineCurrent  = {{ (route.polyline_current  or route.polyline) | tojson }};
+        const initPolylineOriginal = {{ (route.polyline_original or route.polyline) | tojson }};
+
+        let geojsonCoords           = initPolylineCurrent.map(c  => [c[1], c[0]]);
+        const originalGeojsonCoords = initPolylineOriginal.map(c => [c[1], c[0]]);
+
+        const startCoord = originalGeojsonCoords[0];
+        const endCoord   = originalGeojsonCoords[originalGeojsonCoords.length - 1];
+
+        let isModified = false;
+
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+            center: startCoord,
+            zoom: 5
+        });
+
+        map.addControl(new maplibregl.NavigationControl());
+
+        let originMarker, destMarker;
+        let waypoints = [];
+
+        map.on('load', () => {
+
+            map.addSource('originalRouteSource', {
+                type: 'geojson',
+                data: buildGeoJSON(originalGeojsonCoords)
+            });
+            map.addLayer({
+                id: 'originalRouteLayer', type: 'line',
+                source: 'originalRouteSource',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#95a5a6', 'line-width': 5, 'line-opacity': 0.0 }
+            });
+
+            map.addSource('routeSource', {
+                type: 'geojson',
+                data: buildGeoJSON(geojsonCoords)
+            });
+            map.addLayer({
+                id: 'routeLayer', type: 'line',
+                source: 'routeSource',
+                layout: { 'line-join': 'round', 'line-cap': 'round' },
+                paint: { 'line-color': '#007cbf', 'line-width': 6, 'line-opacity': 0.85 }
+            });
+
+            fitBoundsToCoords(geojsonCoords);
+
+            originMarker = new maplibregl.Marker({ color: '#27ae60', draggable: true })
+                .setLngLat(startCoord).addTo(map);
+            destMarker = new maplibregl.Marker({ color: '#c0392b', draggable: true })
+                .setLngLat(endCoord).addTo(map);
+
+            originMarker.on('dragend', () => recalculateRoute());
+            destMarker.on('dragend',   () => recalculateRoute());
+
+            map.on('contextmenu', (e) => addWaypoint(e.lngLat));
+
+            if (JSON.stringify(initPolylineCurrent) !== JSON.stringify(initPolylineOriginal)) {
+                setModifiedState(true);
+            }
+        });
+
+        function buildGeoJSON(coords) {
+            return { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } };
+        }
+
+        function fitBoundsToCoords(coords) {
+            const bounds = new maplibregl.LngLatBounds(coords[0], coords[0]);
+            coords.forEach(c => bounds.extend(c));
+            map.fitBounds(bounds, { padding: 80 });
+        }
+
+        function setLoading(on) {
+            document.getElementById('loading-indicator').style.display = on ? 'block' : 'none';
+            map.setPaintProperty('routeLayer', 'line-opacity', on ? 0.3 : 0.85);
+        }
+
+        function setModifiedState(modified) {
+            isModified = modified;
+            const badge    = document.getElementById('route-state');
+            const btnReset = document.getElementById('btn-reset');
+            if (modified) {
+                badge.className   = 'state-modified';
+                badge.textContent = '✏️ Itinéraire modifié';
+                btnReset.disabled = false;
+                map.setPaintProperty('originalRouteLayer', 'line-opacity', 0.45);
+            } else {
+                badge.className   = 'state-original';
+                badge.textContent = '✅ Itinéraire original';
+                btnReset.disabled = true;
+                map.setPaintProperty('originalRouteLayer', 'line-opacity', 0.0);
+            }
+        }
+
+        function addWaypoint(lngLat) {
+            const id = Date.now();
+            const wpMarker = new maplibregl.Marker({ color: '#3498db', draggable: true }).setLngLat(lngLat).addTo(map);
+            const wpObj = { id, marker: wpMarker };
+            waypoints.push(wpObj);
+            wpMarker.on('dragend', () => { updateWaypointsList(); recalculateRoute(); });
+            wpMarker.getElement().addEventListener('dblclick', () => removeWaypoint(id));
+            updateWaypointsList();
+            recalculateRoute();
+        }
+
+        function removeWaypoint(id) {
+            const index = waypoints.findIndex(w => w.id === id);
+            if (index === -1) return;
+            waypoints[index].marker.remove();
+            waypoints.splice(index, 1);
+            updateWaypointsList();
+            if (waypoints.length === 0 && !hasMarkersMovedFromOriginal()) restoreOriginalDisplay();
+            else recalculateRoute();
+        }
+
+        function clearWaypoints() {
+            waypoints.forEach(wp => wp.marker.remove());
+            waypoints = [];
+            updateWaypointsList();
+            if (!hasMarkersMovedFromOriginal()) restoreOriginalDisplay();
+            else recalculateRoute();
+        }
+
+        function hasMarkersMovedFromOriginal() {
+            if (!originMarker || !destMarker) return false;
+            const o = originMarker.getLngLat(), d = destMarker.getLngLat(), t = 0.001;
+            return Math.abs(o.lat - startCoord[1]) > t || Math.abs(o.lng - startCoord[0]) > t ||
+                   Math.abs(d.lat - endCoord[1])   > t || Math.abs(d.lng - endCoord[0])   > t;
+        }
+
+        function updateWaypointsList() {
+            const listDiv = document.getElementById('wp-list');
+            if (waypoints.length === 0) {
+                listDiv.innerHTML = '<p class="wp-empty">Aucune étape ajoutée. Clic-droit sur la carte pour en ajouter.</p>';
+                return;
+            }
+            listDiv.innerHTML = '';
+            waypoints.forEach((wp, index) => {
+                const lngLat = wp.marker.getLngLat();
+                const item   = document.createElement('div');
+                item.className = 'wp-item';
+                item.innerHTML = `
+                    <div><b>Étape ${index + 1}</b><br>
+                    <span style="color:#7f8c8d; font-size:12px;">${lngLat.lat.toFixed(4)}, ${lngLat.lng.toFixed(4)}</span></div>
+                    <div class="wp-remove" onclick="removeWaypoint(${wp.id})" title="Supprimer">❌</div>`;
+                listDiv.appendChild(item);
+            });
+        }
+
+        async function restoreOriginalDisplay() {
+            geojsonCoords = [...originalGeojsonCoords];
+            map.getSource('routeSource').setData(buildGeoJSON(geojsonCoords));
+            originMarker.setLngLat(startCoord);
+            destMarker.setLngLat(endCoord);
+            setModifiedState(false);
+        
+            // Restaurer les stats originales depuis les variables Jinja
+            document.getElementById('dist').textContent = '{{ route.distance_km }}' + ' km';
+            document.getElementById('dur').textContent  = '{{ route.duration_h }}'  + ' h';
+            document.getElementById('toll').textContent = '{{ route.prix_peage }}'  + ' €';
+        }
+
+
+        async function resetToOriginal() {
+            waypoints.forEach(wp => wp.marker.remove());
+            waypoints = [];
+            updateWaypointsList();
+            await restoreOriginalDisplay();
+        }
+
+        async function recalculateRoute() {
+            const allPoints = [
+                originMarker.getLngLat(),
+                ...waypoints.map(w => w.marker.getLngLat()),
+                destMarker.getLngLat()
+            ];
+            setLoading(true);
+            try {
+                const response = await fetch(`${serverUrl}/api/recalculate_drag`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ route_id: routeId, waypoints: allPoints.map(p => ({ lat: p.lat, lng: p.lng })) })
+                });
+                if (!response.ok) { console.error('Erreur serveur:', response.status); return; }
+                const data = await response.json();
+                
+                // DEBUG — ouvre la console F12 pour voir ce que le serveur renvoie
+                console.log('=== RÉPONSE SERVEUR recalculate_drag ===', JSON.stringify(data, null, 2));
+                
+                document.getElementById('dist').innerText = data.distance_km + ' km';
+                document.getElementById('dur').innerText  = data.duration_h  + ' h';
+                document.getElementById('toll').innerText = data.prix_peage  + ' €';
+                geojsonCoords = data.polyline.map(c => [c[1], c[0]]);
+                map.getSource('routeSource').setData(buildGeoJSON(geojsonCoords));
+                setModifiedState(true);
+            } catch (err) {
+                console.error('Erreur recalcul:', err);
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        let searchMarker = null, searchPopup = null;
+
+        async function searchAddress() {
+            const input = document.getElementById('search-input');
+            const btn   = document.getElementById('search-btn');
+            const errEl = document.getElementById('search-error');
+            const q     = input.value.trim();
+            if (!q || q.length < 3) return;
+            errEl.style.display = 'none';
+            btn.disabled = true; btn.innerText = '⏳ Recherche...';
+            try {
+                const res = await fetch(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`);
+                if (!res.ok) { errEl.style.display = 'block'; return; }
+                const data = await res.json();
+                _placeSearchPin(data.lat, data.lng, data.label);
+            } catch (e) {
+                console.error('Erreur geocode:', e);
+                errEl.style.display = 'block';
+            } finally {
+                btn.disabled = false; btn.innerText = 'Rechercher';
+            }
+        }
+
+        document.getElementById('search-input').addEventListener('keydown', e => {
+            if (e.key === 'Enter') searchAddress();
+        });
+
+        function _placeSearchPin(lat, lng, label) {
+            if (searchMarker) { searchMarker.remove(); searchMarker = null; }
+            if (searchPopup)  { searchPopup.remove();  searchPopup  = null; }
+            const el = document.createElement('div');
+            el.style.cssText = `width:22px;height:22px;background:#8e44ad;border:3px solid white;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 6px rgba(0,0,0,0.3);cursor:pointer;`;
+            searchMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([lng, lat]).addTo(map);
+            map.flyTo({ center: [lng, lat], zoom: Math.max(map.getZoom(), 13), duration: 800 });
+            searchPopup = new maplibregl.Popup({ className: 'search-popup', closeButton: false, maxWidth: '220px' })
+                .setLngLat([lng, lat])
+                .setHTML(`
+                    <div class="popup-label">📍 ${label}</div>
+                    <button class="popup-btn popup-btn-origin" onclick="_applySearchResult(${lat},${lng},'origin')">🟢 Définir comme départ</button>
+                    <button class="popup-btn popup-btn-dest"   onclick="_applySearchResult(${lat},${lng},'dest')">🔴 Définir comme arrivée</button>
+                    <button class="popup-btn popup-btn-cancel" onclick="_cancelSearchPin()">Annuler</button>`)
+                .addTo(map);
+        }
+
+        async function _applySearchResult(lat, lng, role) {
+            _cancelSearchPin();
+            if (role === 'origin') originMarker.setLngLat([lng, lat]);
+            else                   destMarker.setLngLat([lng, lat]);
+            await recalculateRoute();
+        }
+
+        function _cancelSearchPin() {
+            if (searchMarker) { searchMarker.remove(); searchMarker = null; }
+            if (searchPopup)  { searchPopup.remove();  searchPopup  = null; }
+        }
+
+    </script>
+</body>
+</html>

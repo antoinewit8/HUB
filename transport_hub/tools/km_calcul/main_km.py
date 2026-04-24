@@ -2,6 +2,7 @@ import os
 import time
 import json
 import threading
+import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from modules.ptv_router_km import calculate_km_route, geocode_address
 from modules.excel_handler_km import read_all_sheets, write_km_results
@@ -40,15 +41,16 @@ def charger_cache():
     return {}
 
 def sauvegarder_cache(cache):
+    snapshot = copy.deepcopy(cache)
     with open(CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(cache, f, indent=4, ensure_ascii=False)
+        json.dump(snapshot, f, indent=4, ensure_ascii=False)
 
 
 # ── Traitement complet : calcul + carte dans la foulée ────────────────────
-def traiter_trajet(index, total, route, cache, calculer_peage):
+def traiter_trajet(index, total, route, cache, calculer_peage, super_pref=False):
     log = [f"\n[{index}/{total}] {route['label']}"]   # ← buffer de logs
 
-    cache_key = f"{route['origin']} || {route['dest']}"
+    cache_key = f"{route['origin']} || {route['dest']} || super={super_pref}"
 
     with cache_lock:
         if cache_key in cache:
@@ -81,7 +83,8 @@ def traiter_trajet(index, total, route, cache, calculer_peage):
         origin_coords[0], origin_coords[1],
         dest_coords[0],   dest_coords[1],
         waypoints      = waypoints,
-        calculer_peage = calculer_peage
+        calculer_peage = calculer_peage,
+        super_pref     = super_pref
     )
 
     if not data:
@@ -119,13 +122,20 @@ def traiter_trajet(index, total, route, cache, calculer_peage):
 
 # ── MAIN ──────────────────────────────────────────────────────────────────
 def main():
-    filepath = input("📁 Chemin du fichier Excel: ").strip().strip('"')
+    filepath = input("📁 Chemin du fichier Excel: ").strip().strip('"').strip("'")
+    
+    # Normalise le chemin en absolu IMMÉDIATEMENT
+    filepath = os.path.abspath(filepath)
+    
+    if not os.path.exists(filepath):
+        print(f"❌ Fichier introuvable : {filepath}")
+        return
+    
     choix_peage    = input("💶 Calculer les frais de péage ? (o/n) : ").strip().lower()
     calculer_peage = choix_peage in ('o', 'oui')
 
-    dossier_excel = os.path.dirname(os.path.abspath(filepath))
-    if dossier_excel:
-        os.chdir(dossier_excel)
+    choix_super    = input("🚀 Activer le mode SUPER PRÉFÉRENTIEL ? (o/n) : ").strip().lower()
+    super_pref     = choix_super in ('o', 'oui')
 
     print("\n🔌 Réveil du serveur de cartes...")
     warm_up_server()
@@ -156,7 +166,7 @@ def main():
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             for i, route in enumerate(routes):
                 future = executor.submit(
-                    traiter_trajet, i + 1, total, route, cache, calculer_peage
+                    traiter_trajet, i + 1, total, route, cache, calculer_peage, super_pref
                 )
                 futures_map[future] = i
 
@@ -171,13 +181,21 @@ def main():
 
         write_km_results(ws, results, calculer_peage)
 
-    sauvegarder_cache(cache)   # ← sauvegarde finale garantie
+    sauvegarder_cache(cache)
 
-    output_path = filepath.replace(".xlsx", "_KM.xlsx")
+    # ── Génération du chemin de sortie ROBUSTE ──
+    dossier = os.path.dirname(filepath)
+    nom     = os.path.basename(filepath)
+    base, ext = os.path.splitext(nom)  # gère .xlsx .XLSX .Xlsx etc.
+    output_name = f"{base}_KM{ext}"
+    output_path = os.path.join(dossier, output_name)
+
     wb.save(output_path)
-    print(f"\n🎉 Terminé ! Excel sauvegardé : {os.path.basename(output_path)}")
+    print(f"\n📂 Dossier : {dossier}")
+    print(f"🎉 Terminé ! Excel sauvegardé : {output_name}")
+    print(f"📍 Chemin complet : {output_path}")
+
 
 
 if __name__ == "__main__":
     main()
-

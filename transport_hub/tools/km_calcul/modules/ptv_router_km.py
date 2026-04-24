@@ -3,7 +3,10 @@ import time
 import os
 import re
 import json
+import streamlit as st
 from dotenv import load_dotenv
+from .route_optimizer import get_super_pref_logic
+
 
 load_dotenv()
 
@@ -151,13 +154,15 @@ def geocode_address(address):
         pays_str    = match_ville_cp.group(3).strip()
         country_iso = PAYS_TO_ISO.get(pays_str.lower())
 
-        result = _geocode_by_text(f"{ville}, {pays_str}")
-        if result:
-            return result
+        # CP + pays disponibles → by-postal-code en priorité (précis, pas de dérive)
         if country_iso:
             result = geocode_by_postal_code(cp, country_iso)
             if result:
                 return result
+        # Fallback by-text seulement si le CP échoue
+        result = _geocode_by_text(f"{ville}, {pays_str}")
+        if result:
+            return result
         return _geocode_by_text(address)
 
     if match_cp_only:
@@ -199,13 +204,22 @@ def decode_polyline(encoded: str) -> list:
         coords.append([lat / 1e5, lon / 1e5])
     return coords
 
-def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, calculer_peage=False):
+def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, calculer_peage=False, super_pref=False):
     """
     Calcule l'itinéraire via PTV API (GET) avec le paramètre waypoints et un radius de tolérance.
     """
     
     # 1. Géocodage des waypoints intermédiaires
     waypoints_coords = []
+
+    # Injection de l'intelligence "Super Préférentielle"
+    extra_avoids = []
+    if super_pref:
+        sp_wps, sp_avoids = get_super_pref_logic(lat_start, lon_start, lat_end, lon_end)
+        waypoints_coords.extend(sp_wps)
+        extra_avoids.extend(sp_avoids)
+        print(f"      🚀 Mode SUPER activé : {len(sp_wps)} points injectés")
+
     if waypoints:
         for wp_address in waypoints:
             if isinstance(wp_address, (list, tuple)) and len(wp_address) == 2:
@@ -246,6 +260,11 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
     ]
     if calculer_peage:
         query_params.append(("options[currency]", "EUR"))
+
+    if extra_avoids:
+        # On évite les péages et/ou tunnels selon la logique optimizer
+        # PTV v1 supporte TOLL, HIGHWAYS, FERRIES, RAIL_SHUTTLES
+        query_params.append(("options[avoid]", ",".join(set(extra_avoids))))
 
     # 3. Rassemblement de tous les points (Départ + Intermédiaires + Arrivée)
     all_points = [(lat_start, lon_start)] + waypoints_coords + [(lat_end, lon_end)]
@@ -318,7 +337,7 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
             }
 
         except Exception as e:
-            print(f"      ⚠️  Tentative {attempt}/{MAX_RETRIES} : {e}")
+            print(f"      ⚠️  Tentative {attempt}/{MAX_RETRIES} échouée: {e}")
             time.sleep(RETRY_DELAY)
 
     return None
