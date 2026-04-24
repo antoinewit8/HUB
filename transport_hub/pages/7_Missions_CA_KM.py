@@ -416,6 +416,12 @@ def parse_missions(file) -> pd.DataFrame:
         return pd.NaT
 
     def _to_hms(v):
+        if isinstance(v, pd.Timedelta):
+            total = int(v.total_seconds()); h, r = divmod(total, 3600); m, s = divmod(r, 60)
+            return min(h, 23), m, s
+        if isinstance(v, _dt.timedelta):
+            total = int(v.total_seconds()); h, r = divmod(total, 3600); m, s = divmod(r, 60)
+            return min(h, 23), m, s
         if isinstance(v, _dt.time):
             return v.hour, v.minute, v.second
         if isinstance(v, (_dt.datetime, pd.Timestamp)):
