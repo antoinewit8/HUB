@@ -855,53 +855,79 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
 def export_excel(df_result: pd.DataFrame, df_vide: pd.DataFrame) -> bytes:
     output = io.BytesIO()
 
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # ── Feuille principale ────────────────────────────────
-        cols_main = [
-            "chauffeur", "tracteur", "dossier", "date_debut", "date_fin",
-            "client", "etat_vente", "nb_stops", "stops_texte",
-            "km_total", "km_vide",
-            "prix_transport", "total_vente",
-        ]
-        df_export = df_result[[c for c in cols_main if c in df_result.columns]].copy()
-        df_export.columns = [
-            "Chauffeur", "Tracteur", "N° Dossier", "Date début", "Date fin",
-            "Client", "État vente", "Nb stops", "Séquence stops",
-            "KM Total (PTV)", "KM À Vide (PTV)",
-            "Prix Transport (€)", "Total Vente (€)",
-        ][:len(df_export.columns)]
+    try:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
 
-        df_export.to_excel(writer, sheet_name="Missions & CA", index=False)
+            # ── Feuille principale ────────────────────────────────
+            col_rename = {
+                "chauffeur":     "Chauffeur",
+                "tracteur":      "Tracteur",
+                "remorque":      "Remorque",
+                "dossier":       "N° Dossier",
+                "date_debut":    "Date début",
+                "date_fin":      "Date fin",
+                "client":        "Client",
+                "etat_vente":    "État vente",
+                "nb_stops":      "Nb stops",
+                "stops_texte":   "Séquence stops",
+                "km_total":      "KM Chargés",
+                "km_vide":       "KM À Vide",
+                "prix_transport": "Prix Transport (€)",
+                "total_vente":   "Total Vente (€)",
+            }
+            cols_dispo = [c for c in col_rename if c in df_result.columns]
+            df_export = df_result[cols_dispo].copy()
+            # Ajouter KM complet + rentabilité
+            if "km_total" in df_result.columns and "km_vide" in df_result.columns:
+                df_export = df_export.copy()
+                df_export["km_complet"]    = df_result["km_total"].fillna(0) + df_result["km_vide"].fillna(0)
+                df_export["rentabilite"]   = (df_result["total_vente"] / df_export["km_complet"].replace(0, np.nan)).round(2)
+                col_rename["km_complet"]   = "KM Complet"
+                col_rename["rentabilite"]  = "Rentabilité €/km"
+                cols_dispo = [c for c in col_rename if c in df_export.columns]
+                df_export = df_export[cols_dispo]
+            df_export = df_export.rename(columns=col_rename)
+            df_export = df_export.fillna("")
+            df_export.to_excel(writer, sheet_name="Missions & CA", index=False)
+            _style_sheet(writer.sheets["Missions & CA"], len(df_export))
 
-        ws = writer.sheets["Missions & CA"]
-        _style_sheet(ws, len(df_export))
+            # ── Feuille résumé par chauffeur ──────────────────────
+            df_resume = df_result.groupby("chauffeur", as_index=False).agg(
+                Dossiers      = ("dossier",        "count"),
+                KM_Charges    = ("km_total",        "sum"),
+                KM_Vide       = ("km_vide",          "sum"),
+                Prix_Transport= ("prix_transport",   "sum"),
+                Total_Vente   = ("total_vente",      "sum"),
+            ).round(1)
+            df_resume["KM Complet"]       = df_resume["KM_Charges"] + df_resume["KM_Vide"]
+            df_resume["% KM Vide"]        = (df_resume["KM_Vide"] / df_resume["KM Complet"].replace(0, np.nan) * 100).round(1)
+            df_resume["Rentabilité €/km"] = (df_resume["Total_Vente"] / df_resume["KM Complet"].replace(0, np.nan)).round(2)
+            df_resume = df_resume.rename(columns={
+                "chauffeur": "Chauffeur", "Dossiers": "Nb Dossiers",
+                "KM_Charges": "KM Chargés", "KM_Vide": "KM À Vide",
+                "Prix_Transport": "Prix Transport (€)", "Total_Vente": "Total Vente (€)",
+            }).fillna("")
+            df_resume.to_excel(writer, sheet_name="Résumé Chauffeurs", index=False)
+            _style_sheet(writer.sheets["Résumé Chauffeurs"], len(df_resume))
 
-        # ── Feuille résumé par chauffeur ──────────────────────
-        df_resume = df_result.groupby("chauffeur", as_index=False).agg(
-            nb_dossiers   = ("dossier",         "count"),
-            km_total      = ("km_total",         "sum"),
-            km_vide       = ("km_vide",           "sum"),
-            prix_transport= ("prix_transport",    "sum"),
-            total_vente   = ("total_vente",       "sum"),
-        ).round(1)
-        df_resume["KM Complet"] = df_resume["km_total"] + df_resume["km_vide"]
-        df_resume["% KM Vide"]  = (df_resume["km_vide"] / df_resume["KM Complet"].replace(0, np.nan) * 100).round(1)
-        df_resume["Rentabilité €/km"] = (df_resume["total_vente"] / df_resume["KM Complet"].replace(0, np.nan)).round(2)
-        df_resume.columns = ["Chauffeur", "Nb Dossiers", "KM Chargés", "KM À Vide",
-                              "Prix Transport (€)", "Total Vente (€)",
-                              "KM Complet", "% KM Vide", "Rentabilité €/km"]
-        df_resume.to_excel(writer, sheet_name="Résumé Chauffeurs", index=False)
-        _style_sheet(writer.sheets["Résumé Chauffeurs"], len(df_resume))
+            # ── Feuille km à vide détail ──────────────────────────
+            if not df_vide.empty:
+                vide_rename = {
+                    "chauffeur":       "Chauffeur",
+                    "dossier_depart":  "Dossier départ",
+                    "dossier_arrivee": "Dossier arrivée",
+                    "from_localite":   "Ville départ",
+                    "to_localite":     "Ville arrivée",
+                    "km_vide":         "KM à vide",
+                }
+                df_vide_exp = df_vide[[c for c in vide_rename if c in df_vide.columns]].copy()
+                df_vide_exp = df_vide_exp.rename(columns=vide_rename).fillna("")
+                df_vide_exp.to_excel(writer, sheet_name="KM À Vide Détail", index=False)
+                _style_sheet(writer.sheets["KM À Vide Détail"], len(df_vide_exp))
 
-        # ── Feuille km à vide détail ──────────────────────────
-        if not df_vide.empty:
-            df_vide_exp = df_vide.copy()
-            df_vide_exp.columns = [
-                "Chauffeur", "Dossier départ", "Dossier arrivée",
-                "Ville départ", "Ville arrivée", "KM à vide"
-            ]
-            df_vide_exp.to_excel(writer, sheet_name="KM À Vide Détail", index=False)
-            _style_sheet(writer.sheets["KM À Vide Détail"], len(df_vide_exp))
+    except Exception as e:
+        st.error(f"❌ Erreur génération Excel : {e}")
+        return b""
 
     return output.getvalue()
 
