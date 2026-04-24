@@ -675,12 +675,31 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
         label = f"{ville_r} {cp_r}".strip()
         if progress_cb:
             progress_cb(f"🌍 Géocodage {i+1}/{total_geo} : {label}...")
-        # Construire adresse display pour le warning
         addr_display = parse_origin_from_parts(ville_r, cp_r, pays_r)
         coords = geocode_with_fallback(addr_display, ville_r, cp_r, pays_r)
         geo_cache[(ville_r, cp_r, pays_r)] = coords
         if coords is None:
             st.warning(f"⚠️ Géocodage échoué : {addr_display}")
+
+    # ── DEBUG TEMPORAIRE ──────────────────────────────────────
+    with st.expander(f"🔬 Debug géocodage — {chauffeur}", expanded=True):
+        st.write(f"**Points à géocoder :** {total_geo}")
+        st.write("**Clés points_to_geocode :**", list(points_to_geocode.keys())[:5])
+        st.write("**geo_cache (5 premiers) :**", 
+                 {str(k): v for k, v in list(geo_cache.items())[:5]})
+        # Vérifier le 1er dossier
+        if dossier_sequences:
+            dos0 = list(dossier_sequences.keys())[0]
+            seq0 = dossier_sequences[dos0]
+            st.write(f"**Dossier {dos0} :**", {
+                "loc_ch": seq0["loc_ch"], "cp_ch": seq0["cp_ch"], "pays_ch": seq0["pays_ch"],
+                "loc_de": seq0["loc_de"], "cp_de": seq0["cp_de"], "pays_de": seq0["pays_de"],
+            })
+            key_ch = (seq0["loc_ch"], seq0["cp_ch"], seq0["pays_ch"])
+            key_de = (seq0["loc_de"], seq0["cp_de"], seq0["pays_de"])
+            st.write(f"**Clé charg :** {key_ch} → {geo_cache.get(key_ch)}")
+            st.write(f"**Clé decharg :** {key_de} → {geo_cache.get(key_de)}")
+    # ── FIN DEBUG ─────────────────────────────────────────────
 
     # ── Calcul km totaux par dossier ──────────────────────────
     dossier_km = {}
