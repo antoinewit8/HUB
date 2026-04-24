@@ -561,7 +561,7 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
         # Chauffeur / tracteur (premier non-vide)
         chauffeur = next((v for v in grp["chauffeur"] if v and v not in ("nan", "")), "")
         tracteur  = next((v for v in grp["tracteur"]  if v and v not in ("nan", "")), "")
-        remorque  = next((v for v in grp["remorque"]  if v and v not in ("nan", "")), "") if "remorque" in grp.columns else ""
+        remorque  = next((str(v).strip() for v in grp["remorque"]  if v and str(v).strip() not in ("nan", "")), "") if "remorque" in grp.columns else ""
 
         # Séquence des stops
         stops = []
@@ -999,7 +999,7 @@ if file_missions and file_ca:
 
     # Filtres chauffeur + remorque
     chauffeurs_dispo = sorted([c for c in df_cons_f["chauffeur"].dropna().unique() if c and c != "nan"])
-    remorques_dispo  = sorted([r for r in df_cons_f["remorque"].dropna().unique()  if r and r != "nan"]) if "remorque" in df_cons_f.columns else []
+    remorques_dispo  = sorted([str(r).strip() for r in df_cons_f["remorque"].dropna().unique() if str(r).strip() and str(r).strip() != "nan"]) if "remorque" in df_cons_f.columns else []
 
     fc1, fc2 = st.columns(2)
     with fc1:
@@ -1015,7 +1015,10 @@ if file_missions and file_ca:
 
     # ── KPIs du filtre chauffeur ──────────────────────────────
     if filtre_chauffeur:
-        st.markdown("##### 📊 Aperçu — sélection chauffeur(s)")
+        _sel_label = []
+        if filtre_chauffeur: _sel_label.append(f"{len(filtre_chauffeur)} chauffeur(s)")
+        if filtre_remorque:  _sel_label.append(f"{len(filtre_remorque)} remorque(s)")
+        st.markdown(f"##### 📊 Aperçu — {chr(39).join(_sel_label) or 'sélection'}")
         fk1, fk2, fk3, fk4, fk5, fk6 = st.columns(6)
         _tv = df_display["total_vente"].sum()
         _pt = df_display["prix_transport"].sum()
