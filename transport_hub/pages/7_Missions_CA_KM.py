@@ -350,18 +350,10 @@ def parse_missions(file) -> pd.DataFrame:
     (N° Dossier / Activité / Date / Heure / Nom 1 / Adresse / Numéro /
      Code pays / Code postal / Localité / Chauffeur / Immat. tracteur).
     """
-    df = pd.read_excel(file)
+    # dtype=str : Excel sérialise les dates en ISO "YYYY-MM-DD HH:MM:SS"
+    # et les heures en "H:MM:SS" — on parse en conséquence
+    df = pd.read_excel(file, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
-    # Identifier les colonnes date/heure AVANT conversion en str
-    # On compare après normalisation pour gérer majuscules/accents
-    date_cols_raw = {c for c in df.columns if _norm_col(c) in ('date', 'heure')}
-    for col in df.columns:
-        if col not in date_cols_raw:
-            df[col] = df[col].astype(str)
-    # Après renommage, les colonnes date/heure s'appelleront "date" et "heure"
-    # On garde une référence aux colonnes originales pour le parsing
-    _date_col_orig  = next((c for c in date_cols_raw if _norm_col(c) == "date"),  None)
-    _heure_col_orig = next((c for c in date_cols_raw if _norm_col(c) == "heure"), None)
 
     # ── Mapping : correspondance exacte insensible casse d'abord, fallback partiel ──
     cols_lower = {_norm_col(c): c for c in df.columns}
@@ -404,54 +396,29 @@ def parse_missions(file) -> pd.DataFrame:
     df["activite_norm"] = df["activite"].apply(normalize_activite)
 
     # ── Date + Heure → datetime ─────────────────────────────────
+    # dtype=str : Date = "YYYY-MM-DD HH:MM:SS", Heure = "H:MM:SS"
     import datetime as _dt
 
-    def _to_date(v):
-        if isinstance(v, (_dt.datetime, pd.Timestamp)):
-            return pd.Timestamp(v).normalize()
-        if isinstance(v, _dt.date):
-            return pd.Timestamp(v)
-        s = str(v or "").strip()
-        if not s or s.lower() == "nan":
+    def _combine(date_s, heure_s):
+        date_s  = str(date_s  or "").strip()[:10]  # "YYYY-MM-DD"
+        heure_s = str(heure_s or "").strip()        # "H:MM:SS"
+        if not date_s or date_s == "nan":
             return pd.NaT
-        for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
-            try:
-                return pd.Timestamp(_dt.datetime.strptime(s[:10], fmt))
-            except Exception:
-                pass
-        return pd.NaT
-
-    def _to_hms(v):
-        if isinstance(v, pd.Timedelta):
-            total = int(v.total_seconds()); h, r = divmod(total, 3600); m, s = divmod(r, 60)
-            return min(h, 23), m, s
-        if isinstance(v, _dt.timedelta):
-            total = int(v.total_seconds()); h, r = divmod(total, 3600); m, s = divmod(r, 60)
-            return min(h, 23), m, s
-        if isinstance(v, _dt.time):
-            return v.hour, v.minute, v.second
-        if isinstance(v, (_dt.datetime, pd.Timestamp)):
-            t = pd.Timestamp(v); return t.hour, t.minute, t.second
-        if isinstance(v, float) and not pd.isna(v):
-            total = int(round(v * 86400)); h, r = divmod(total, 3600); m, s = divmod(r, 60)
-            return min(h, 23), m, s
-        s = str(v or "").strip()
+        try:
+            d = _dt.datetime.strptime(date_s, "%Y-%m-%d")
+        except Exception:
+            return pd.NaT
         for fmt in ("%H:%M:%S", "%H:%M"):
             try:
-                t = _dt.datetime.strptime(s, fmt); return t.hour, t.minute, t.second
+                t = _dt.datetime.strptime(heure_s, fmt)
+                return pd.Timestamp(d.replace(hour=t.hour, minute=t.minute, second=t.second))
             except Exception:
                 pass
-        return 0, 0, 0
+        return pd.Timestamp(d)
 
-    def _combine(dv, hv):
-        d = _to_date(dv)
-        if pd.isna(d): return pd.NaT
-        h, m, s = _to_hms(hv)
-        return d.replace(hour=h, minute=m, second=s)
-
-    _dc = _date_col_orig  or "date"
-    _hc = _heure_col_orig or "heure"
-    df["datetime"] = df.apply(lambda r: _combine(r.get(_dc), r.get(_hc)), axis=1)
+    df["datetime"] = df.apply(
+        lambda r: _combine(r.get("date", ""), r.get("heure", "")), axis=1
+    )
 
     # ── Adresse complète géocodable ────────────────────────────
     df["adresse_complete"] = df.apply(build_address_string, axis=1)
