@@ -561,6 +561,7 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
         # Chauffeur / tracteur (premier non-vide)
         chauffeur = next((v for v in grp["chauffeur"] if v and v not in ("nan", "")), "")
         tracteur  = next((v for v in grp["tracteur"]  if v and v not in ("nan", "")), "")
+        remorque  = next((v for v in grp["remorque"]  if v and v not in ("nan", "")), "") if "remorque" in grp.columns else ""
 
         # Séquence des stops
         stops = []
@@ -599,6 +600,7 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
             "dossier":    dossier,
             "chauffeur":  chauffeur,
             "tracteur":   tracteur,
+            "remorque":   remorque,
             "date_debut": date_debut,
             "date_fin":   date_fin,
             "nb_stops":   len(stops),
@@ -995,20 +997,21 @@ if file_missions and file_ca:
     # ── Tableau consolidé (sans KM pour l'instant) ────────────
     st.markdown("### 📋 Tableau consolidé")
 
-    # Filtre chauffeur
-    chauffeurs_dispo = sorted(df_cons_f["chauffeur"].dropna().unique().tolist())
-    chauffeurs_dispo = [c for c in chauffeurs_dispo if c and c != "nan"]
+    # Filtres chauffeur + remorque
+    chauffeurs_dispo = sorted([c for c in df_cons_f["chauffeur"].dropna().unique() if c and c != "nan"])
+    remorques_dispo  = sorted([r for r in df_cons_f["remorque"].dropna().unique()  if r and r != "nan"]) if "remorque" in df_cons_f.columns else []
 
-    filtre_chauffeur = st.multiselect(
-        "Filtrer par chauffeur :",
-        options=chauffeurs_dispo,
-        default=[],
-        placeholder="Tous les chauffeurs"
-    )
+    fc1, fc2 = st.columns(2)
+    with fc1:
+        filtre_chauffeur = st.multiselect("🚛 Filtrer par chauffeur :", options=chauffeurs_dispo, default=[], placeholder="Tous les chauffeurs")
+    with fc2:
+        filtre_remorque  = st.multiselect("🔗 Filtrer par remorque :",  options=remorques_dispo,  default=[], placeholder="Toutes les remorques")
 
     df_display = df_cons_f.copy()
-    if filtre_chauffeur:
+    if filtre_chauffeur or filtre_remorque:
         df_display = df_display[df_display["chauffeur"].isin(filtre_chauffeur)]
+    if filtre_remorque and "remorque" in df_display.columns:
+        df_display = df_display[df_display["remorque"].isin(filtre_remorque)]
 
     # ── KPIs du filtre chauffeur ──────────────────────────────
     if filtre_chauffeur:
@@ -1025,20 +1028,23 @@ if file_missions and file_ca:
         # Rentabilité €/km (disponible après calcul PTV)
         if "df_result" in st.session_state:
             _dr = st.session_state["df_result"]
-            _dr_ch = _dr[_dr["chauffeur"].isin(filtre_chauffeur)]
-            _km = _dr_ch["km_total"].sum()
-            _rent = _dr_ch["total_vente"].sum() / _km if _km > 0 else 0
+            _dr_f = _dr.copy()
+            if filtre_chauffeur: _dr_f = _dr_f[_dr_f["chauffeur"].isin(filtre_chauffeur)]
+            if filtre_remorque and "remorque" in _dr_f.columns: _dr_f = _dr_f[_dr_f["remorque"].isin(filtre_remorque)]
+            _km = _dr_f["km_total"].sum()
+            _rent = _dr_f["total_vente"].sum() / _km if _km > 0 else 0
             fk6.metric("⚡ Rentabilité", f"{_rent:.2f} €/km")
         else:
             fk6.metric("⚡ Rentabilité", "— (après PTV)")
 
-    cols_show = ["dossier", "chauffeur", "tracteur", "date_debut", "date_fin",
+    cols_show = ["dossier", "chauffeur", "tracteur", "remorque", "date_debut", "date_fin",
                  "client", "etat_vente", "nb_stops", "stops_texte",
                  "prix_transport", "total_vente"]
 
     st.dataframe(
         df_display[[c for c in cols_show if c in df_display.columns]].rename(columns={
             "dossier": "N° Dossier", "chauffeur": "Chauffeur", "tracteur": "Tracteur",
+            "remorque": "Remorque",
             "date_debut": "Date début", "date_fin": "Date fin", "client": "Client",
             "etat_vente": "État vente", "nb_stops": "Nb stops",
             "stops_texte": "Séquence stops",
@@ -1053,27 +1059,46 @@ if file_missions and file_ca:
     # ── Calcul PTV ────────────────────────────────────────────
     st.markdown("### 🗺️ Calcul KM via PTV")
 
-    chauffeurs_ptv = st.multiselect(
-        "Sélectionner les chauffeurs pour le calcul PTV :",
-        options=chauffeurs_dispo,
-        default=[],
-        placeholder="Sélectionner des chauffeurs..."
-    )
+    ptv_c1, ptv_c2 = st.columns(2)
+    with ptv_c1:
+        chauffeurs_ptv = st.multiselect(
+            "🚛 Chauffeurs :",
+            options=chauffeurs_dispo,
+            default=[],
+            placeholder="Sélectionner des chauffeurs..."
+        )
+    with ptv_c2:
+        remorques_ptv = st.multiselect(
+            "🔗 Remorques :",
+            options=remorques_dispo,
+            default=[],
+            placeholder="Toutes les remorques"
+        )
 
-    if chauffeurs_ptv:
+    # Construire la liste des chauffeurs à calculer
+    # Si remorque sélectionnée : prendre les chauffeurs associés à ces remorques
+    if remorques_ptv and "remorque" in df_cons_f.columns:
+        ch_from_remorque = df_cons_f[df_cons_f["remorque"].isin(remorques_ptv)]["chauffeur"].dropna().unique().tolist()
+        chauffeurs_a_calculer = list(set(chauffeurs_ptv + ch_from_remorque))
+    else:
+        chauffeurs_a_calculer = chauffeurs_ptv
+
+    nb_dossiers_ptv = len(df_cons_f[df_cons_f["chauffeur"].isin(chauffeurs_a_calculer)])
+    if chauffeurs_a_calculer:
         st.info(
-            f"ℹ️ Le calcul PTV va géocoder tous les stops et calculer les routes pour "
-            f"**{len(df_cons[df_cons['chauffeur'].isin(chauffeurs_ptv)])} dossiers** "
-            f"({len(chauffeurs_ptv)} chauffeur(s)). Cela peut prendre quelques minutes."
+            f"ℹ️ Calcul pour **{nb_dossiers_ptv} dossiers** "
+            f"({len(chauffeurs_a_calculer)} chauffeur(s)"
+            f"{f', {len(remorques_ptv)} remorque(s)' if remorques_ptv else ''})."
         )
 
     btn_ptv = st.button(
         "🚀 Lancer le calcul PTV",
-        disabled=(not chauffeurs_ptv),
+        disabled=(not chauffeurs_a_calculer),
         type="primary",
     )
 
-    if btn_ptv and chauffeurs_ptv:
+    if btn_ptv and chauffeurs_a_calculer:
+        chauffeurs_ptv = chauffeurs_a_calculer  # utiliser la liste étendue
         all_results = []
         all_vide    = []
 
@@ -1082,7 +1107,7 @@ if file_missions and file_ca:
 
         total_ch = len(chauffeurs_ptv)
 
-        for ch_idx, chauffeur in enumerate(chauffeurs_ptv):
+        for ch_idx, chauffeur in enumerate(chauffeurs_ptv):  # chauffeurs_ptv = chauffeurs_a_calculer
             status_text.text(f"⏳ Chauffeur {ch_idx+1}/{total_ch} : {chauffeur}")
 
             def _progress(msg):
