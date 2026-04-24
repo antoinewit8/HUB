@@ -1163,7 +1163,8 @@ if file_missions and file_ca:
         # KPIs PTV
         km_total_sum = df_result["km_total"].sum()
         km_vide_sum  = df_result["km_vide"].sum()
-        pct_vide     = (km_vide_sum / km_total_sum * 100) if km_total_sum > 0 else 0
+        _km_complet_pct = km_total_sum + km_vide_sum
+        pct_vide     = (km_vide_sum / _km_complet_pct * 100) if _km_complet_pct > 0 else 0
 
         _ca_ptv      = df_result["total_vente"].sum()
         _km_complet  = km_total_sum + km_vide_sum
