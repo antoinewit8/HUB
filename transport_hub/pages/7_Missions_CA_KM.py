@@ -289,7 +289,8 @@ ACTIVITE_KEYWORDS = {
 
 def normalize_activite(val: str) -> str:
     v = str(val).strip().lower()
-    for kw, mapped in ACTIVITE_KEYWORDS.items():
+    # Trier par longueur décroissante pour matcher "decharger" avant "charger"
+    for kw, mapped in sorted(ACTIVITE_KEYWORDS.items(), key=lambda x: -len(x[0])):
         if kw in v:
             return mapped
     return str(val).strip().upper()
