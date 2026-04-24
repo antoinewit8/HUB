@@ -1066,24 +1066,7 @@ if file_missions and file_ca:
         df_result = pd.DataFrame(all_results)
         df_vide   = pd.DataFrame(all_vide)
 
-        # ── Debug : tester calculate_route directement ──────
-        with st.expander("🔍 Debug résultats bruts PTV", expanded=True):
-            st.write(f"**Import modules OK :** {_IMPORTS_OK}")
-            st.write(f"**Nb résultats :** {len(all_results)}")
-            if all_results:
-                st.write("**km_total (10 premiers) :**", df_result["km_total"].head(10).tolist())
-            # Test calculate_route avec 2 coords connues
-            coords_test = [(50.506, 5.654), (50.495, 4.164)]  # SPRIMONT → HOUDENG
-            import requests as _req
-            qp = [("profile", VEHICLE), ("results", "POLYLINE"),
-                  ("waypoints", f"{coords_test[0][0]},{coords_test[0][1]}"),
-                  ("waypoints", f"{coords_test[1][0]},{coords_test[1][1]}")]
-            try:
-                r = _req.get(f"{PTV_BASE_URL}/routes", headers=HEADERS, params=qp, timeout=15)
-                st.write(f"**Test route HTTP status :** {r.status_code}")
-                st.write(f"**Test route réponse :** {r.text[:300]}")
-            except Exception as e:
-                st.write(f"**Test route exception :** {e}")
+
 
         st.session_state["df_result"] = df_result
         st.session_state["df_vide"]   = df_vide
