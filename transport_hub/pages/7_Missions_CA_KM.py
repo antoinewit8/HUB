@@ -592,6 +592,46 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
     df_cons["prix_transport"] = df_cons["prix_transport"].fillna(0.0)
     df_cons["total_vente"]    = df_cons["total_vente"].fillna(0.0)
 
+    # ── Fallback : reconstruire charg/decharg depuis stops_data si vides après merge ──
+    # (cas où les colonnes du CA n'ont pas été correctement détectées)
+    def _fill_from_stops(row):
+        def _c(v): return "" if str(v or "").strip().lower() in ("nan","none","") else str(v).strip()
+        
+        loc_ch  = _c(row.get("localite_charg",  ""))
+        cp_ch   = _c(row.get("cp_charg",         ""))
+        pays_ch = _c(row.get("pays_charg",        ""))
+        loc_de  = _c(row.get("localite_decharg", ""))
+        cp_de   = _c(row.get("cp_decharg",        ""))
+        pays_de = _c(row.get("pays_decharg",      ""))
+
+        # Si vides → prendre depuis stops_data
+        stops = row.get("stops_data", [])
+        if stops and not (loc_ch or cp_ch):
+            # 1er stop = chargement
+            s0 = stops[0]
+            loc_ch  = _c(s0.get("ville_raw", ""))
+            cp_ch   = _c(s0.get("cp_raw",    ""))
+            pays_ch = _c(s0.get("pays_raw",  ""))
+        if stops and not (loc_de or cp_de):
+            # Dernier stop = déchargement
+            sn = stops[-1]
+            loc_de  = _c(sn.get("ville_raw", ""))
+            cp_de   = _c(sn.get("cp_raw",    ""))
+            pays_de = _c(sn.get("pays_raw",  ""))
+
+        return pd.Series({
+            "localite_charg":  loc_ch,  "cp_charg":  cp_ch,  "pays_charg":  pays_ch,
+            "localite_decharg": loc_de, "cp_decharg": cp_de, "pays_decharg": pays_de,
+        })
+
+    filled = df_cons.apply(_fill_from_stops, axis=1)
+    df_cons["localite_charg"]  = filled["localite_charg"]
+    df_cons["cp_charg"]        = filled["cp_charg"]
+    df_cons["pays_charg"]      = filled["pays_charg"]
+    df_cons["localite_decharg"]= filled["localite_decharg"]
+    df_cons["cp_decharg"]      = filled["cp_decharg"]
+    df_cons["pays_decharg"]    = filled["pays_decharg"]
+
     return df_cons
 
 
@@ -681,25 +721,7 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
         if coords is None:
             st.warning(f"⚠️ Géocodage échoué : {addr_display}")
 
-    # ── DEBUG TEMPORAIRE ──────────────────────────────────────
-    with st.expander(f"🔬 Debug géocodage — {chauffeur}", expanded=True):
-        st.write(f"**Points à géocoder :** {total_geo}")
-        st.write("**Clés points_to_geocode :**", list(points_to_geocode.keys())[:5])
-        st.write("**geo_cache (5 premiers) :**", 
-                 {str(k): v for k, v in list(geo_cache.items())[:5]})
-        # Vérifier le 1er dossier
-        if dossier_sequences:
-            dos0 = list(dossier_sequences.keys())[0]
-            seq0 = dossier_sequences[dos0]
-            st.write(f"**Dossier {dos0} :**", {
-                "loc_ch": seq0["loc_ch"], "cp_ch": seq0["cp_ch"], "pays_ch": seq0["pays_ch"],
-                "loc_de": seq0["loc_de"], "cp_de": seq0["cp_de"], "pays_de": seq0["pays_de"],
-            })
-            key_ch = (seq0["loc_ch"], seq0["cp_ch"], seq0["pays_ch"])
-            key_de = (seq0["loc_de"], seq0["cp_de"], seq0["pays_de"])
-            st.write(f"**Clé charg :** {key_ch} → {geo_cache.get(key_ch)}")
-            st.write(f"**Clé decharg :** {key_de} → {geo_cache.get(key_de)}")
-    # ── FIN DEBUG ─────────────────────────────────────────────
+
 
     # ── Calcul km totaux par dossier ──────────────────────────
     dossier_km = {}
