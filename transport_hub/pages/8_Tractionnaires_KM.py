@@ -265,9 +265,13 @@ def parse_tractionnaires(file) -> pd.DataFrame:
         df[col] = df[col].apply(_clean)
 
     # Date chargement pour la période
-    df["_date_dt"] = pd.to_datetime(
+    df["_date_charg_dt"]  = pd.to_datetime(
         df["date_charg"].str.strip().str[:10], format="%Y-%m-%d", errors="coerce"
     )
+    df["_date_decharg_dt"] = pd.to_datetime(
+        df["date_decharg"].str.strip().str[:10], format="%Y-%m-%d", errors="coerce"
+    )
+    df["_date_dt"] = df["_date_charg_dt"]  # pour la période
 
     return df
 
@@ -276,12 +280,17 @@ def parse_tractionnaires(file) -> pd.DataFrame:
 #  CALCUL KM PTV
 # ══════════════════════════════════════════════════════════════════
 
-def compute_km(df: pd.DataFrame, progress_cb=None) -> pd.DataFrame:
+def compute_km(df: pd.DataFrame, progress_cb=None) -> tuple:
     """
-    Géocode tous les points uniques (ville, cp, pays) et calcule
-    les km PTV pour chaque dossier (chargement → déchargement).
+    Géocode tous les points uniques et calcule :
+    - km_ptv : km chargement → déchargement par dossier
+    - km à vide : déchargement → chargement suivant, par véhicule, ordre chronologique
+
+    Retourne (df_enrichi, df_vide).
     """
-    # Collecter points uniques
+    df = df.copy()
+
+    # ── Géocodage de tous les points uniques ──────────────────
     points = set()
     for _, row in df.iterrows():
         if row["localite_charg"] or row["cp_charg"]:
@@ -289,7 +298,6 @@ def compute_km(df: pd.DataFrame, progress_cb=None) -> pd.DataFrame:
         if row["localite_decharg"] or row["cp_decharg"]:
             points.add((_clean(row["localite_decharg"]), _clean(row["cp_decharg"]), _clean(row["pays_decharg"])))
 
-    # Géocodage
     geo_cache = {}
     total = len(points)
     for i, (ville, cp, pays) in enumerate(points):
@@ -300,32 +308,86 @@ def compute_km(df: pd.DataFrame, progress_cb=None) -> pd.DataFrame:
         if coords is None:
             st.warning(f"⚠️ Géocodage échoué : {ville}, {cp}, {pays}")
 
-    # Calcul route par dossier
+    # ── Km chargés par dossier ────────────────────────────────
     km_results = []
     total_dos = len(df)
     for i, (_, row) in enumerate(df.iterrows()):
         if progress_cb:
-            progress_cb(f"📍 Calcul KM dossier {row['dossier']} ({i+1}/{total_dos})...")
-
+            progress_cb(f"📍 KM chargé dossier {row['dossier']} ({i+1}/{total_dos})...")
         c_ch = geo_cache.get((_clean(row["localite_charg"]),  _clean(row["cp_charg"]),  _clean(row["pays_charg"])))
         c_de = geo_cache.get((_clean(row["localite_decharg"]), _clean(row["cp_decharg"]), _clean(row["pays_decharg"])))
-
         if c_ch and c_de:
             res = calculate_route([c_ch, c_de])
             km_results.append(res["km"] if res else None)
         else:
             km_results.append(None)
-
-    df = df.copy()
     df["km_ptv"] = km_results
-    return df
+
+    # ── Km à vide par véhicule ────────────────────────────────
+    # Trier par véhicule puis par date déchargement
+    df["_sort_key"] = df["_date_decharg_dt"].fillna(df["_date_charg_dt"])
+    vide_legs = []
+
+    for vehicule, grp in df.groupby("vehicule"):
+        if not vehicule or vehicule == "nan":
+            continue
+        grp = grp.sort_values("_sort_key").reset_index(drop=True)
+
+        for i in range(len(grp) - 1):
+            row_cur  = grp.iloc[i]
+            row_next = grp.iloc[i + 1]
+
+            # Point de départ = déchargement du dossier courant
+            c_de = geo_cache.get((
+                _clean(row_cur["localite_decharg"]),
+                _clean(row_cur["cp_decharg"]),
+                _clean(row_cur["pays_decharg"]),
+            ))
+            # Point d'arrivée = chargement du dossier suivant
+            c_ch = geo_cache.get((
+                _clean(row_next["localite_charg"]),
+                _clean(row_next["cp_charg"]),
+                _clean(row_next["pays_charg"]),
+            ))
+
+            if c_de and c_ch:
+                if progress_cb:
+                    progress_cb(f"⚡ KM vide : {row_cur['localite_decharg']} → {row_next['localite_charg']}...")
+                res = calculate_route([c_de, c_ch])
+                km_vide = res["km"] if res else None
+            else:
+                km_vide = None
+
+            vide_legs.append({
+                "vehicule":        vehicule,
+                "tractionnaire":   row_cur.get("tractionnaire", ""),
+                "dossier_depart":  row_cur["dossier"],
+                "dossier_arrivee": row_next["dossier"],
+                "ville_depart":    row_cur["localite_decharg"],
+                "ville_arrivee":   row_next["localite_charg"],
+                "date_depart":     row_cur["_sort_key"].strftime("%d/%m/%Y") if pd.notna(row_cur["_sort_key"]) else "",
+                "km_vide":         km_vide,
+            })
+
+    df_vide = pd.DataFrame(vide_legs)
+
+    # Agréger km_vide par dossier de départ pour l'afficher dans le détail
+    if not df_vide.empty:
+        km_vide_by_dos = df_vide.groupby("dossier_depart")["km_vide"].sum()
+        df["km_vide"] = df["dossier"].map(km_vide_by_dos).fillna(0)
+    else:
+        df["km_vide"] = 0.0
+
+    df["km_total_complet"] = df["km_ptv"].fillna(0) + df["km_vide"]
+
+    return df, df_vide
 
 
 # ══════════════════════════════════════════════════════════════════
 #  EXPORT EXCEL
 # ══════════════════════════════════════════════════════════════════
 
-def export_excel(df_detail: pd.DataFrame, df_resume: pd.DataFrame) -> bytes:
+def export_excel(df_detail: pd.DataFrame, df_resume: pd.DataFrame, df_vide: pd.DataFrame = None) -> bytes:
     output = io.BytesIO()
     try:
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -357,6 +419,18 @@ def export_excel(df_detail: pd.DataFrame, df_resume: pd.DataFrame) -> bytes:
             # Feuille résumé
             df_resume.to_excel(writer, sheet_name="Résumé tractionnaires", index=False)
             _style_sheet(writer.sheets["Résumé tractionnaires"], len(df_resume))
+
+            # Feuille km à vide
+            if df_vide is not None and not df_vide.empty:
+                vide_rename = {
+                    "vehicule": "Véhicule", "tractionnaire": "Tractionnaire",
+                    "dossier_depart": "Dossier départ", "dossier_arrivee": "Dossier arrivée",
+                    "ville_depart": "Ville départ", "ville_arrivee": "Ville arrivée",
+                    "date_depart": "Date", "km_vide": "KM à vide",
+                }
+                df_v = df_vide[[c for c in vide_rename if c in df_vide.columns]].rename(columns=vide_rename).fillna("")
+                df_v.to_excel(writer, sheet_name="KM À Vide Détail", index=False)
+                _style_sheet(writer.sheets["KM À Vide Détail"], len(df_v))
 
     except Exception as e:
         st.error(f"❌ Erreur génération Excel : {e}")
@@ -508,8 +582,9 @@ if file_tract:
             status_text.text(msg)
 
         try:
-            df_ptv_result = compute_km(df_ptv_scope, progress_cb=_progress)
+            df_ptv_result, df_vide_result = compute_km(df_ptv_scope, progress_cb=_progress)
             st.session_state["df_ptv_result"] = df_ptv_result
+            st.session_state["df_vide_result"] = df_vide_result
             status_text.success("✅ Calcul PTV terminé !")
             progress_bar.progress(100)
         except Exception as e:
@@ -519,20 +594,26 @@ if file_tract:
     if "df_ptv_result" in st.session_state:
         df_r = st.session_state["df_ptv_result"]
 
-        km_sum  = df_r["km_ptv"].sum()
-        ca_sum  = df_r["ventes_totales"].sum()
-        rent    = ca_sum / km_sum if km_sum > 0 else 0
-        dos_ok  = df_r["km_ptv"].notna().sum()
+        df_vide_r = st.session_state.get("df_vide_result", pd.DataFrame())
+        km_charges  = df_r["km_ptv"].sum()
+        km_vide_sum = df_r["km_vide"].sum()
+        km_complet  = km_charges + km_vide_sum
+        ca_sum      = df_r["ventes_totales"].sum()
+        rent        = ca_sum / km_complet if km_complet > 0 else 0
+        pct_vide    = km_vide_sum / km_complet * 100 if km_complet > 0 else 0
+        dos_ok      = df_r["km_ptv"].notna().sum()
 
         st.divider()
         st.markdown("### 📈 Résultats KM")
-        rk1, rk2, rk3, rk4 = st.columns(4)
+        rk1, rk2, rk3, rk4, rk5, rk6 = st.columns(6)
         rk1.metric("📁 Dossiers calculés",  f"{dos_ok} / {len(df_r)}")
-        rk2.metric("📏 KM PTV Total",        f"{km_sum:,.0f} km")
-        rk3.metric("💶 CA Total",             f"{ca_sum:,.0f} €")
-        rk4.metric("📈 Rentabilité",          f"{rent:.2f} €/km")
+        rk2.metric("📏 KM Chargés",          f"{km_charges:,.0f} km")
+        rk3.metric("⚡ KM À Vide",            f"{km_vide_sum:,.0f} km")
+        rk4.metric("🔄 KM Complet",           f"{km_complet:,.0f} km")
+        rk5.metric("% À Vide",                f"{pct_vide:.1f}%")
+        rk6.metric("📈 Rentabilité",          f"{rent:.2f} €/km")
 
-        tab1, tab2 = st.tabs(["📋 Détail dossiers", "🏢 Résumé tractionnaires"])
+        tab1, tab2, tab3 = st.tabs(["📋 Détail dossiers", "🏢 Résumé tractionnaires", "⚡ Détail KM à vide"])
 
         with tab1:
             df_detail_show = df_r.copy()
@@ -541,32 +622,49 @@ if file_tract:
             ).round(2)
             cols_det = {
                 "dossier": "N° Dossier", "tractionnaire": "Tractionnaire",
-                "chauffeur": "Chauffeur", "client": "Client",
+                "chauffeur": "Chauffeur", "vehicule": "Véhicule", "client": "Client",
                 "localite_charg": "Chargement", "localite_decharg": "Déchargement",
-                "ventes_totales": "CA (€)", "km_ptv": "KM PTV", "rentabilite": "€/km",
+                "ventes_totales": "CA (€)", "km_ptv": "KM Chargé",
+                "km_vide": "KM À Vide", "km_total_complet": "KM Complet", "rentabilite": "€/km",
             }
             df_det_tab = df_detail_show[[c for c in cols_det if c in df_detail_show.columns]].rename(columns=cols_det)
             st.dataframe(df_det_tab, use_container_width=True, height=400)
 
         with tab2:
             df_res_ptv = df_r.groupby("tractionnaire", as_index=False).agg(
-                Dossiers    = ("dossier",        "count"),
-                KM_PTV      = ("km_ptv",          "sum"),
-                CA_Total    = ("ventes_totales",  "sum"),
+                Dossiers    = ("dossier",            "count"),
+                KM_Charges  = ("km_ptv",              "sum"),
+                KM_Vide     = ("km_vide",              "sum"),
+                CA_Total    = ("ventes_totales",      "sum"),
             ).round(1)
+            df_res_ptv["KM Complet"]      = df_res_ptv["KM_Charges"] + df_res_ptv["KM_Vide"]
+            df_res_ptv["% KM Vide"]       = (df_res_ptv["KM_Vide"] / df_res_ptv["KM Complet"].replace(0, np.nan) * 100).round(1)
             df_res_ptv["CA moy/dossier"]  = (df_res_ptv["CA_Total"] / df_res_ptv["Dossiers"]).round(0)
-            df_res_ptv["KM moy/dossier"]  = (df_res_ptv["KM_PTV"]  / df_res_ptv["Dossiers"]).round(0)
-            df_res_ptv["Rentabilité €/km"]= (df_res_ptv["CA_Total"] / df_res_ptv["KM_PTV"].replace(0, np.nan)).round(2)
+            df_res_ptv["Rentabilité €/km"]= (df_res_ptv["CA_Total"] / df_res_ptv["KM Complet"].replace(0, np.nan)).round(2)
             df_res_ptv = df_res_ptv.rename(columns={
-                "tractionnaire": "Tractionnaire", "KM_PTV": "KM PTV Total",
-                "CA_Total": "CA Total (€)"
+                "tractionnaire": "Tractionnaire", "KM_Charges": "KM Chargés",
+                "KM_Vide": "KM À Vide", "CA_Total": "CA Total (€)"
             }).sort_values("CA Total (€)", ascending=False)
             st.dataframe(df_res_ptv, use_container_width=True)
+
+        with tab3:
+            if not df_vide_r.empty:
+                st.dataframe(
+                    df_vide_r.rename(columns={
+                        "vehicule": "Véhicule", "tractionnaire": "Tractionnaire",
+                        "dossier_depart": "Dossier départ", "dossier_arrivee": "Dossier arrivée",
+                        "ville_depart": "Ville départ", "ville_arrivee": "Ville arrivée",
+                        "date_depart": "Date", "km_vide": "KM à vide",
+                    }),
+                    use_container_width=True
+                )
+            else:
+                st.info("Aucun km à vide calculé.")
 
         # Export
         st.divider()
         df_resume_export = df_res_ptv.copy()
-        excel_bytes = export_excel(df_r, df_resume_export)
+        excel_bytes = export_excel(df_r, df_resume_export, df_vide_r)
         if excel_bytes:
             st.download_button(
                 label="📥 Télécharger le rapport Excel",
