@@ -13,7 +13,7 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-KM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "tools", "km_calcul"))
+KM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools", "km_calcul"))
 sys.path.insert(0, KM_DIR)
 
 st.set_page_config(page_title="Cartes Itinéraires", page_icon="🗺️", layout="wide")
