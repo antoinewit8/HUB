@@ -215,3 +215,42 @@ else:
 </html>"""
 
     st.components.v1.html(carte_html, height=720, scrolling=False)
+
+    # ─── Tableau récapitulatif sous la carte ─────────────────────────────────
+    st.divider()
+    st.markdown("#### 📋 Récapitulatif des trajets")
+
+    import pandas as pd
+
+    total_km    = sum(r["km"]    for r in routes if r["km"])
+    total_peage = sum(r["peage"] for r in routes if r["peage"])
+
+    col_t1, col_t2, col_t3 = st.columns(3)
+    col_t1.metric("📦 Trajets", len(routes))
+    col_t2.metric("📏 Total KM", f"{total_km:,.0f} km")
+    if total_peage:
+        col_t3.metric("🛣️ Total Péage", f"{total_peage:,.2f} €")
+
+    df = pd.DataFrame([
+        {
+            "N°":          i + 1,
+            "Chargement":  r["origin"],
+            "Déchargement": r["dest"],
+            "KM":          f"{r['km']:.1f}" if r["km"] else "—",
+            "Péage (€)":   f"{r['peage']:.2f}" if r["peage"] else "—",
+        }
+        for i, r in enumerate(routes)
+    ])
+
+    # Surligner la ligne sélectionnée
+    def highlight_sel(row):
+        return ["background-color: #dce6f9; font-weight: bold"
+                if row["N°"] == sel + 1
+                else "" for _ in row]
+
+    st.dataframe(
+        df.style.apply(highlight_sel, axis=1),
+        use_container_width=True,
+        hide_index=True,
+        height=min(400, 38 * len(routes) + 40),
+    )
