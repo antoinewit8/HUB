@@ -150,62 +150,122 @@ else:
 <html>
 <head>
   <meta charset="utf-8"/>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet"/>
   <style>
     * {{ margin:0; padding:0; box-sizing:border-box; }}
+    body {{ font-family:'Segoe UI',Arial,sans-serif; }}
     #map {{ height:700px; width:100%; border-radius:12px;
-            box-shadow:0 4px 24px rgba(74,144,217,0.2); border:1px solid rgba(74,144,217,0.2); }}
-    .panel {{ background:rgba(21,42,62,0.95); padding:10px 14px; border-radius:10px;
-              font-size:13px; line-height:1.7; color:#D8DDE6;
-              box-shadow:0 2px 10px rgba(0,0,0,0.4); border:1px solid rgba(74,144,217,0.25); max-width:280px; }}
+            box-shadow:0 4px 24px rgba(74,144,217,0.2);
+            border:1px solid rgba(74,144,217,0.2); }}
+    .panel {{
+      background:rgba(14,27,40,0.92); backdrop-filter:blur(8px);
+      padding:12px 16px; border-radius:10px;
+      font-size:13px; line-height:1.7; color:#D8DDE6;
+      box-shadow:0 4px 16px rgba(0,0,0,0.5);
+      border:1px solid rgba(74,144,217,0.25);
+      min-width:180px; max-width:280px;
+      position:absolute; bottom:24px; right:12px; z-index:10;
+    }}
     .panel b {{ color:#4A90D9; }}
-    .km {{ color:#6BA3E0; font-weight:700; }}
-    .mk {{ width:26px; height:26px; border-radius:50% 50% 50% 0;
-           transform:rotate(-45deg); display:flex; align-items:center;
-           justify-content:center; font-weight:800; font-size:12px;
-           color:white; border:2px solid white;
-           box-shadow:0 2px 5px rgba(0,0,0,0.3); }}
+    .panel .km {{ color:#6BA3E0; font-weight:700; }}
+    .mk {{
+      width:28px; height:28px; border-radius:50% 50% 50% 0;
+      transform:rotate(-45deg); display:flex; align-items:center;
+      justify-content:center; font-weight:800; font-size:12px;
+      color:white; border:2px solid white;
+      box-shadow:0 2px 6px rgba(0,0,0,0.4);
+    }}
     .mk span {{ transform:rotate(45deg); }}
     .A {{ background:#27ae60; }} .B {{ background:#e74c3c; }}
   </style>
 </head>
 <body>
 <div id="map"></div>
+<div class="panel" id="info-panel">
+  <b>Chargement...</b>
+</div>
 <script>
   var ROUTES = {routes_js};
-  var line=null, mA=null, mB=null, info=null;
+  var currentLine = null, markerA = null, markerB = null;
 
-  var map = L.map('map').setView([{center_lat},{center_lon}], 6);
-  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
-    {{attribution:'© OpenStreetMap',maxZoom:18}}).addTo(map);
+  var map = new maplibregl.Map({{
+    container: 'map',
+    style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+    center: [{center_lon}, {center_lat}],
+    zoom: 5
+  }});
 
-  var iA = L.divIcon({{className:'',html:'<div class="mk A"><span>A</span></div>',iconSize:[26,26],iconAnchor:[13,26]}});
-  var iB = L.divIcon({{className:'',html:'<div class="mk B"><span>B</span></div>',iconSize:[26,26],iconAnchor:[13,26]}});
+  map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+  function mkMarkerEl(cls) {{
+    var el = document.createElement('div');
+    el.className = 'mk ' + cls;
+    var sp = document.createElement('span');
+    sp.textContent = cls;
+    el.appendChild(sp);
+    return el;
+  }}
 
   function show(idx) {{
     var r = ROUTES[idx];
-    if (!r || !r.coords.length) return;
-    if (line) map.removeLayer(line);
-    if (mA)   map.removeLayer(mA);
-    if (mB)   map.removeLayer(mB);
-    if (info) map.removeControl(info);
-    line = L.polyline(r.coords,{{color:'#1a4fa0',weight:5,opacity:0.9}}).addTo(map);
-    map.fitBounds(line.getBounds().pad(0.08));
-    mA = L.marker(r.coords[0],{{icon:iA}}).addTo(map).bindPopup('<b>🟢 '+r.origin+'</b>');
-    mB = L.marker(r.coords[r.coords.length-1],{{icon:iB}}).addTo(map).bindPopup('<b>🔴 '+r.dest+'</b>');
-    info = L.control({{position:'bottomright'}});
-    info.onAdd = function() {{
-      var d = L.DomUtil.create('div','panel');
-      d.innerHTML = '<b>'+r.origin+'</b><br>→ <b>'+r.dest+'</b><br>'
-        +(r.km?'<span class="km">📏 '+r.km.toFixed(1)+' km</span>':'')
-        +(r.peage?'<br>🛣️ '+r.peage.toFixed(2)+' €':'');
-      return d;
-    }};
-    info.addTo(map);
+    if (!r || !r.coords || !r.coords.length) return;
+
+    // Convertir [[lat,lon],...] → [[lon,lat],...] pour MapLibre
+    var coords = r.coords.map(function(c) {{ return [c[1], c[0]]; }});
+
+    // Supprimer ancienne couche
+    if (currentLine) {{
+      if (map.getLayer('route-line')) map.removeLayer('route-line');
+      if (map.getSource('route-source')) map.removeSource('route-source');
+      currentLine = null;
+    }}
+    if (markerA) {{ markerA.remove(); markerA = null; }}
+    if (markerB) {{ markerB.remove(); markerB = null; }}
+
+    // Ajouter la nouvelle polyline
+    map.addSource('route-source', {{
+      type: 'geojson',
+      data: {{
+        type: 'Feature',
+        geometry: {{ type: 'LineString', coordinates: coords }}
+      }}
+    }});
+    map.addLayer({{
+      id: 'route-line',
+      type: 'line',
+      source: 'route-source',
+      layout: {{ 'line-join': 'round', 'line-cap': 'round' }},
+      paint: {{ 'line-color': '#4A90D9', 'line-width': 5, 'line-opacity': 0.9 }}
+    }});
+    currentLine = true;
+
+    // Zoom sur le tracé
+    var bounds = coords.reduce(function(b, c) {{
+      return b.extend(c);
+    }}, new maplibregl.LngLatBounds(coords[0], coords[0]));
+    map.fitBounds(bounds, {{ padding: 60 }});
+
+    // Marqueurs
+    markerA = new maplibregl.Marker({{ element: mkMarkerEl('A'), anchor: 'bottom' }})
+      .setLngLat(coords[0])
+      .setPopup(new maplibregl.Popup().setHTML('<b>🟢 ' + r.origin + '</b>'))
+      .addTo(map);
+    markerB = new maplibregl.Marker({{ element: mkMarkerEl('B'), anchor: 'bottom' }})
+      .setLngLat(coords[coords.length-1])
+      .setPopup(new maplibregl.Popup().setHTML('<b>🔴 ' + r.dest + '</b>'))
+      .addTo(map);
+
+    // Panneau info
+    var km_s  = r.km    ? '📏 <span class="km">' + r.km.toFixed(1) + ' km</span>' : '';
+    var pe_s  = r.peage ? '<br>🛣️ ' + r.peage.toFixed(2) + ' €' : '';
+    document.getElementById('info-panel').innerHTML =
+      '<b>' + r.origin + '</b><br>→ <b>' + r.dest + '</b><br>' + km_s + pe_s;
   }}
 
-  show({sel});
+  map.on('load', function() {{
+    show({sel});
+  }});
 
   window.addEventListener('message', function(e) {{
     if (e.data && typeof e.data.idx === 'number') show(e.data.idx);
