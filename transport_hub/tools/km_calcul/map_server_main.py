@@ -333,8 +333,8 @@ async def create_route(route: RouteCreate):
     routes = {route_id: route_data}
     save_routes(routes)
 
-        url = f"{MAP_SERVER_URL}/carte?id={route_id}"
-        return {"url": url, "id": route_id}
+    url = f"{MAP_SERVER_URL}/carte?id={route_id}"
+    return {"url": url, "id": route_id}
 
 
 # ── Afficher la carte ────────────────────────────────────────────────────────
