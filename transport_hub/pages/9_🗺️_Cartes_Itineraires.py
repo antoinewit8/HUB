@@ -62,6 +62,11 @@ if not st.session_state["ci_routes"]:
             _eh  = _load_module("modules.excel_handler_km",    os.path.join(_mdir, "excel_handler_km.py"))
             _rp  = _load_module("modules.routes_preferentielles", os.path.join(_mdir, "routes_preferentielles.py"))
 
+            # Debug : afficher les attributs disponibles si l'import échoue
+            if not hasattr(_ro, "calculate_km_route"):
+                st.error(f"❌ Attributs de ptv_router_km : {[a for a in dir(_ro) if not a.startswith('_')]}")
+                st.stop()
+
             calculate_km_route = _ro.calculate_km_route
             geocode_address    = _ro.geocode_address
             read_all_sheets    = _eh.read_all_sheets
@@ -346,3 +351,4 @@ else:
         hide_index=True,
         height=min(400, 38 * len(routes) + 40),
     )
+    
