@@ -166,73 +166,60 @@ routes = st.session_state["cartes_routes"]
 if "cartes_sel_idx" not in st.session_state:
     st.session_state["cartes_sel_idx"] = 0
 
-col_liste, col_carte = st.columns([1, 3], gap="small")
+# ─── Sélecteur déroulant ─────────────────────────────────────────────────────
+labels = [
+    f"{r['origin']} → {r['dest']}  ({r['km']:.0f} km{' · ' + str(round(r['peage'],2)) + '€' if r['peage'] else ''})"
+    for r in routes
+]
+sel_idx = st.selectbox(
+    f"📋 {len(routes)} itinéraire{'s' if len(routes)>1 else ''}",
+    range(len(routes)),
+    format_func=lambda i: labels[i],
+    index=st.session_state["cartes_sel_idx"],
+)
+st.session_state["cartes_sel_idx"] = sel_idx
 
-# ─── Liste gauche ─────────────────────────────────────────────────────────────
-with col_liste:
-    st.markdown(f"**{len(routes)} itinéraire{'s' if len(routes)>1 else ''}**")
-    filtre = st.text_input("🔍", placeholder="Filtrer...", label_visibility="collapsed")
+# ─── Carte Leaflet fixe ──────────────────────────────────────────────────────
+sel = min(st.session_state["cartes_sel_idx"], len(routes) - 1)
+r_sel = routes[sel]
 
-    routes_vis = [
-        (i, r) for i, r in enumerate(routes)
-        if not filtre or filtre.lower() in r["label"].lower()
-    ]
+all_coords = [c for r in routes for c in r["coords"]]
+center_lat = sum(c[0] for c in all_coords) / len(all_coords)
+center_lon = sum(c[1] for c in all_coords) / len(all_coords)
 
-    if not routes_vis:
-        st.warning("Aucun résultat.")
-    else:
-        for real_idx, r in routes_vis:
-            is_sel  = real_idx == st.session_state["cartes_sel_idx"]
-            km_s    = f"{r['km']:.0f} km" if r["km"] else "—"
-            peage_s = f" · {r['peage']:.2f}€" if r["peage"] else ""
-            label   = f"{'▶ ' if is_sel else ''}{r['origin']} → {r['dest']}\n{km_s}{peage_s}"
-            if st.button(label, key=f"cr_{real_idx}", use_container_width=True,
-                         type="primary" if is_sel else "secondary"):
-                st.session_state["cartes_sel_idx"] = real_idx
-                st.rerun()
+routes_js = json.dumps([
+    {"origin": r["origin"], "dest": r["dest"],
+     "km": r["km"], "peage": r["peage"], "coords": r["coords"]}
+    for r in routes
+])
 
-# ─── Carte droite — Leaflet fixe ──────────────────────────────────────────────
-with col_carte:
-    sel = min(st.session_state["cartes_sel_idx"], len(routes) - 1)
-    r_sel = routes[sel]
-
-    all_coords = [c for r in routes for c in r["coords"]]
-    center_lat = sum(c[0] for c in all_coords) / len(all_coords)
-    center_lon = sum(c[1] for c in all_coords) / len(all_coords)
-
-    routes_js = json.dumps([
-        {"origin": r["origin"], "dest": r["dest"],
-         "km": r["km"], "peage": r["peage"], "coords": r["coords"]}
-        for r in routes
-    ])
-
-    carte_html = f"""<!DOCTYPE html>
+carte_html = f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    * {{ margin:0; padding:0; box-sizing:border-box; }}
-    body {{ font-family:'Segoe UI',sans-serif; }}
-    #map {{ height:580px; width:100%; border-radius:14px;
-            box-shadow:0 4px 24px rgba(26,67,160,0.15); }}
-    .info-panel {{
-      background:white; padding:10px 14px; border-radius:10px;
-      font-size:13px; line-height:1.6;
-      box-shadow:0 2px 10px rgba(0,0,0,0.15);
-      min-width:180px; max-width:280px;
-    }}
-    .info-panel strong {{ color:#1a3360; }}
-    .info-panel .km   {{ color:#2F5496; font-weight:700; }}
-    .info-panel .peage {{ color:#c0392b; font-size:12px; }}
-    .mk {{ width:28px; height:28px; border-radius:50% 50% 50% 0;
-           transform:rotate(-45deg); display:flex; align-items:center;
-           justify-content:center; font-weight:800; font-size:12px;
-           color:white; border:2px solid white;
-           box-shadow:0 2px 6px rgba(0,0,0,0.3); }}
-    .mk span {{ transform:rotate(45deg); }}
-    .mk-A {{ background:#27ae60; }} .mk-B {{ background:#e74c3c; }}
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font-family:'Segoe UI',sans-serif; }}
+#map {{ height:680px; width:100%; border-radius:14px;
+        box-shadow:0 4px 24px rgba(26,67,160,0.15); }}
+.info-panel {{
+  background:white; padding:10px 14px; border-radius:10px;
+  font-size:13px; line-height:1.6;
+  box-shadow:0 2px 10px rgba(0,0,0,0.15);
+  min-width:180px; max-width:280px;
+}}
+.info-panel strong {{ color:#1a3360; }}
+.info-panel .km   {{ color:#2F5496; font-weight:700; }}
+.info-panel .peage {{ color:#c0392b; font-size:12px; }}
+.mk {{ width:28px; height:28px; border-radius:50% 50% 50% 0;
+       transform:rotate(-45deg); display:flex; align-items:center;
+       justify-content:center; font-weight:800; font-size:12px;
+       color:white; border:2px solid white;
+       box-shadow:0 2px 6px rgba(0,0,0,0.3); }}
+.mk span {{ transform:rotate(45deg); }}
+.mk-A {{ background:#27ae60; }} .mk-B {{ background:#e74c3c; }}
   </style>
 </head>
 <body>
@@ -243,59 +230,59 @@ with col_carte:
 
   var map = L.map('map').setView([{center_lat},{center_lon}], 6);
   L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-    attribution:'© OpenStreetMap', maxZoom:18
+attribution:'© OpenStreetMap', maxZoom:18
   }}).addTo(map);
 
   var iconA = L.divIcon({{className:'',
-    html:'<div class="mk mk-A"><span>A</span></div>',
-    iconSize:[28,28],iconAnchor:[14,28],popupAnchor:[0,-30]}});
+html:'<div class="mk mk-A"><span>A</span></div>',
+iconSize:[28,28],iconAnchor:[14,28],popupAnchor:[0,-30]}});
   var iconB = L.divIcon({{className:'',
-    html:'<div class="mk mk-B"><span>B</span></div>',
-    iconSize:[28,28],iconAnchor:[14,28],popupAnchor:[0,-30]}});
+html:'<div class="mk mk-B"><span>B</span></div>',
+iconSize:[28,28],iconAnchor:[14,28],popupAnchor:[0,-30]}});
 
   function showRoute(idx) {{
-    var r = ROUTES[idx];
-    if (!r || !r.coords || !r.coords.length) return;
+var r = ROUTES[idx];
+if (!r || !r.coords || !r.coords.length) return;
 
-    if (currentLine) {{ map.removeLayer(currentLine); currentLine=null; }}
-    if (markerA)     {{ map.removeLayer(markerA);     markerA=null; }}
-    if (markerB)     {{ map.removeLayer(markerB);     markerB=null; }}
-    if (infoCtrl)    {{ map.removeControl(infoCtrl);  infoCtrl=null; }}
+if (currentLine) {{ map.removeLayer(currentLine); currentLine=null; }}
+if (markerA)     {{ map.removeLayer(markerA);     markerA=null; }}
+if (markerB)     {{ map.removeLayer(markerB);     markerB=null; }}
+if (infoCtrl)    {{ map.removeControl(infoCtrl);  infoCtrl=null; }}
 
-    currentLine = L.polyline(r.coords, {{
-      color:'#1a4fa0', weight:5, opacity:0.9, smoothFactor:1.2
-    }}).addTo(map);
-    map.fitBounds(currentLine.getBounds().pad(0.1));
+currentLine = L.polyline(r.coords, {{
+  color:'#1a4fa0', weight:5, opacity:0.9, smoothFactor:1.2
+}}).addTo(map);
+map.fitBounds(currentLine.getBounds().pad(0.1));
 
-    markerA = L.marker(r.coords[0], {{icon:iconA}}).addTo(map)
-      .bindPopup('<b>🟢 Départ</b><br>' + r.origin);
-    markerB = L.marker(r.coords[r.coords.length-1], {{icon:iconB}}).addTo(map)
-      .bindPopup('<b>🔴 Arrivée</b><br>' + r.dest);
+markerA = L.marker(r.coords[0], {{icon:iconA}}).addTo(map)
+  .bindPopup('<b>🟢 Départ</b><br>' + r.origin);
+markerB = L.marker(r.coords[r.coords.length-1], {{icon:iconB}}).addTo(map)
+  .bindPopup('<b>🔴 Arrivée</b><br>' + r.dest);
 
-    infoCtrl = L.control({{position:'bottomright'}});
-    infoCtrl.onAdd = function() {{
-      var d = L.DomUtil.create('div','info-panel');
-      var km_s  = r.km    ? '<span class="km">📏 '+r.km.toFixed(1)+' km</span>' : '';
-      var pe_s  = r.peage ? '<br><span class="peage">🛣️ '+r.peage.toFixed(2)+' €</span>' : '';
-      d.innerHTML = '<strong>'+r.origin+'</strong><br>→ <strong>'+r.dest+'</strong><br>'+km_s+pe_s;
-      return d;
-    }};
-    infoCtrl.addTo(map);
+infoCtrl = L.control({{position:'bottomright'}});
+infoCtrl.onAdd = function() {{
+  var d = L.DomUtil.create('div','info-panel');
+  var km_s  = r.km    ? '<span class="km">📏 '+r.km.toFixed(1)+' km</span>' : '';
+  var pe_s  = r.peage ? '<br><span class="peage">🛣️ '+r.peage.toFixed(2)+' €</span>' : '';
+  d.innerHTML = '<strong>'+r.origin+'</strong><br>→ <strong>'+r.dest+'</strong><br>'+km_s+pe_s;
+  return d;
+}};
+infoCtrl.addTo(map);
   }}
 
   showRoute({sel});
 
   window.addEventListener('message', function(e) {{
-    if (e.data && typeof e.data.route_idx === 'number') {{
-      showRoute(e.data.route_idx);
-    }}
+if (e.data && typeof e.data.route_idx === 'number') {{
+  showRoute(e.data.route_idx);
+}}
   }});
 </script>
 </body>
 </html>"""
 
-    st.components.v1.html(carte_html, height=600, scrolling=False)
-    st.caption(
-        f"**{r_sel['origin']}** → **{r_sel['dest']}**  ·  📏 {r_sel['km']:.1f} km"
-        + (f"  ·  🛣️ {r_sel['peage']:.2f} €" if r_sel['peage'] else "")
-    )
+st.components.v1.html(carte_html, height=720, scrolling=False)
+st.caption(
+    f"**{r_sel['origin']}** → **{r_sel['dest']}**  ·  📏 {r_sel['km']:.1f} km"
+    + (f"  ·  🛣️ {r_sel['peage']:.2f} €" if r_sel['peage'] else "")
+)
