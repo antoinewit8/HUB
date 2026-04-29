@@ -42,13 +42,33 @@ if not st.session_state["ci_routes"]:
         import tempfile
 
         try:
-            from modules.excel_handler_km import read_all_sheets
-            from modules.ptv_router_km import calculate_km_route, geocode_address
-            from modules.routes_preferentielles import get_waypoints
-        except ImportError as e:
+            # Même approche que run_km.py : on charge le package proprement
+            import importlib.util
+
+            def _load_module(name, path):
+                spec = importlib.util.spec_from_file_location(name, path)
+                mod  = importlib.util.module_from_spec(spec)
+                sys.modules[name] = mod
+                spec.loader.exec_module(mod)
+                return mod
+
+            _mdir = os.path.join(KM_DIR, "modules")
+
+            # Ordre d'import important : dépendances d'abord
+            _load_module("modules",                   os.path.join(_mdir, "__init__.py"))
+            _load_module("modules.route_optimizer",   os.path.join(_mdir, "route_optimizer.py"))
+            _load_module("modules.villes_jalons",     os.path.join(_mdir, "villes_jalons.py"))
+            _ro  = _load_module("modules.ptv_router_km",       os.path.join(_mdir, "ptv_router_km.py"))
+            _eh  = _load_module("modules.excel_handler_km",    os.path.join(_mdir, "excel_handler_km.py"))
+            _rp  = _load_module("modules.routes_preferentielles", os.path.join(_mdir, "routes_preferentielles.py"))
+
+            calculate_km_route = _ro.calculate_km_route
+            geocode_address    = _ro.geocode_address
+            read_all_sheets    = _eh.read_all_sheets
+            get_waypoints      = _rp.get_waypoints
+
+        except Exception as e:
             st.error(f"❌ Import impossible : {e}")
-            st.write("KM_DIR:", KM_DIR, "| existe:", os.path.exists(KM_DIR))
-            st.write("sys.path[:4]:", sys.path[:4])
             st.stop()
 
         raw = uploaded.read()
