@@ -341,7 +341,7 @@ def _is_idf_to_ouest(lat_start, lon_start, lat_end, lon_end) -> bool:
 
 # Axes pour les nouveaux détecteurs
 AXE_LORRAINE_BELGIQUE = ["Nancy", "Metz", "Sedan"]
-AXE_IDF_OUEST         = ["Le Mans", "Mayenne"]
+AXE_IDF_OUEST         = ["Le Mans"]
 
 
 # ==========================================
@@ -509,7 +509,7 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
         if dist_start + dist_to_end > dist_total * 1.2:  # durci : 1.4 → 1.2
             print(f"      🚫 {ville} écarté (hors corridor : {dist_start:.0f}+{dist_to_end:.0f} > {dist_total*1.2:.0f})")
             continue
-        seuil_extremite = max(40, dist_total * 0.05)
+        seuil_extremite = max(60, dist_total * 0.08)
         if dist_start < seuil_extremite:
             print(f"      🚫 {ville} écarté (trop proche du départ : {dist_start:.0f}km)")
             continue
