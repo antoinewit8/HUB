@@ -7,9 +7,19 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(page_title="Cartes Itinéraires", page_icon="🗺️", layout="wide")
 
+# Chemin vers tools/km_calcul — même logique que run_km.py
 KM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools", "km_calcul"))
 if KM_DIR not in sys.path:
     sys.path.insert(0, KM_DIR)
+
+# Précharger le package modules comme run_km.py le fait via _inject_path
+import importlib, types as _types
+_pkg_name = "modules"
+if _pkg_name not in sys.modules:
+    _pkg = _types.ModuleType(_pkg_name)
+    _pkg.__path__ = [os.path.join(KM_DIR, "modules")]
+    _pkg.__package__ = _pkg_name
+    sys.modules[_pkg_name] = _pkg
 
 st.title("🗺️ Cartes Itinéraires PTV")
 st.divider()
@@ -37,6 +47,8 @@ if not st.session_state["ci_routes"]:
             from modules.routes_preferentielles import get_waypoints
         except ImportError as e:
             st.error(f"❌ Import impossible : {e}")
+            st.write("KM_DIR:", KM_DIR, "| existe:", os.path.exists(KM_DIR))
+            st.write("sys.path[:4]:", sys.path[:4])
             st.stop()
 
         raw = uploaded.read()
