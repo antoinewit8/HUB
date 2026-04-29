@@ -151,11 +151,9 @@ if st.session_state.get("cartes_xlsx_bytes") and st.button("🚀 Calculer et aff
             status.update(label="❌ Aucun itinéraire calculé", state="error")
 
     if routes_calculees:
-        # Trier par sheet puis par ordre d'apparition
         routes_calculees.sort(key=lambda r: (r["sheet"], r["label"]))
         st.session_state["cartes_routes"] = routes_calculees
         st.session_state["cartes_sel_idx"] = 0
-        st.rerun()
 
 # ─── Affichage carte + liste ─────────────────────────────────────────────────
 if "cartes_routes" not in st.session_state:
