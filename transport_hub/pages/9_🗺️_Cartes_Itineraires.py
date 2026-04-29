@@ -155,12 +155,12 @@ else:
   <style>
     * {{ margin:0; padding:0; box-sizing:border-box; }}
     #map {{ height:700px; width:100%; border-radius:12px;
-            box-shadow:0 4px 20px rgba(0,0,0,0.15); }}
-    .panel {{ background:white; padding:10px 14px; border-radius:10px;
-              font-size:13px; line-height:1.7;
-              box-shadow:0 2px 10px rgba(0,0,0,0.15); max-width:280px; }}
-    .panel b {{ color:#1a3360; }}
-    .km {{ color:#2F5496; font-weight:700; }}
+            box-shadow:0 4px 24px rgba(74,144,217,0.2); border:1px solid rgba(74,144,217,0.2); }}
+    .panel {{ background:rgba(21,42,62,0.95); padding:10px 14px; border-radius:10px;
+              font-size:13px; line-height:1.7; color:#D8DDE6;
+              box-shadow:0 2px 10px rgba(0,0,0,0.4); border:1px solid rgba(74,144,217,0.25); max-width:280px; }}
+    .panel b {{ color:#4A90D9; }}
+    .km {{ color:#6BA3E0; font-weight:700; }}
     .mk {{ width:26px; height:26px; border-radius:50% 50% 50% 0;
            transform:rotate(-45deg); display:flex; align-items:center;
            justify-content:center; font-weight:800; font-size:12px;
