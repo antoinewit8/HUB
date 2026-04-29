@@ -1,63 +1,38 @@
-"""
-4____Cartes_Itineraires.py
-──────────────────────────
-Page autonome : calcul PTV + carte Leaflet fixe.
-Aucun lien avec run_km.py ou excel_handler_km.py.
-"""
-
 import streamlit as st
 import sys
 import os
 import json
-import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-KM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools", "km_calcul"))
-sys.path.insert(0, KM_DIR)
-
 st.set_page_config(page_title="Cartes Itinéraires", page_icon="🗺️", layout="wide")
 
-# ─── DEBUG ───────────────────────────────────────────────────────────────────
-with st.expander("🔧 Debug info", expanded=False):
-    st.write("**__file__**:", __file__)
-    st.write("**KM_DIR**:", KM_DIR)
-    st.write("**KM_DIR existe**:", os.path.exists(KM_DIR))
-    if os.path.exists(KM_DIR):
-        st.write("**Contenu KM_DIR**:", os.listdir(KM_DIR))
-        modules_dir = os.path.join(KM_DIR, "modules")
-        st.write("**modules/ existe**:", os.path.exists(modules_dir))
-        if os.path.exists(modules_dir):
-            st.write("**Contenu modules/**:", os.listdir(modules_dir))
-    st.write("**sys.path**:", sys.path[:5])
+# ─── Path vers les modules PTV ───────────────────────────────────────────────
+KM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools", "km_calcul"))
+if KM_DIR not in sys.path:
+    sys.path.insert(0, KM_DIR)
 
-st.markdown("""
-<style>
-[data-testid="stAppViewContainer"] { background: #f0f4fb; }
-div[data-testid="stVerticalBlock"] > div { gap: 0.3rem; }
-</style>
-""", unsafe_allow_html=True)
+st.title("🗺️ Cartes Itinéraires PTV")
+st.caption("Calcule et visualise tous les itinéraires sur une carte fixe")
+st.divider()
 
-st.markdown("### 🗺️ Cartes Itinéraires PTV")
-st.markdown("*Calcule et visualise tous les itinéraires — carte fixe, tracé instantané*")
-st.markdown("---")
-
-# ─── Upload + options ────────────────────────────────────────────────────────
-uploaded = st.file_uploader("📂 Fichier Excel source (même format que Calcul KM)", type=["xlsx"])
+# ─── Upload ──────────────────────────────────────────────────────────────────
+uploaded = st.file_uploader("📂 Fichier Excel source", type=["xlsx"])
 if uploaded:
-    st.session_state["cartes_xlsx_bytes"] = uploaded.read()
-    # Reset résultats si nouveau fichier
-    for k in ["cartes_routes", "cartes_sel_idx"]:
-        st.session_state.pop(k, None)
+    st.session_state["ci_bytes"] = uploaded.read()
+    st.session_state.pop("ci_routes", None)
 
-col_opt1, col_opt2 = st.columns(2)
-with col_opt1:
-    calculer_peage = st.checkbox("💶 Calculer les frais de péage", value=False)
-with col_opt2:
-    max_workers = st.slider("⚡ Calculs en parallèle", 1, 4, 2)
+if not st.session_state.get("ci_bytes"):
+    st.info("👆 Charge un fichier Excel pour commencer.")
+    st.stop()
+
+# ─── Options ─────────────────────────────────────────────────────────────────
+c1, c2 = st.columns(2)
+calculer_peage = c1.checkbox("💶 Calculer les péages", value=False)
+max_workers    = c2.slider("⚡ Calculs en parallèle", 1, 4, 2)
 
 # ─── Bouton calcul ───────────────────────────────────────────────────────────
-if st.session_state.get("cartes_xlsx_bytes") and st.button("🚀 Calculer et afficher les cartes", type="primary"):
+if st.button("🚀 Calculer les itinéraires", type="primary"):
     import tempfile
 
     try:
@@ -66,132 +41,104 @@ if st.session_state.get("cartes_xlsx_bytes") and st.button("🚀 Calculer et aff
         from modules.routes_preferentielles import get_waypoints
     except ImportError as e:
         st.error(f"❌ Import impossible : {e}")
+        st.write("KM_DIR:", KM_DIR, "| existe:", os.path.exists(KM_DIR))
         st.stop()
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-        tmp.write(st.session_state["cartes_xlsx_bytes"])
+        tmp.write(st.session_state["ci_bytes"])
         tmp_path = tmp.name
 
     wb, sheets_data = read_all_sheets(tmp_path)
     os.unlink(tmp_path)
 
-    # Compter le total
-    total = sum(len(routes) for _, (_, routes) in sheets_data.items())
+    total = sum(len(r) for _, (_, r) in sheets_data.items())
     if total == 0:
-        st.warning("⚠️ Aucun trajet détecté dans le fichier.")
+        st.warning("⚠️ Aucun trajet détecté.")
         st.stop()
 
-    routes_calculees = []
+    routes_ok = []
     lock = threading.Lock()
 
-    with st.status(f"⚙️ Calcul de {total} itinéraires...", expanded=True) as status:
-        progress = st.progress(0)
-        status_txt = st.empty()
-        done = [0]
+    prog = st.progress(0, text="Calcul en cours...")
+    done = [0]
 
-        def calculer_trajet(route, sheet_name):
-            origin = route["origin"]
-            dest   = route["dest"]
+    def calc(route, sheet):
+        o = geocode_address(route["origin"])
+        d = geocode_address(route["dest"])
+        if not o or not d:
+            return None
+        try:
+            wp = get_waypoints(route["origin"], route["dest"])
+        except Exception:
+            wp = []
+        data = calculate_km_route(o[0], o[1], d[0], d[1],
+                                  waypoints=wp, calculer_peage=calculer_peage)
+        if not data or not data.get("polyline_coords"):
+            return None
+        return {
+            "label":  f"{route['origin']} → {route['dest']}",
+            "origin": route["origin"],
+            "dest":   route["dest"],
+            "km":     data.get("km", 0),
+            "peage":  data.get("prix_peage", 0.0),
+            "coords": data["polyline_coords"],
+        }
 
-            coords_o = geocode_address(origin)
-            coords_d = geocode_address(dest)
-            if not coords_o or not coords_d:
-                return None
-
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = {ex.submit(calc, r, s): r
+                   for s, (_, rs) in sheets_data.items() for r in rs}
+        for f in as_completed(futures):
+            done[0] += 1
+            prog.progress(done[0] / total,
+                          text=f"{done[0]}/{total} — {futures[f]['origin']} → {futures[f]['dest']}")
             try:
-                waypoints = get_waypoints(origin, dest)
+                res = f.result()
+                if res:
+                    with lock:
+                        routes_ok.append(res)
             except Exception:
-                waypoints = []
+                pass
 
-            data = calculate_km_route(
-                coords_o[0], coords_o[1],
-                coords_d[0], coords_d[1],
-                waypoints=waypoints,
-                calculer_peage=calculer_peage,
-            )
-            if not data or not data.get("polyline_coords"):
-                return None
+    prog.empty()
 
-            return {
-                "label":  f"{origin} → {dest}",
-                "origin": origin,
-                "dest":   dest,
-                "km":     data.get("km", 0),
-                "peage":  data.get("prix_peage", 0.0),
-                "coords": data["polyline_coords"],
-                "sheet":  sheet_name,
-            }
+    if not routes_ok:
+        st.error("❌ Aucun itinéraire calculé.")
+        st.stop()
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {}
-            for sheet_name, (_, routes) in sheets_data.items():
-                for route in routes:
-                    f = executor.submit(calculer_trajet, route, sheet_name)
-                    futures[f] = route
+    routes_ok.sort(key=lambda r: r["label"])
+    st.session_state["ci_routes"] = routes_ok
+    st.success(f"✅ {len(routes_ok)}/{total} itinéraires calculés")
 
-            for f in as_completed(futures):
-                route = futures[f]
-                done[0] += 1
-                pct = done[0] / total
-                progress.progress(min(pct, 1.0))
-                status_txt.markdown(
-                    f"**{done[0]}/{total}** — {route['origin']} → {route['dest']}"
-                )
-                try:
-                    result = f.result()
-                    if result:
-                        with lock:
-                            routes_calculees.append(result)
-                except Exception:
-                    pass
-
-        if routes_calculees:
-            status.update(label=f"✅ {len(routes_calculees)}/{total} itinéraires calculés", state="complete")
-        else:
-            status.update(label="❌ Aucun itinéraire calculé", state="error")
-
-    if routes_calculees:
-        routes_calculees.sort(key=lambda r: (r["sheet"], r["label"]))
-        st.session_state["cartes_routes"] = routes_calculees
-        st.session_state["cartes_sel_idx"] = 0
-
-# ─── Affichage carte + liste ─────────────────────────────────────────────────
-if "cartes_routes" not in st.session_state:
-    if not st.session_state.get("cartes_xlsx_bytes"):
-        st.info("👆 Charge un fichier Excel pour commencer.")
+# ─── Affichage ───────────────────────────────────────────────────────────────
+if "ci_routes" not in st.session_state:
     st.stop()
 
-routes = st.session_state["cartes_routes"]
+routes = st.session_state["ci_routes"]
 
-if "cartes_sel_idx" not in st.session_state:
-    st.session_state["cartes_sel_idx"] = 0
-
-# ─── Sélecteur déroulant ─────────────────────────────────────────────────────
+# Sélecteur déroulant
 labels = [
-    f"{r['origin']} → {r['dest']}  ({r['km']:.0f} km{' · ' + str(round(r['peage'],2)) + '€' if r['peage'] else ''})"
+    f"{r['origin']} → {r['dest']}  |  {r['km']:.0f} km"
+    + (f"  ·  {r['peage']:.2f} €" if r['peage'] else "")
     for r in routes
 ]
-sel_idx = st.selectbox(
-    f"📋 {len(routes)} itinéraire{'s' if len(routes)>1 else ''}",
-    range(len(routes)),
-    format_func=lambda i: labels[i],
-    index=st.session_state["cartes_sel_idx"],
+sel = st.selectbox("📋 Choisir un itinéraire", range(len(routes)),
+                   format_func=lambda i: labels[i])
+
+r = routes[sel]
+
+# Info résumé
+st.caption(
+    f"**{r['origin']}** → **{r['dest']}**  ·  📏 {r['km']:.1f} km"
+    + (f"  ·  🛣️ {r['peage']:.2f} €" if r['peage'] else "")
 )
-st.session_state["cartes_sel_idx"] = sel_idx
 
-# ─── Carte Leaflet fixe ──────────────────────────────────────────────────────
-sel = min(st.session_state["cartes_sel_idx"], len(routes) - 1)
-r_sel = routes[sel]
-
-all_coords = [c for r in routes for c in r["coords"]]
-center_lat = sum(c[0] for c in all_coords) / len(all_coords)
-center_lon = sum(c[1] for c in all_coords) / len(all_coords)
-
-routes_js = json.dumps([
-    {"origin": r["origin"], "dest": r["dest"],
-     "km": r["km"], "peage": r["peage"], "coords": r["coords"]}
-    for r in routes
-])
+# Carte Leaflet
+all_coords  = [c for ro in routes for c in ro["coords"]]
+center_lat  = sum(c[0] for c in all_coords) / len(all_coords)
+center_lon  = sum(c[1] for c in all_coords) / len(all_coords)
+routes_js   = json.dumps([{"origin": ro["origin"], "dest": ro["dest"],
+                            "km": ro["km"], "peage": ro["peage"],
+                            "coords": ro["coords"]} for ro in routes])
 
 carte_html = f"""<!DOCTYPE html>
 <html>
@@ -200,89 +147,71 @@ carte_html = f"""<!DOCTYPE html>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{ font-family:'Segoe UI',sans-serif; }}
-#map {{ height:680px; width:100%; border-radius:14px;
-        box-shadow:0 4px 24px rgba(26,67,160,0.15); }}
-.info-panel {{
-  background:white; padding:10px 14px; border-radius:10px;
-  font-size:13px; line-height:1.6;
-  box-shadow:0 2px 10px rgba(0,0,0,0.15);
-  min-width:180px; max-width:280px;
-}}
-.info-panel strong {{ color:#1a3360; }}
-.info-panel .km   {{ color:#2F5496; font-weight:700; }}
-.info-panel .peage {{ color:#c0392b; font-size:12px; }}
-.mk {{ width:28px; height:28px; border-radius:50% 50% 50% 0;
-       transform:rotate(-45deg); display:flex; align-items:center;
-       justify-content:center; font-weight:800; font-size:12px;
-       color:white; border:2px solid white;
-       box-shadow:0 2px 6px rgba(0,0,0,0.3); }}
-.mk span {{ transform:rotate(45deg); }}
-.mk-A {{ background:#27ae60; }} .mk-B {{ background:#e74c3c; }}
+    * {{ margin:0; padding:0; box-sizing:border-box; }}
+    #map {{ height: 700px; width: 100%; border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15); }}
+    .panel {{
+      background: white; padding: 10px 14px; border-radius: 10px;
+      font-size: 13px; line-height: 1.7;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+      max-width: 280px;
+    }}
+    .panel b {{ color: #1a3360; }}
+    .panel .km {{ color: #2F5496; font-weight: 700; }}
+    .mk {{ width:26px; height:26px; border-radius: 50% 50% 50% 0;
+           transform: rotate(-45deg); display: flex; align-items: center;
+           justify-content: center; font-weight: 800; font-size: 12px;
+           color: white; border: 2px solid white;
+           box-shadow: 0 2px 5px rgba(0,0,0,0.3); }}
+    .mk span {{ transform: rotate(45deg); }}
+    .A {{ background: #27ae60; }} .B {{ background: #e74c3c; }}
   </style>
 </head>
 <body>
 <div id="map"></div>
 <script>
   var ROUTES = {routes_js};
-  var currentLine=null, markerA=null, markerB=null, infoCtrl=null;
+  var SEL    = {sel};
+  var line=null, mA=null, mB=null, info=null;
 
   var map = L.map('map').setView([{center_lat},{center_lon}], 6);
-  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-attribution:'© OpenStreetMap', maxZoom:18
-  }}).addTo(map);
+  L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png',
+    {{attribution:'© OpenStreetMap', maxZoom:18}}).addTo(map);
 
-  var iconA = L.divIcon({{className:'',
-html:'<div class="mk mk-A"><span>A</span></div>',
-iconSize:[28,28],iconAnchor:[14,28],popupAnchor:[0,-30]}});
-  var iconB = L.divIcon({{className:'',
-html:'<div class="mk mk-B"><span>B</span></div>',
-iconSize:[28,28],iconAnchor:[14,28],popupAnchor:[0,-30]}});
+  var iA = L.divIcon({{className:'',html:'<div class="mk A"><span>A</span></div>',iconSize:[26,26],iconAnchor:[13,26]}});
+  var iB = L.divIcon({{className:'',html:'<div class="mk B"><span>B</span></div>',iconSize:[26,26],iconAnchor:[13,26]}});
 
-  function showRoute(idx) {{
-var r = ROUTES[idx];
-if (!r || !r.coords || !r.coords.length) return;
+  function show(idx) {{
+    var r = ROUTES[idx];
+    if (!r || !r.coords.length) return;
+    if (line)  map.removeLayer(line);
+    if (mA)    map.removeLayer(mA);
+    if (mB)    map.removeLayer(mB);
+    if (info)  map.removeControl(info);
 
-if (currentLine) {{ map.removeLayer(currentLine); currentLine=null; }}
-if (markerA)     {{ map.removeLayer(markerA);     markerA=null; }}
-if (markerB)     {{ map.removeLayer(markerB);     markerB=null; }}
-if (infoCtrl)    {{ map.removeControl(infoCtrl);  infoCtrl=null; }}
+    line = L.polyline(r.coords, {{color:'#1a4fa0',weight:5,opacity:0.9}}).addTo(map);
+    map.fitBounds(line.getBounds().pad(0.08));
+    mA = L.marker(r.coords[0], {{icon:iA}}).addTo(map).bindPopup('<b>🟢 ' + r.origin + '</b>');
+    mB = L.marker(r.coords[r.coords.length-1], {{icon:iB}}).addTo(map).bindPopup('<b>🔴 ' + r.dest + '</b>');
 
-currentLine = L.polyline(r.coords, {{
-  color:'#1a4fa0', weight:5, opacity:0.9, smoothFactor:1.2
-}}).addTo(map);
-map.fitBounds(currentLine.getBounds().pad(0.1));
-
-markerA = L.marker(r.coords[0], {{icon:iconA}}).addTo(map)
-  .bindPopup('<b>🟢 Départ</b><br>' + r.origin);
-markerB = L.marker(r.coords[r.coords.length-1], {{icon:iconB}}).addTo(map)
-  .bindPopup('<b>🔴 Arrivée</b><br>' + r.dest);
-
-infoCtrl = L.control({{position:'bottomright'}});
-infoCtrl.onAdd = function() {{
-  var d = L.DomUtil.create('div','info-panel');
-  var km_s  = r.km    ? '<span class="km">📏 '+r.km.toFixed(1)+' km</span>' : '';
-  var pe_s  = r.peage ? '<br><span class="peage">🛣️ '+r.peage.toFixed(2)+' €</span>' : '';
-  d.innerHTML = '<strong>'+r.origin+'</strong><br>→ <strong>'+r.dest+'</strong><br>'+km_s+pe_s;
-  return d;
-}};
-infoCtrl.addTo(map);
+    info = L.control({{position:'bottomright'}});
+    info.onAdd = function() {{
+      var d = L.DomUtil.create('div','panel');
+      d.innerHTML = '<b>' + r.origin + '</b><br>→ <b>' + r.dest + '</b><br>'
+        + (r.km ? '<span class="km">📏 ' + r.km.toFixed(1) + ' km</span>' : '')
+        + (r.peage ? '<br>🛣️ ' + r.peage.toFixed(2) + ' €' : '');
+      return d;
+    }};
+    info.addTo(map);
   }}
 
-  showRoute({sel});
+  show(SEL);
 
   window.addEventListener('message', function(e) {{
-if (e.data && typeof e.data.route_idx === 'number') {{
-  showRoute(e.data.route_idx);
-}}
+    if (e.data && typeof e.data.idx === 'number') show(e.data.idx);
   }});
 </script>
 </body>
 </html>"""
 
 st.components.v1.html(carte_html, height=720, scrolling=False)
-st.caption(
-    f"**{r_sel['origin']}** → **{r_sel['dest']}**  ·  📏 {r_sel['km']:.1f} km"
-    + (f"  ·  🛣️ {r_sel['peage']:.2f} €" if r_sel['peage'] else "")
-)
