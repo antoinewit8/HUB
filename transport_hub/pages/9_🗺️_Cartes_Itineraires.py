@@ -13,7 +13,8 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+KM_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "tools", "km_calcul"))
+sys.path.insert(0, KM_DIR)
 
 st.set_page_config(page_title="Cartes Itinéraires", page_icon="🗺️", layout="wide")
 
@@ -47,9 +48,9 @@ if st.session_state.get("cartes_xlsx_bytes") and st.button("🚀 Calculer et aff
     import tempfile
 
     try:
-        from tools.km_calcul.modules.excel_handler_km import read_all_sheets
-        from tools.km_calcul.modules.ptv_router_km import calculate_km_route, geocode_address
-        from tools.km_calcul.modules.routes_preferentielles import get_waypoints
+        from modules.excel_handler_km import read_all_sheets
+        from modules.ptv_router_km import calculate_km_route, geocode_address
+        from modules.routes_preferentielles import get_waypoints
     except ImportError as e:
         st.error(f"❌ Import impossible : {e}")
         st.stop()
