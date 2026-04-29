@@ -3,7 +3,6 @@ import sys
 import os
 import json
 import threading
-import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 st.set_page_config(page_title="Cartes Itinéraires", page_icon="🗺️", layout="wide")
@@ -215,6 +214,4 @@ else:
 </body>
 </html>"""
 
-    encoded = base64.b64encode(carte_html.encode("utf-8")).decode("utf-8")
-    data_uri = f"data:text/html;base64,{encoded}"
-    st.iframe(data_uri, height=720, scrolling=False)
+    st.components.v1.html(carte_html, height=720, scrolling=False)
