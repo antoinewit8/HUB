@@ -18,6 +18,19 @@ sys.path.insert(0, KM_DIR)
 
 st.set_page_config(page_title="Cartes Itinéraires", page_icon="🗺️", layout="wide")
 
+# ─── DEBUG ───────────────────────────────────────────────────────────────────
+with st.expander("🔧 Debug info", expanded=False):
+    st.write("**__file__**:", __file__)
+    st.write("**KM_DIR**:", KM_DIR)
+    st.write("**KM_DIR existe**:", os.path.exists(KM_DIR))
+    if os.path.exists(KM_DIR):
+        st.write("**Contenu KM_DIR**:", os.listdir(KM_DIR))
+        modules_dir = os.path.join(KM_DIR, "modules")
+        st.write("**modules/ existe**:", os.path.exists(modules_dir))
+        if os.path.exists(modules_dir):
+            st.write("**Contenu modules/**:", os.listdir(modules_dir))
+    st.write("**sys.path**:", sys.path[:5])
+
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] { background: #f0f4fb; }
