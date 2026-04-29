@@ -543,10 +543,14 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
         villes_filtrees.sort(key=lambda x: x[3])
         print(f"      ✂️  Élagage : limité à {MAX_WAYPOINTS} waypoints")
 
-    # 8. Conversion en strings "lat, lon"
+    # 8. Conversion en strings "lat, lon;r=RADIUS"
+    # On encode un radius de 8km sur chaque jalon automatique :
+    # PTV passera dans cette zone sans devoir atteindre le point exact,
+    # ce qui évite les détours causés par des coords légèrement décalées.
+    JALON_RADIUS = 8000  # 8km — assez large pour couvrir un échangeur, assez serré pour guider
     waypoints = []
     for ville, vlat, vlon, dist_start, dist_seg in villes_filtrees:
-        waypoints.append(f"{vlat}, {vlon}")
-        print(f"      📌 Jalon retenu : {ville} ({dist_seg:.0f}km du trajet, {dist_start:.0f}km du départ)")
+        waypoints.append(f"{vlat}, {vlon};r={JALON_RADIUS}")
+        print(f"      📌 Jalon retenu : {ville} ({dist_seg:.0f}km du trajet, {dist_start:.0f}km du départ, radius={JALON_RADIUS}m)")
 
     return waypoints
