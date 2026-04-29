@@ -47,9 +47,9 @@ if st.session_state.get("cartes_xlsx_bytes") and st.button("🚀 Calculer et aff
     import tempfile
 
     try:
-        from modules.excel_handler_km import read_all_sheets
-        from modules.ptv_router_km import calculate_km_route, geocode_address
-        from modules.routes_preferentielles import get_waypoints
+        from tools.km_calcul.modules.excel_handler_km import read_all_sheets
+        from tools.km_calcul.modules.ptv_router_km import calculate_km_route, geocode_address
+        from tools.km_calcul.modules.routes_preferentielles import get_waypoints
     except ImportError as e:
         st.error(f"❌ Import impossible : {e}")
         st.stop()
