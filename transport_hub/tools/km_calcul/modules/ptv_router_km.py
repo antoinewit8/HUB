@@ -274,7 +274,7 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
     for i, (lat, lon) in enumerate(all_points):
         if 0 < i < len(all_points) - 1:
             # Étape intermédiaire : on laisse 5km de tolérance
-            query_params.append(("waypoints", f"{lat},{lon};radius=5000"))
+            query_params.append(("waypoints", f"{lat},{lon};radius=500"))
         else:
             # Vrai Départ / Vraie Arrivée : précision stricte
             query_params.append(("waypoints", f"{lat},{lon}"))
