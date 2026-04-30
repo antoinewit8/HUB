@@ -116,8 +116,12 @@ AXE_VOSGES_SUD_OUEST = ["Chalon-sur-Saône", "Issoire", "Aurillac"]
 AXE_LIMOUSIN      = ["Tulle", "Limoges", "La Souterraine", "Poitiers"]
 AXE_N88           = ["Puy-en-Velay", "Mende", "Rodez", "Cahors"]
 
-# Axe Massif Central est (Aveyron/Cantal) → Grand Ouest : force A75 au lieu de l'A20 Limoges
-AXE_MASSIF_CENTRAL_OUEST = ["Issoire", "Tours", "Angers"]
+# Axe Massif Central est (Aveyron/Cantal) → Grand Ouest Bretagne/Vendée : force A75 + Tours/Angers
+AXE_MASSIF_CENTRAL_OUEST     = ["Issoire", "Tours", "Angers"]
+
+# Axe Massif Central est (Aveyron/Cantal) → Normandie : force A75 + Orléans/Le Mans/Alençon
+# Évite le détour absurde via Tours→Rennes pour les destinations Manche/Calvados/Orne
+AXE_MASSIF_CENTRAL_NORMANDIE = ["Issoire", "Orléans", "Le Mans", "Alençon"]
 
 # Axe Ardennes/Avesnois : force les routes locales pour les Ardennes et le Hainaut
 AXE_ARDENNES_AVESNOIS = ["Hirson", "Avesnes-sur-Helpe", "Maubeuge"]
@@ -287,6 +291,32 @@ def _is_n88_axis(lat_start, lon_start, lat_end, lon_end) -> bool:
             or (is_loire_auvergne(lat_end, lon_end) and is_sud_ouest(lat_start, lon_start))):
         return False
     return _haversine(lat_start, lon_start, lat_end, lon_end) >= 250
+
+
+# ==========================================
+# DESTINATION NORMANDIE ?
+# ==========================================
+def _dest_is_normandie(lat_start, lon_start, lat_end, lon_end) -> bool:
+    """
+    Retourne True si l'extrémité côté grand-ouest est en Normandie
+    (Manche 50, Calvados 14, Orne 61, Eure 27, Seine-Maritime 76).
+    On identifie la Normandie par lon > -1.5 et lat >= 47.5.
+    Permet de distinguer Normandie (→ Le Mans/Alençon)
+    vs Bretagne/Vendée (→ Tours/Angers).
+    """
+    # Identifier quel bout est le "grand ouest" (lon <= 0.5)
+    if lon_start <= 0.5 and lon_end > 0.5:
+        lat_arr, lon_arr = lat_start, lon_start
+    elif lon_end <= 0.5 and lon_start > 0.5:
+        lat_arr, lon_arr = lat_end, lon_end
+    else:
+        # Les deux sont à l'ouest — prendre le plus au nord
+        if lat_start >= lat_end:
+            lat_arr, lon_arr = lat_start, lon_start
+        else:
+            lat_arr, lon_arr = lat_end, lon_end
+
+    return lon_arr > -1.5 and lat_arr >= 47.5
 
 
 # ==========================================
@@ -461,8 +491,17 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
                              lat_start, lon_start, lat_end, lon_end)
 
     if use_massif_central:
-        _appliquer_axe_force("MASSIF-CENTRAL-OUEST", AXE_MASSIF_CENTRAL_OUEST, villes_proches,
-                             lat_start, lon_start, lat_end, lon_end)
+        # Branchement selon la destination :
+        # - Normandie (Manche, Calvados, Orne...) → axe Orléans/Le Mans/Alençon
+        # - Bretagne / Vendée / Pays de la Loire  → axe Tours/Angers (ancien comportement)
+        if _dest_is_normandie(lat_start, lon_start, lat_end, lon_end):
+            print(f"      🗺️  MASSIF-CENTRAL → destination Normandie détectée : axe Orléans/Le Mans/Alençon")
+            _appliquer_axe_force("MASSIF-CENTRAL-NORMANDIE", AXE_MASSIF_CENTRAL_NORMANDIE,
+                                 villes_proches, lat_start, lon_start, lat_end, lon_end)
+        else:
+            print(f"      🗺️  MASSIF-CENTRAL → destination Bretagne/Vendée : axe Tours/Angers")
+            _appliquer_axe_force("MASSIF-CENTRAL-OUEST", AXE_MASSIF_CENTRAL_OUEST,
+                                 villes_proches, lat_start, lon_start, lat_end, lon_end)
 
     if use_ouest_nord_est:
         _appliquer_axe_force("OUEST-NORD-EST", AXE_OUEST_NORD_EST, villes_proches,
@@ -506,7 +545,7 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
     for v in villes_proches:
         ville, vlat, vlon, dist_start, dist_seg = v
         dist_to_end = _haversine(vlat, vlon, lat_end, lon_end)
-        if dist_start + dist_to_end > dist_total * 1.2:  # durci : 1.4 → 1.2
+        if dist_start + dist_to_end > dist_total * 1.2:
             print(f"      🚫 {ville} écarté (hors corridor : {dist_start:.0f}+{dist_to_end:.0f} > {dist_total*1.2:.0f})")
             continue
         seuil_extremite = max(60, dist_total * 0.08)
@@ -544,9 +583,6 @@ def detecter_villes_jalons(lat_start, lon_start, lat_end, lon_end) -> list:
         print(f"      ✂️  Élagage : limité à {MAX_WAYPOINTS} waypoints")
 
     # 8. Conversion en strings "lat, lon;r=RADIUS"
-    # On encode un radius de 8km sur chaque jalon automatique :
-    # PTV passera dans cette zone sans devoir atteindre le point exact,
-    # ce qui évite les détours causés par des coords légèrement décalées.
     JALON_RADIUS = 8000  # 8km — assez large pour couvrir un échangeur, assez serré pour guider
     waypoints = []
     for ville, vlat, vlon, dist_start, dist_seg in villes_filtrees:
