@@ -4,7 +4,6 @@ import math
 import unicodedata
 import re
 import requests
-from modules.villes_jalons import detecter_villes_jalons
 
 # ==========================================
 # CONFIG
@@ -101,7 +100,7 @@ def geocoder_ville(ville: str) -> tuple[float, float] | None:
             cp = parts[1].strip() if parts[1].strip().isdigit() else ""
             pays = parts[-1].strip() if len(parts) >= 3 else ""
 
-            # ── Recherche 1 : ville seule (plus fiable que ville+CP) ──
+            # ── Recherche avec ville + CP pour ancrer le département ──
             search_text = f"{city_name} {cp}" if cp else city_name
             params = {"searchText": search_text}
 
@@ -230,8 +229,6 @@ def geocoder_ville(ville: str) -> tuple[float, float] | None:
         return None
 
 
-
-
 # ==========================================
 # DISTANCE HAVERSINE
 # ==========================================
@@ -246,7 +243,7 @@ def haversine(lat1, lon1, lat2, lon2) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 # ==========================================
-# FONCTION PRINCIPALE (remplace l'ancienne)
+# FONCTION PRINCIPALE
 # ==========================================
 def get_waypoints(origin: str, dest: str) -> list:
     routes = charger_routes()
@@ -257,7 +254,7 @@ def get_waypoints(origin: str, dest: str) -> list:
     norm_origin   = normalize(origin)
     norm_dest     = normalize(dest)
 
-        # ── 1. Chercher route manuelle (texte exact) ──
+    # ── 1. Chercher route manuelle (texte exact) ──
     for route in routes:
         origine_ref = route.get("origine", "")
         dest_ref    = route.get("destination", "")
@@ -286,7 +283,6 @@ def get_waypoints(origin: str, dest: str) -> list:
         mots_ref_o = set(norm_orig_ref.split())
         mots_ref_d = set(norm_dest_ref.split())
 
-        # Skip si aucun mot commun ni côté départ ni côté arrivée
         if not (mots_origin & mots_ref_o) and not (mots_dest & mots_ref_d):
             continue
 
@@ -322,18 +318,6 @@ def get_waypoints(origin: str, dest: str) -> list:
                   f"({len(waypoints)} waypoints)")
             return waypoints
 
-
-
-    # ── 2. Sinon : détection automatique villes-jalons ──
-    if coords_origin and coords_dest:
-        print(f"   🔄 Pas de route manuelle → détection villes-jalons...")
-        jalons = detecter_villes_jalons(
-            coords_origin[0], coords_origin[1],
-            coords_dest[0], coords_dest[1]
-        )
-        if jalons:
-            print(f"   ✅ {len(jalons)} villes-jalons détectées automatiquement")
-            return jalons
-
-    print(f"   📍 Aucune route préférentielle → PTV choisit le trajet")
+    # ── 3. Aucune route manuelle → PTV choisit le trajet ──
+    print(f"   📍 Pas de route manuelle → PTV choisit le trajet")
     return []
