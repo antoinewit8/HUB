@@ -318,6 +318,24 @@ def get_waypoints(origin: str, dest: str) -> list:
                   f"({len(waypoints)} waypoints)")
             return waypoints
 
-    # ── 3. Aucune route manuelle → PTV choisit le trajet ──
+    # ── 3. Détection ciblée : Massif Central / Limousin → Nord/Ouest ──
+    # PTV prend systématiquement A75/A71/A10 (très cher) pour ces trajets.
+    # On injecte Poitiers pour le forcer sur les nationales gratuites (N145/N147).
+    if coords_origin and coords_dest:
+        lat_o, lon_o = coords_origin
+        lat_d, lon_d = coords_dest
+
+        def is_massif_limousin(lat, lon):
+            return 44.0 <= lat <= 46.5 and 1.0 <= lon <= 4.5
+
+        def is_nord_ouest(lat, lon):
+            return lat >= 47.0 and lon <= 1.0
+
+        if ((is_massif_limousin(lat_o, lon_o) and is_nord_ouest(lat_d, lon_d))
+                or (is_massif_limousin(lat_d, lon_d) and is_nord_ouest(lat_o, lon_o))):
+            print(f"   🛣️  Massif Central/Limousin ↔ Nord/Ouest détecté → waypoint Poitiers injecté")
+            return ["46.5800, 0.3400"]
+
+    # ── 4. Aucune route manuelle → PTV choisit le trajet ──
     print(f"   📍 Pas de route manuelle → PTV choisit le trajet")
     return []
