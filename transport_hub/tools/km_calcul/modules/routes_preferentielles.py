@@ -102,7 +102,8 @@ def geocoder_ville(ville: str) -> tuple[float, float] | None:
             pays = parts[-1].strip() if len(parts) >= 3 else ""
 
             # ── Recherche 1 : ville seule (plus fiable que ville+CP) ──
-            params = {"searchText": city_name}
+            search_text = f"{city_name} {cp}" if cp else city_name
+            params = {"searchText": search_text}
 
             country_filter = ""
             if pays:
