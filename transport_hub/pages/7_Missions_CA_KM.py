@@ -25,6 +25,7 @@ import os
 import io
 import re
 import json
+from typing import Optional, Tuple, Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from openpyxl import load_workbook
@@ -47,9 +48,7 @@ MAX_WORKERS  = 4
 VEHICLE      = "EUR_TRAILER_TRUCK"
 
 # ══════════════════════════════════════════════════════════════════
-#  RÉUTILISATION DES CONSTANTES DE excel_handler_km
-#  (PAYS_MAP, CP_LENGTHS, ZONE_CORRECTIONS, CITY_CORRECTIONS, GPS_FIXES_ORIGIN)
-#  et des fonctions de ptv_router_km (geocode_address)
+#  IMPORTS excel_handler_km + ptv_router_km
 # ══════════════════════════════════════════════════════════════════
 
 try:
@@ -62,7 +61,6 @@ try:
     _IMPORTS_OK = True
 except ImportError:
     _IMPORTS_OK = False
-    # Fallback minimal si l'import échoue (exécution hors package TX-FLEX)
     PAYS_MAP = {
         "F": "France", "B": "Belgium", "D": "Germany", "L": "Luxembourg",
         "NL": "Netherlands", "E": "Spain", "I": "Italy", "CH": "Switzerland",
@@ -83,18 +81,13 @@ except ImportError:
 
 
 @st.cache_data(show_spinner=False)
-def geocode_address(address: str):
-    """
-    Délègue à ptv_router_km.geocode_address (même logique :
-    GPS_FIXES → by-postal-code → by-text).
-    """
+def geocode_address(address):
     address = str(address).strip()
     if not address or address.lower() in ("nan", ""):
         return None
     return _ptv_geocode_address(address)
 
 
-# Correspondance code court → ISO2 pour l'endpoint by-postal-code
 PAYS_TO_ISO2 = {
     "F": "FR", "B": "BE", "D": "DE", "L": "LU", "I": "IT",
     "E": "ES", "A": "AT", "P": "PT", "CH": "CH", "GB": "GB",
@@ -102,8 +95,8 @@ PAYS_TO_ISO2 = {
     "IT": "IT", "ES": "ES", "AT": "AT", "PT": "PT",
 }
 
-def _ptv_by_text(query: str) -> tuple | None:
-    """Appel direct PTV by-text, sans cache."""
+
+def _ptv_by_text(query):
     if not query:
         return None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -129,8 +122,7 @@ def _ptv_by_text(query: str) -> tuple | None:
     return None
 
 
-def _ptv_by_postal_code(cp: str, iso2: str) -> tuple | None:
-    """Appel direct PTV by-postal-code, sans cache."""
+def _ptv_by_postal_code(cp, iso2):
     if not cp or not iso2:
         return None
     for attempt in range(1, MAX_RETRIES + 1):
@@ -158,50 +150,31 @@ def _ptv_by_postal_code(cp: str, iso2: str) -> tuple | None:
     return None
 
 
-def geocode_with_fallback(adresse_complete: str, ville: str, cp: str, pays: str) -> tuple | None:
-    """
-    Géocodage en cascade — appels directs PTV sans cache intermédiaire :
-    1. ville + CP + pays  (le plus fiable : pas de bruit de rue)
-    2. CP seul via by-postal-code
-    3. ville + pays
-    4. Adresse complète en dernier recours
-    Retourne (lat, lon) ou None.
-    """
+def geocode_with_fallback(adresse_complete, ville, cp, pays):
     pays_full = PAYS_MAP.get(pays.upper(), pays) if pays else ""
     iso2      = PAYS_TO_ISO2.get(pays.upper(), pays.upper() if len(pays) == 2 else "")
 
-    # Niveau 1 : ville + CP + pays (requête propre, très bien géocodée par PTV)
     if ville and cp and pays_full:
         r = _ptv_by_text(f"{ville}, {cp}, {pays_full}")
-        if r: return r
-
-    # Niveau 2 : by-postal-code (endpoint dédié, très fiable)
+        if r:
+            return r
     if cp and iso2:
         r = _ptv_by_postal_code(cp, iso2)
-        if r: return r
-
-    # Niveau 3 : ville + pays
+        if r:
+            return r
     if ville and pays_full:
         r = _ptv_by_text(f"{ville}, {pays_full}")
-        if r: return r
-
-    # Niveau 4 : adresse complète (parfois trop de bruit pour PTV)
+        if r:
+            return r
     if adresse_complete:
         r = _ptv_by_text(adresse_complete)
-        if r: return r
-
+        if r:
+            return r
     return None
 
 
-def build_address_string(row: pd.Series) -> str:
-    """
-    Construit une adresse géocodable depuis les colonnes exactes de l'export missions :
-      Localité (M) + Code postal (L) + Code pays (J) → via parse_origin_from_parts
-      + préfixe rue si Adresse (H) et/ou Numéro (I) présents.
-
-    Réutilise PAYS_MAP, CP_LENGTHS, CITY_CORRECTIONS de excel_handler_km.
-    """
-    def clean(v): 
+def build_address_string(row):
+    def clean(v):
         v = str(v or "").strip()
         return "" if v.lower() in ("nan", "none") else v
 
@@ -212,18 +185,14 @@ def build_address_string(row: pd.Series) -> str:
     numero  = clean(row.get("numero",      ""))
     nom     = clean(row.get("nom1",        ""))
 
-    # Construction via parse_origin_from_parts (gère PAYS_MAP + CP_LENGTHS + corrections)
     addr = parse_origin_from_parts(ville, cp, pays)
-
-    # Rue = "Numéro Adresse" si les deux sont présents
-    rue = " ".join(p for p in [numero, adresse] if p).strip()
+    rue  = " ".join(p for p in [numero, adresse] if p).strip()
 
     if rue and addr:
         addr = f"{rue}, {addr}"
     elif rue:
         addr = rue
 
-    # Fallback sur le nom de l'entreprise si rien d'autre
     return addr if addr else nom
 
 
@@ -231,11 +200,7 @@ def build_address_string(row: pd.Series) -> str:
 #  CALCUL ROUTE PTV
 # ══════════════════════════════════════════════════════════════════
 
-def calculate_route(coords_list: list) -> dict | None:
-    """
-    Calcule un itinéraire PTV pour une liste de coordonnées (lat, lon).
-    Retourne {"km": float, "travel_time_h": float} ou None.
-    """
+def calculate_route(coords_list):
     if len(coords_list) < 2:
         return None
 
@@ -264,7 +229,7 @@ def calculate_route(coords_list: list) -> dict | None:
                 return None
             data = resp.json()
             return {
-                "km":           round(data.get("distance", 0) / 1000, 1),
+                "km":            round(data.get("distance", 0) / 1000, 1),
                 "travel_time_h": round(data.get("travelTime", 0) / 3600, 2),
             }
         except Exception:
@@ -287,16 +252,16 @@ ACTIVITE_KEYWORDS = {
     "transit":       "DOUANE",
 }
 
-def normalize_activite(val: str) -> str:
+
+def normalize_activite(val):
     v = str(val).strip().lower()
-    for kw, mapped in ACTIVITE_KEYWORDS.items():
+    for kw, mapped in sorted(ACTIVITE_KEYWORDS.items(), key=lambda x: -len(x[0])):
         if kw in v:
             return mapped
     return str(val).strip().upper()
 
 
-def _norm_col(s: str) -> str:
-    """Normalise un nom de colonne : minuscules, sans accents, sans caractères spéciaux."""
+def _norm_col(s):
     s = str(s).strip().lower()
     for src, dst in [("é","e"),("è","e"),("ê","e"),("à","a"),("â","a"),
                      ("ô","o"),("û","u"),("î","i"),("ù","u"),("ç","c")]:
@@ -304,8 +269,7 @@ def _norm_col(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s)
 
 
-def detect_col(df: pd.DataFrame, keywords: list) -> str | None:
-    """Trouve la première colonne dont le nom normalisé correspond à un mot-clé (exact ou contenance)."""
+def detect_col(df, keywords):
     for col in df.columns:
         col_n = _norm_col(col)
         for kw in keywords:
@@ -314,13 +278,6 @@ def detect_col(df: pd.DataFrame, keywords: list) -> str | None:
                 return col
     return None
 
-
-# ── Noms de colonnes exacts de l'export missions ───────────────────────────
-# A: N° Dossier  B: Activité    C: Date        D: Heure
-# E: Type de transport          F: Nom 1        G: Nom 2
-# H: Adresse     I: Numéro      J: Code pays    K: Département
-# L: Code postal M: Localité    N: Produit
-# O: Chauffeur   Q: Immat. tracteur  R: Remorque
 
 MISSIONS_COL_CANDIDATES = {
     "dossier":     ["N° Dossier", "N°Dossier", "N Dossier", "Dossier", "ndossier"],
@@ -344,65 +301,65 @@ MISSIONS_COL_CANDIDATES = {
 }
 
 
-def parse_missions(file) -> pd.DataFrame:
-    """
-    Parse le fichier missions en mappant exactement les colonnes de l'export
-    (N° Dossier / Activité / Date / Heure / Nom 1 / Adresse / Numéro /
-     Code pays / Code postal / Localité / Chauffeur / Immat. tracteur).
-    """
+def parse_missions(file):
     df = pd.read_excel(file, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
 
-    # ── Mapping : correspondance exacte insensible casse d'abord, fallback partiel ──
     cols_lower = {_norm_col(c): c for c in df.columns}
 
     col_map = {}
     for role, candidates in MISSIONS_COL_CANDIDATES.items():
         found = None
-        # 1. Correspondance exacte normalisée
         for cand in candidates:
             key = _norm_col(cand)
             if key in cols_lower:
                 found = cols_lower[key]
                 break
-        # 2. Fallback : contenance
         if not found:
             found = detect_col(df, candidates)
         col_map[role] = found
 
-    # Avertissement colonnes manquantes importantes
     critiques = ["dossier", "activite", "date", "heure", "code_pays", "code_postal", "localite"]
     manquantes = [r for r in critiques if col_map.get(r) is None]
     if manquantes:
-        st.warning(f"⚠️ Colonnes non détectées dans le fichier missions : {manquantes}\n"
-                   f"Colonnes disponibles : {list(df.columns)}")
+        st.warning(
+            f"⚠️ Colonnes non détectées dans le fichier missions : {manquantes}\n"
+            f"Colonnes disponibles : {list(df.columns)}"
+        )
 
-    # Renommage
     rename = {v: k for k, v in col_map.items() if v}
     df = df.rename(columns=rename)
 
-    # Colonnes absentes → chaîne vide
     for col in MISSIONS_COL_CANDIDATES.keys():
         if col not in df.columns:
             df[col] = ""
 
-    # ── Nettoyage lignes ───────────────────────────────────────
     df["dossier"] = df["dossier"].str.strip()
     df = df[df["dossier"].notna() & (df["dossier"] != "") & (df["dossier"] != "nan")]
     df = df[df["dossier"].str.match(r"^\d+", na=False)]
 
     df["activite_norm"] = df["activite"].apply(normalize_activite)
 
-    # ── Date + Heure → datetime ────────────────────────────────
-    try:
-        df["datetime"] = pd.to_datetime(
-            df["date"].str.strip() + " " + df["heure"].str.strip(),
-            dayfirst=True, errors="coerce"
-        )
-    except Exception:
-        df["datetime"] = pd.NaT
+    import datetime as _dt
 
-    # ── Adresse complète géocodable ────────────────────────────
+    def _combine(date_s, heure_s):
+        date_s  = str(date_s  or "").strip()[:10]
+        heure_s = str(heure_s or "").strip()
+        if not date_s or date_s == "nan":
+            return pd.NaT
+        try:
+            d = _dt.datetime.strptime(date_s, "%Y-%m-%d")
+        except Exception:
+            return pd.NaT
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                t = _dt.datetime.strptime(heure_s, fmt)
+                return pd.Timestamp(d.replace(hour=t.hour, minute=t.minute, second=t.second))
+            except Exception:
+                pass
+        return pd.Timestamp(d)
+
+    df["datetime"]         = df.apply(lambda r: _combine(r.get("date", ""), r.get("heure", "")), axis=1)
     df["adresse_complete"] = df.apply(build_address_string, axis=1)
 
     return df
@@ -411,13 +368,6 @@ def parse_missions(file) -> pd.DataFrame:
 # ══════════════════════════════════════════════════════════════════
 #  PARSING FICHIER CA
 # ══════════════════════════════════════════════════════════════════
-
-# Noms de colonnes exacts du fichier CA
-# N° Dossier | Référence | Date chargement | Département | Type de transport |
-# Type de dossier | Client facturation | Pays client fac |
-# Adresse chargement | Localité chargement | C.P. chargement | ... |
-# Produit | Type produit | Etat vente | Prix transport | Suppléments |
-# S.G. | Heures d'attente | Total des ventes
 
 CA_COL_CANDIDATES = {
     "dossier":          ["N° Dossier", "N°Dossier", "Dossier"],
@@ -430,12 +380,10 @@ CA_COL_CANDIDATES = {
     "heures_attente":   ["Heures d'attente", "Heures attente"],
     "date_charg":       ["Date chargement", "Date Chargement"],
     "type_transport":   ["Type de transport", "Type transport"],
-    # Coordonnées géographiques chargement
     "adr_charg":        ["Adresse chargement", "Adresse Chargement"],
     "localite_charg":   ["Localité chargement", "Localite chargement"],
     "cp_charg":         ["C.P. chargement", "CP chargement", "Code postal chargement"],
     "pays_charg":       ["Pays chargement", "Pays Chargement"],
-    # Coordonnées géographiques déchargement
     "adr_decharg":      ["Adresse déchargement", "Adresse dechargement"],
     "localite_decharg": ["Localité déchargement", "Localite dechargement"],
     "cp_decharg":       ["C.P. déchargement", "CP dechargement", "Code postal dechargement"],
@@ -443,12 +391,7 @@ CA_COL_CANDIDATES = {
 }
 
 
-def parse_ca(file) -> pd.DataFrame:
-    """
-    Parse le fichier CA avec mapping exact des colonnes de l'export.
-    Colonnes clés : N° Dossier / Prix transport / Total des ventes /
-                    Client facturation / Etat vente
-    """
+def parse_ca(file):
     df = pd.read_excel(file, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -464,12 +407,13 @@ def parse_ca(file) -> pd.DataFrame:
                 break
         col_map[role] = found
 
-    # Avertissement si colonnes CA critiques manquantes
     critiques_ca = ["dossier", "prix_transport", "total_vente"]
     manquantes_ca = [r for r in critiques_ca if col_map.get(r) is None]
     if manquantes_ca:
-        st.warning(f"⚠️ Colonnes CA non détectées : {manquantes_ca} — "
-                   f"Colonnes disponibles : {list(df.columns)}")
+        st.warning(
+            f"⚠️ Colonnes CA non détectées : {manquantes_ca} — "
+            f"Colonnes disponibles : {list(df.columns)}"
+        )
 
     rename = {v: k for k, v in col_map.items() if v}
     df = df.rename(columns=rename)
@@ -484,15 +428,17 @@ def parse_ca(file) -> pd.DataFrame:
 
     def to_float(s):
         try:
-            return float(str(s).replace(",", ".").replace(" ", "").replace(" ", "").replace("€", "").strip())
+            return float(
+                str(s).replace(",", ".").replace("\xa0", "").replace(" ", "")
+                .replace("€", "").strip()
+            )
         except Exception:
             return 0.0
 
     df["prix_transport"] = df["prix_transport"].apply(to_float)
     df["total_vente"]    = df["total_vente"].apply(to_float)
 
-    # ── Construire adresses géocodables depuis les colonnes CA ──
-    def _clean(v): 
+    def _clean(v):
         v = str(v or "").strip()
         return "" if v.lower() in ("nan", "none") else v
 
@@ -505,20 +451,19 @@ def parse_ca(file) -> pd.DataFrame:
     df["adresse_charg_geo"]   = df.apply(lambda r: _addr_from_ca(r, "charg"),   axis=1)
     df["adresse_decharg_geo"] = df.apply(lambda r: _addr_from_ca(r, "decharg"), axis=1)
 
-    # Déduplique par dossier (somme CA, garder première adresse)
     df_agg = df.groupby("dossier", as_index=False).agg(
-        prix_transport      = ("prix_transport",    "sum"),
-        total_vente         = ("total_vente",       "sum"),
-        client              = ("client",            "first"),
-        etat_vente          = ("etat_vente",        "first"),
-        adresse_charg_geo   = ("adresse_charg_geo", "first"),
+        prix_transport      = ("prix_transport",     "sum"),
+        total_vente         = ("total_vente",        "sum"),
+        client              = ("client",             "first"),
+        etat_vente          = ("etat_vente",         "first"),
+        adresse_charg_geo   = ("adresse_charg_geo",  "first"),
         adresse_decharg_geo = ("adresse_decharg_geo","first"),
-        localite_charg      = ("localite_charg",    "first"),
-        localite_decharg    = ("localite_decharg",  "first"),
-        cp_charg            = ("cp_charg",          "first"),
-        cp_decharg          = ("cp_decharg",        "first"),
-        pays_charg          = ("pays_charg",        "first"),
-        pays_decharg        = ("pays_decharg",      "first"),
+        localite_charg      = ("localite_charg",     "first"),
+        localite_decharg    = ("localite_decharg",   "first"),
+        cp_charg            = ("cp_charg",           "first"),
+        cp_decharg          = ("cp_decharg",         "first"),
+        pays_charg          = ("pays_charg",         "first"),
+        pays_decharg        = ("pays_decharg",       "first"),
     )
 
     return df_agg
@@ -528,23 +473,18 @@ def parse_ca(file) -> pd.DataFrame:
 #  CONSOLIDATION
 # ══════════════════════════════════════════════════════════════════
 
-def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
-    """
-    Construit le tableau consolidé par dossier :
-    - Séquence de stops ordonnée par datetime
-    - CA joint par N° Dossier
-    - Chauffeur / tracteur
-    """
+def consolidate(df_missions, df_ca):
     rows = []
 
     for dossier, grp in df_missions.groupby("dossier"):
         grp = grp.sort_values("datetime").reset_index(drop=True)
 
-        # Chauffeur / tracteur (premier non-vide)
         chauffeur = next((v for v in grp["chauffeur"] if v and v not in ("nan", "")), "")
         tracteur  = next((v for v in grp["tracteur"]  if v and v not in ("nan", "")), "")
+        remorque  = next(
+            (str(v).strip() for v in grp["remorque"] if v and str(v).strip() not in ("nan", "")), ""
+        ) if "remorque" in grp.columns else ""
 
-        # Séquence des stops
         stops = []
         for _, r in grp.iterrows():
             stops.append({
@@ -553,85 +493,84 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
                 "adresse":   r["adresse_complete"],
                 "localite":  r.get("localite", ""),
                 "nom":       r.get("nom1", ""),
-                # champs bruts pour le fallback géocodage en cascade
                 "ville_raw": str(r.get("localite",    "") or "").strip(),
                 "cp_raw":    str(r.get("code_postal", "") or "").strip(),
                 "pays_raw":  str(r.get("code_pays",   "") or "").strip().upper(),
             })
 
-        # Résumé textuel des stops
         stop_labels = " → ".join(
             f"[{s['activite']}] {s['localite'] or s['nom'] or s['adresse']}"
             for s in stops
         )
 
-        # Dates
         dates_valides = [s["datetime"] for s in stops if pd.notna(s["datetime"])]
         date_debut = min(dates_valides).strftime("%d/%m/%Y") if dates_valides else ""
         date_fin   = max(dates_valides).strftime("%d/%m/%Y") if dates_valides else ""
 
         rows.append({
-            "dossier":    dossier,
-            "chauffeur":  chauffeur,
-            "tracteur":   tracteur,
-            "date_debut": date_debut,
-            "date_fin":   date_fin,
-            "nb_stops":   len(stops),
+            "dossier":     dossier,
+            "chauffeur":   chauffeur,
+            "tracteur":    tracteur,
+            "remorque":    remorque,
+            "date_debut":  date_debut,
+            "date_fin":    date_fin,
+            "nb_stops":    len(stops),
             "stops_texte": stop_labels,
-            "stops_data": stops,  # on garde pour le calcul PTV
+            "stops_data":  stops,
         })
 
     df_cons = pd.DataFrame(rows)
 
-    # Join CA — inclure les adresses charg/decharg pour le calcul PTV
-    ca_cols = ["dossier", "prix_transport", "total_vente", "client", "etat_vente",
-               "adresse_charg_geo", "adresse_decharg_geo",
-               "localite_charg", "localite_decharg",
-               "cp_charg", "cp_decharg", "pays_charg", "pays_decharg"]
+    ca_cols = [
+        "dossier", "prix_transport", "total_vente", "client", "etat_vente",
+        "adresse_charg_geo", "adresse_decharg_geo",
+        "localite_charg", "localite_decharg",
+        "cp_charg", "cp_decharg", "pays_charg", "pays_decharg",
+    ]
     ca_cols_dispo = [c for c in ca_cols if c in df_ca.columns]
     df_cons = df_cons.merge(df_ca[ca_cols_dispo], on="dossier", how="left")
     df_cons["prix_transport"] = df_cons["prix_transport"].fillna(0.0)
     df_cons["total_vente"]    = df_cons["total_vente"].fillna(0.0)
 
-    # ── Fallback : reconstruire charg/decharg depuis stops_data si vides après merge ──
-    # (cas où les colonnes du CA n'ont pas été correctement détectées)
     def _fill_from_stops(row):
-        def _c(v): return "" if str(v or "").strip().lower() in ("nan","none","") else str(v).strip()
-        
-        loc_ch  = _c(row.get("localite_charg",  ""))
-        cp_ch   = _c(row.get("cp_charg",         ""))
-        pays_ch = _c(row.get("pays_charg",        ""))
-        loc_de  = _c(row.get("localite_decharg", ""))
-        cp_de   = _c(row.get("cp_decharg",        ""))
-        pays_de = _c(row.get("pays_decharg",      ""))
+        def _c(v):
+            return "" if str(v or "").strip().lower() in ("nan", "none", "") else str(v).strip()
 
-        # Si vides → prendre depuis stops_data
+        loc_ch  = _c(row.get("localite_charg",  ""))
+        cp_ch   = _c(row.get("cp_charg",        ""))
+        pays_ch = _c(row.get("pays_charg",       ""))
+        loc_de  = _c(row.get("localite_decharg", ""))
+        cp_de   = _c(row.get("cp_decharg",       ""))
+        pays_de = _c(row.get("pays_decharg",     ""))
+
         stops = row.get("stops_data", [])
         if stops and not (loc_ch or cp_ch):
-            # 1er stop = chargement
-            s0 = stops[0]
+            s0      = stops[0]
             loc_ch  = _c(s0.get("ville_raw", ""))
             cp_ch   = _c(s0.get("cp_raw",    ""))
             pays_ch = _c(s0.get("pays_raw",  ""))
         if stops and not (loc_de or cp_de):
-            # Dernier stop = déchargement
-            sn = stops[-1]
+            sn      = stops[-1]
             loc_de  = _c(sn.get("ville_raw", ""))
             cp_de   = _c(sn.get("cp_raw",    ""))
             pays_de = _c(sn.get("pays_raw",  ""))
 
         return pd.Series({
-            "localite_charg":  loc_ch,  "cp_charg":  cp_ch,  "pays_charg":  pays_ch,
-            "localite_decharg": loc_de, "cp_decharg": cp_de, "pays_decharg": pays_de,
+            "localite_charg":   loc_ch,
+            "cp_charg":         cp_ch,
+            "pays_charg":       pays_ch,
+            "localite_decharg": loc_de,
+            "cp_decharg":       cp_de,
+            "pays_decharg":     pays_de,
         })
 
     filled = df_cons.apply(_fill_from_stops, axis=1)
-    df_cons["localite_charg"]  = filled["localite_charg"]
-    df_cons["cp_charg"]        = filled["cp_charg"]
-    df_cons["pays_charg"]      = filled["pays_charg"]
-    df_cons["localite_decharg"]= filled["localite_decharg"]
-    df_cons["cp_decharg"]      = filled["cp_decharg"]
-    df_cons["pays_decharg"]    = filled["pays_decharg"]
+    df_cons["localite_charg"]   = filled["localite_charg"]
+    df_cons["cp_charg"]         = filled["cp_charg"]
+    df_cons["pays_charg"]       = filled["pays_charg"]
+    df_cons["localite_decharg"] = filled["localite_decharg"]
+    df_cons["cp_decharg"]       = filled["cp_decharg"]
+    df_cons["pays_decharg"]     = filled["pays_decharg"]
 
     return df_cons
 
@@ -640,74 +579,53 @@ def consolidate(df_missions: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
 #  CALCUL KM PAR CHAUFFEUR (PTV)
 # ══════════════════════════════════════════════════════════════════
 
-def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
-                            progress_cb=None) -> list:
-    """
-    Pour un chauffeur donné :
-    1. Trie ses dossiers par date de début
-    2. Construit la séquence complète : CHARGEMENT (CA) → stops missions → DECHARGEMENT (CA)
-    3. Calcule km totaux par dossier via PTV
-    4. Calcule km à vide entre DECHARGEMENT → CHARGEMENT suivant (inter-dossiers)
-
-    Retourne une liste de dicts enrichis.
-    """
+def compute_ptv_for_driver(df_cons, chauffeur, progress_cb=None):
     df_ch = df_cons[df_cons["chauffeur"] == chauffeur].copy()
-    df_ch = df_ch.sort_values("date_debut").reset_index(drop=True)
+    df_ch["_sort_date"] = pd.to_datetime(df_ch["date_debut"], format="%d/%m/%Y", errors="coerce")
+    df_ch = df_ch.sort_values("_sort_date").reset_index(drop=True)
 
-    def _c(v): 
+    def _c(v):
         v = str(v or "").strip()
-        return "" if v.lower() in ("nan","none") else v
+        return "" if v.lower() in ("nan", "none") else v
 
-    results = []
-
-    # ── Construire pour chaque dossier la séquence complète ──
-    # Structure : {dossier: {"charg": (addr, localite, cp, pays),
-    #                        "decharg": (addr, localite, cp, pays),
-    #                        "stops_mid": [...stops missions intermédiaires...]}}
+    results          = []
     dossier_sequences = {}
+
     for _, row in df_ch.iterrows():
         dos = row["dossier"]
 
-        # Adresses CA (chargement et déchargement)
-        addr_ch  = _c(row.get("adresse_charg_geo",   ""))
-        addr_de  = _c(row.get("adresse_decharg_geo",  ""))
-        loc_ch   = _c(row.get("localite_charg",       ""))
-        loc_de   = _c(row.get("localite_decharg",     ""))
-        cp_ch    = _c(row.get("cp_charg",             ""))
-        cp_de    = _c(row.get("cp_decharg",           ""))
-        pays_ch  = _c(row.get("pays_charg",           ""))
-        pays_de  = _c(row.get("pays_decharg",         ""))
+        addr_ch  = _c(row.get("adresse_charg_geo",  ""))
+        addr_de  = _c(row.get("adresse_decharg_geo", ""))
+        loc_ch   = _c(row.get("localite_charg",      ""))
+        loc_de   = _c(row.get("localite_decharg",    ""))
+        cp_ch    = _c(row.get("cp_charg",            ""))
+        cp_de    = _c(row.get("cp_decharg",          ""))
+        pays_ch  = _c(row.get("pays_charg",          ""))
+        pays_de  = _c(row.get("pays_decharg",        ""))
 
-        # Stops intermédiaires depuis le fichier missions (DOUANE, stops mult.)
-        stops_mid = []
-        for s in row.get("stops_data", []):
-            act = s.get("activite", "")
-            # On garde les stops qui ne sont ni le 1er CHARGEMENT ni le dernier DECHARGEMENT
-            # car ceux-là viennent du CA — on garde DOUANE et multi-stops intermédiaires
-            if act in ("DOUANE",):
-                stops_mid.append(s)
+        stops_mid = [
+            s for s in row.get("stops_data", [])
+            if s.get("activite", "") in ("DOUANE",)
+        ]
 
         dossier_sequences[dos] = {
-            "addr_ch":   addr_ch,  "loc_ch":  loc_ch,  "cp_ch":  cp_ch,  "pays_ch":  pays_ch,
-            "addr_de":   addr_de,  "loc_de":  loc_de,  "cp_de":  cp_de,  "pays_de":  pays_de,
-            "stops_mid": stops_mid,
+            "addr_ch":    addr_ch,  "loc_ch":  loc_ch,  "cp_ch":  cp_ch,  "pays_ch":  pays_ch,
+            "addr_de":    addr_de,  "loc_de":  loc_de,  "cp_de":  cp_de,  "pays_de":  pays_de,
+            "stops_mid":  stops_mid,
             "date_debut": row["date_debut"],
         }
 
-    # ── Collecter toutes les adresses à géocoder ─────────────
-    # Clé = (ville, cp, pays) — on géocode directement avec les composants bruts
-    # sans passer par adresse_charg_geo qui peut être NaN après le merge
-    # geo_cache keyed sur (ville, cp, pays) → coords
-    geo_cache = {}  # (ville, cp, pays) → (lat, lon) | None
+    # ── Géocodage ──
+    geo_cache        = {}
+    points_to_geocode = {}
 
-    points_to_geocode = {}  # (ville, cp, pays) → True (déduplique)
     for dos, seq in dossier_sequences.items():
         if seq["loc_ch"] or seq["cp_ch"]:
             points_to_geocode[(seq["loc_ch"], seq["cp_ch"], seq["pays_ch"])] = True
         if seq["loc_de"] or seq["cp_de"]:
             points_to_geocode[(seq["loc_de"], seq["cp_de"], seq["pays_de"])] = True
         for s in seq["stops_mid"]:
-            k = (s.get("ville_raw",""), s.get("cp_raw",""), s.get("pays_raw",""))
+            k = (s.get("ville_raw", ""), s.get("cp_raw", ""), s.get("pays_raw", ""))
             if k[0] or k[1]:
                 points_to_geocode[k] = True
 
@@ -722,22 +640,20 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
         if coords is None:
             st.warning(f"⚠️ Géocodage échoué : {addr_display}")
 
-
-
-    # ── Calcul km totaux par dossier ──────────────────────────
+    # ── KM chargés par dossier ──
     dossier_km = {}
     for dos, seq in dossier_sequences.items():
         coords_seq = []
-        # 1. Point de chargement (CA)
+
         c_ch = geo_cache.get((seq["loc_ch"], seq["cp_ch"], seq["pays_ch"]))
         if c_ch:
             coords_seq.append(c_ch)
-        # 2. Stops intermédiaires (DOUANE etc.)
+
         for s in seq["stops_mid"]:
-            c = geo_cache.get((s.get("ville_raw",""), s.get("cp_raw",""), s.get("pays_raw","")))
+            c = geo_cache.get((s.get("ville_raw", ""), s.get("cp_raw", ""), s.get("pays_raw", "")))
             if c:
                 coords_seq.append(c)
-        # 3. Point de déchargement (CA)
+
         c_de = geo_cache.get((seq["loc_de"], seq["cp_de"], seq["pays_de"]))
         if c_de:
             coords_seq.append(c_de)
@@ -750,26 +666,28 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
         else:
             dossier_km[dos] = None
 
-    # ── Calcul km à vide inter-dossiers ───────────────────────
-    # Trier les dossiers du chauffeur chronologiquement
-    dossiers_ordonnes = sorted(dossier_sequences.keys(),
-        key=lambda d: dossier_sequences[d]["date_debut"])
+    # ── KM à vide inter-dossiers ──
+    dossiers_ordonnes = sorted(
+        dossier_sequences.keys(),
+        key=lambda d: pd.to_datetime(
+            dossier_sequences[d]["date_debut"], format="%d/%m/%Y", errors="coerce"
+        ),
+    )
 
     empty_legs = []
     for i in range(len(dossiers_ordonnes) - 1):
         dos_actuel  = dossiers_ordonnes[i]
         dos_suivant = dossiers_ordonnes[i + 1]
+        seq_act     = dossier_sequences[dos_actuel]
+        seq_suiv    = dossier_sequences[dos_suivant]
 
-        seq_act = dossier_sequences[dos_actuel]
-        seq_suiv = dossier_sequences[dos_suivant]
-
-        coords_fin   = geo_cache.get((seq_act["loc_de"],  seq_act["cp_de"],   seq_act["pays_de"]))
-        coords_debut = geo_cache.get((seq_suiv["loc_ch"], seq_suiv["cp_ch"],  seq_suiv["pays_ch"]))
+        coords_fin   = geo_cache.get((seq_act["loc_de"],  seq_act["cp_de"],  seq_act["pays_de"]))
+        coords_debut = geo_cache.get((seq_suiv["loc_ch"], seq_suiv["cp_ch"], seq_suiv["pays_ch"]))
 
         if coords_fin and coords_debut:
             if progress_cb:
                 progress_cb(f"⚡ Km à vide : {seq_act['loc_de']} → {seq_suiv['loc_ch']}...")
-            res = calculate_route([coords_fin, coords_debut])
+            res     = calculate_route([coords_fin, coords_debut])
             km_vide = res["km"] if res else None
         else:
             km_vide = None
@@ -784,34 +702,31 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
             "km_vide":         km_vide,
         })
 
-    # ── Assemblage résultats par dossier ──────────────────────
+    # ── Assemblage ──
     for _, row in df_ch.iterrows():
         dos = row["dossier"]
 
-        # Km à vide imputés à ce dossier (départ = ce dossier)
         km_vide_total = sum(
             leg["km_vide"] for leg in empty_legs
             if leg["dossier_depart"] == dos and leg["km_vide"] is not None
         )
-        vide_details = [
-            leg for leg in empty_legs if leg["dossier_depart"] == dos
-        ]
+        vide_details = [leg for leg in empty_legs if leg["dossier_depart"] == dos]
 
         results.append({
-            "dossier":       dos,
-            "chauffeur":     chauffeur,
-            "tracteur":      row["tracteur"],
-            "date_debut":    row["date_debut"],
-            "date_fin":      row["date_fin"],
-            "client":        row.get("client", ""),
-            "etat_vente":    row.get("etat_vente", ""),
-            "stops_texte":   row["stops_texte"],
-            "nb_stops":      row["nb_stops"],
+            "dossier":        dos,
+            "chauffeur":      chauffeur,
+            "tracteur":       row["tracteur"],
+            "date_debut":     row["date_debut"],
+            "date_fin":       row["date_fin"],
+            "client":         row.get("client",      ""),
+            "etat_vente":     row.get("etat_vente",  ""),
+            "stops_texte":    row["stops_texte"],
+            "nb_stops":       row["nb_stops"],
             "prix_transport": row["prix_transport"],
-            "total_vente":   row["total_vente"],
-            "km_total":      dossier_km.get(dos),
-            "km_vide":       km_vide_total if km_vide_total > 0 else None,
-            "vide_details":  vide_details,
+            "total_vente":    row["total_vente"],
+            "km_total":       dossier_km.get(dos),
+            "km_vide":        km_vide_total if km_vide_total > 0 else None,
+            "vide_details":   vide_details,
         })
 
     return results
@@ -821,57 +736,95 @@ def compute_ptv_for_driver(df_cons: pd.DataFrame, chauffeur: str,
 #  EXPORT EXCEL
 # ══════════════════════════════════════════════════════════════════
 
-def export_excel(df_result: pd.DataFrame, df_vide: pd.DataFrame) -> bytes:
+def export_excel(df_result, df_vide):
     output = io.BytesIO()
 
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        # ── Feuille principale ────────────────────────────────
-        cols_main = [
-            "chauffeur", "tracteur", "dossier", "date_debut", "date_fin",
-            "client", "etat_vente", "nb_stops", "stops_texte",
-            "km_total", "km_vide",
-            "prix_transport", "total_vente",
-        ]
-        df_export = df_result[[c for c in cols_main if c in df_result.columns]].copy()
-        df_export.columns = [
-            "Chauffeur", "Tracteur", "N° Dossier", "Date début", "Date fin",
-            "Client", "État vente", "Nb stops", "Séquence stops",
-            "KM Total (PTV)", "KM À Vide (PTV)",
-            "Prix Transport (€)", "Total Vente (€)",
-        ][:len(df_export.columns)]
+    try:
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
 
-        df_export.to_excel(writer, sheet_name="Missions & CA", index=False)
+            # ── Feuille principale ──
+            col_rename = {
+                "chauffeur":      "Chauffeur",
+                "tracteur":       "Tracteur",
+                "remorque":       "Remorque",
+                "dossier":        "N° Dossier",
+                "date_debut":     "Date début",
+                "date_fin":       "Date fin",
+                "client":         "Client",
+                "etat_vente":     "État vente",
+                "nb_stops":       "Nb stops",
+                "stops_texte":    "Séquence stops",
+                "km_total":       "KM Chargés",
+                "km_vide":        "KM À Vide",
+                "prix_transport": "Prix Transport (€)",
+                "total_vente":    "Total Vente (€)",
+            }
+            cols_dispo = [c for c in col_rename if c in df_result.columns]
+            df_export  = df_result[cols_dispo].copy()
 
-        ws = writer.sheets["Missions & CA"]
-        _style_sheet(ws, len(df_export))
+            if "km_total" in df_result.columns and "km_vide" in df_result.columns:
+                df_export["km_complet"]  = df_result["km_total"].fillna(0) + df_result["km_vide"].fillna(0)
+                df_export["rentabilite"] = (
+                    df_result["total_vente"] / df_export["km_complet"].replace(0, np.nan)
+                ).round(2)
+                col_rename["km_complet"]  = "KM Complet"
+                col_rename["rentabilite"] = "Rentabilité €/km"
+                cols_dispo = [c for c in col_rename if c in df_export.columns]
+                df_export  = df_export[cols_dispo]
 
-        # ── Feuille résumé par chauffeur ──────────────────────
-        df_resume = df_result.groupby("chauffeur", as_index=False).agg(
-            nb_dossiers   = ("dossier",         "count"),
-            km_total      = ("km_total",         "sum"),
-            km_vide       = ("km_vide",           "sum"),
-            prix_transport= ("prix_transport",    "sum"),
-            total_vente   = ("total_vente",       "sum"),
-        ).round(1)
-        df_resume.columns = ["Chauffeur", "Nb Dossiers", "KM Total", "KM À Vide",
-                              "Prix Transport (€)", "Total Vente (€)"]
-        df_resume.to_excel(writer, sheet_name="Résumé Chauffeurs", index=False)
-        _style_sheet(writer.sheets["Résumé Chauffeurs"], len(df_resume))
+            df_export = df_export.rename(columns=col_rename).fillna("")
+            df_export.to_excel(writer, sheet_name="Missions & CA", index=False)
+            _style_sheet(writer.sheets["Missions & CA"], len(df_export))
 
-        # ── Feuille km à vide détail ──────────────────────────
-        if not df_vide.empty:
-            df_vide_exp = df_vide.copy()
-            df_vide_exp.columns = [
-                "Chauffeur", "Dossier départ", "Dossier arrivée",
-                "Ville départ", "Ville arrivée", "KM à vide"
-            ]
-            df_vide_exp.to_excel(writer, sheet_name="KM À Vide Détail", index=False)
-            _style_sheet(writer.sheets["KM À Vide Détail"], len(df_vide_exp))
+            # ── Résumé chauffeurs ──
+            df_resume = df_result.groupby("chauffeur", as_index=False).agg(
+                Dossiers       = ("dossier",        "count"),
+                KM_Charges     = ("km_total",        "sum"),
+                KM_Vide        = ("km_vide",          "sum"),
+                Prix_Transport = ("prix_transport",   "sum"),
+                Total_Vente    = ("total_vente",      "sum"),
+            ).round(1)
+            df_resume["KM Complet"]       = df_resume["KM_Charges"] + df_resume["KM_Vide"]
+            df_resume["% KM Vide"]        = (
+                df_resume["KM_Vide"] / df_resume["KM Complet"].replace(0, np.nan) * 100
+            ).round(1)
+            df_resume["Rentabilité €/km"] = (
+                df_resume["Total_Vente"] / df_resume["KM Complet"].replace(0, np.nan)
+            ).round(2)
+            df_resume = df_resume.rename(columns={
+                "chauffeur":      "Chauffeur",
+                "Dossiers":       "Nb Dossiers",
+                "KM_Charges":     "KM Chargés",
+                "KM_Vide":        "KM À Vide",
+                "Prix_Transport": "Prix Transport (€)",
+                "Total_Vente":    "Total Vente (€)",
+            }).fillna("")
+            df_resume.to_excel(writer, sheet_name="Résumé Chauffeurs", index=False)
+            _style_sheet(writer.sheets["Résumé Chauffeurs"], len(df_resume))
+
+            # ── KM à vide détail ──
+            if not df_vide.empty:
+                vide_rename = {
+                    "chauffeur":       "Chauffeur",
+                    "dossier_depart":  "Dossier départ",
+                    "dossier_arrivee": "Dossier arrivée",
+                    "from_localite":   "Ville départ",
+                    "to_localite":     "Ville arrivée",
+                    "km_vide":         "KM à vide",
+                }
+                df_vide_exp = df_vide[[c for c in vide_rename if c in df_vide.columns]].copy()
+                df_vide_exp = df_vide_exp.rename(columns=vide_rename).fillna("")
+                df_vide_exp.to_excel(writer, sheet_name="KM À Vide Détail", index=False)
+                _style_sheet(writer.sheets["KM À Vide Détail"], len(df_vide_exp))
+
+    except Exception as e:
+        st.error(f"❌ Erreur génération Excel : {e}")
+        return b""
 
     return output.getvalue()
 
 
-def _style_sheet(ws, nb_rows: int):
+def _style_sheet(ws, nb_rows):
     HEADER_FILL = PatternFill("solid", fgColor="1F3864")
     HEADER_FONT = Font(bold=True, color="FFFFFF")
     ALT_FILL    = PatternFill("solid", fgColor="EEF2F7")
@@ -900,13 +853,12 @@ st.set_page_config(page_title="Missions & CA + KM PTV", page_icon="📦", layout
 st.title("📦 Analyse Missions + CA + Calcul KM")
 st.caption("Consolide les missions, le chiffre d'affaires et calcule les kilomètres via PTV.")
 
-# ── Vérification clé PTV ──────────────────────────────────────────
 if not PTV_API_KEY or PTV_API_KEY == "METS_TA_CLE_ICI":
     st.error("⚠️ Clé PTV_API_KEY non configurée. Le calcul de distances ne fonctionnera pas.")
 
 st.divider()
 
-# ── Upload ────────────────────────────────────────────────────────
+# ── Upload ──
 col_up1, col_up2 = st.columns(2)
 with col_up1:
     st.markdown("#### 📋 Fichier Missions")
@@ -917,7 +869,7 @@ with col_up2:
 
 st.divider()
 
-# ── Parsing & Consolidation ───────────────────────────────────────
+# ── Parsing & Consolidation ──
 if file_missions and file_ca:
 
     with st.spinner("📂 Lecture des fichiers..."):
@@ -928,72 +880,146 @@ if file_missions and file_ca:
             st.error(f"❌ Erreur lecture fichiers : {e}")
             st.stop()
 
-    with st.expander("🔍 Debug colonnes détectées", expanded=False):
-        st.markdown("**Fichier Missions** — colonnes brutes :")
-        _df_m_raw = pd.read_excel(file_missions, dtype=str, nrows=2)
-        st.write(list(_df_m_raw.columns))
-        st.markdown("**Fichier CA** — colonnes brutes :")
-        _df_ca_raw2 = pd.read_excel(file_ca, dtype=str, nrows=2)
-        st.write(list(_df_ca_raw2.columns))
-        st.markdown("**Fichier CA** — 3 premières lignes :")
-        st.dataframe(_df_ca_raw2)
-        st.markdown(f"**CA parsé** — colonnes : `{list(df_ca_raw.columns)}`")
-        st.dataframe(df_ca_raw.head(5))
-
     df_cons = consolidate(df_missions, df_ca_raw)
 
-    # ── KPIs rapides ──────────────────────────────────────────
-    st.markdown("### 📊 Aperçu")
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("📁 Dossiers", len(df_cons))
-    k2.metric("🚛 Chauffeurs",    df_cons["chauffeur"].nunique())
-    k3.metric("📍 Stops totaux",  int(df_cons["nb_stops"].sum()))
-    k4.metric("💶 CA Total (Prix transp.)", f"{df_cons['prix_transport'].sum():,.0f} €")
-    k5.metric("💶 CA Total (Total vente)",  f"{df_cons['total_vente'].sum():,.0f} €")
+    df_cons["_date_dt"] = pd.to_datetime(df_cons["date_debut"], format="%d/%m/%Y", errors="coerce")
+    df_cons_f = df_cons.copy()
+
+    MOIS_FR = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+               "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+    dates_valides = df_cons["_date_dt"].dropna()
+    if not dates_valides.empty:
+        d_min = dates_valides.min()
+        d_max = dates_valides.max()
+        if d_min.month == d_max.month and d_min.year == d_max.year:
+            periode_label = f"{MOIS_FR[d_min.month]} {d_min.year}"
+        else:
+            periode_label = f"{d_min.strftime('%d/%m/%Y')} → {d_max.strftime('%d/%m/%Y')}"
+    else:
+        periode_label = "Période inconnue"
+
+    # ── KPIs globaux ──
+    st.markdown(f"### 📊 Aperçu — {periode_label}")
+    ca_total   = df_cons_f["total_vente"].sum()
+    prix_total = df_cons_f["prix_transport"].sum()
+    ca_moy     = ca_total / len(df_cons_f) if len(df_cons_f) > 0 else 0
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("📁 Dossiers",       len(df_cons_f))
+    k2.metric("🚛 Chauffeurs",     df_cons_f["chauffeur"].nunique())
+    k3.metric("📍 Stops totaux",   int(df_cons_f["nb_stops"].sum()))
+    k4.metric("💶 Prix Transport", f"{prix_total:,.0f} €")
+    k5.metric("💶 Total Ventes",   f"{ca_total:,.0f} €")
+    k6.metric("📈 CA moy/dossier", f"{ca_moy:,.0f} €")
 
     st.divider()
 
-    # ── Tableau consolidé (sans KM pour l'instant) ────────────
+    # ══════════════════════════════════════════════════════════
+    #  TABLEAU CONSOLIDÉ
+    # ══════════════════════════════════════════════════════════
     st.markdown("### 📋 Tableau consolidé")
 
-    # Filtre chauffeur
-    chauffeurs_dispo = sorted(df_cons["chauffeur"].dropna().unique().tolist())
-    chauffeurs_dispo = [c for c in chauffeurs_dispo if c and c != "nan"]
+    # ── Listes pour les filtres ──
+    chauffeurs_dispo = sorted([
+        c for c in df_cons_f["chauffeur"].dropna().unique()
+        if c and c != "nan"
+    ])
+    remorques_dispo = sorted([
+        str(r).strip() for r in df_cons_f["remorque"].dropna().unique()
+        if str(r).strip() and str(r).strip() not in ("nan", "")
+    ]) if "remorque" in df_cons_f.columns else []
+    tracteurs_dispo = sorted([
+        str(t).strip() for t in df_cons_f["tracteur"].dropna().unique()
+        if str(t).strip() and str(t).strip() not in ("nan", "")
+    ]) if "tracteur" in df_cons_f.columns else []
 
-    filtre_chauffeur = st.multiselect(
-        "Filtrer par chauffeur :",
-        options=chauffeurs_dispo,
-        default=[],
-        placeholder="Tous les chauffeurs"
-    )
+    # ── Filtres ──
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        filtre_chauffeur = st.multiselect(
+            "🚛 Filtrer par chauffeur :",
+            options=chauffeurs_dispo,
+            default=[],
+            placeholder="Tous les chauffeurs",
+        )
+    with fc2:
+        filtre_remorque = st.multiselect(
+            "🔗 Filtrer par remorque :",
+            options=remorques_dispo,
+            default=[],
+            placeholder="Toutes les remorques",
+        )
+    with fc3:
+        filtre_tracteur = st.multiselect(
+            "🚜 Filtrer par tracteur :",
+            options=tracteurs_dispo,
+            default=[],
+            placeholder="Tous les tracteurs",
+        )
 
-    df_display = df_cons.copy()
+    # ── Application des filtres ──
+    df_display = df_cons_f.copy()
     if filtre_chauffeur:
         df_display = df_display[df_display["chauffeur"].isin(filtre_chauffeur)]
+    if filtre_remorque and "remorque" in df_display.columns:
+        df_display = df_display[df_display["remorque"].isin(filtre_remorque)]
+    if filtre_tracteur and "tracteur" in df_display.columns:
+        df_display = df_display[df_display["tracteur"].isin(filtre_tracteur)]
 
-    # ── KPIs du filtre chauffeur ──────────────────────────────
-    if filtre_chauffeur:
-        st.markdown("##### 📊 Aperçu — sélection chauffeur(s)")
-        fk1, fk2, fk3, fk4, fk5 = st.columns(5)
-        fk1.metric("📁 Dossiers",         len(df_display))
-        fk2.metric("📍 Stops",            int(df_display["nb_stops"].sum()))
-        fk3.metric("💶 Prix Transport",   f"{df_display['prix_transport'].sum():,.0f} €")
-        fk4.metric("💶 Total Ventes",     f"{df_display['total_vente'].sum():,.0f} €")
-        # Ratio CA par dossier
-        ca_moy = df_display["total_vente"].mean()
-        fk5.metric("📈 CA moyen/dossier", f"{ca_moy:,.0f} €")
+    # ── KPIs de la sélection ──
+    if filtre_chauffeur or filtre_remorque or filtre_tracteur:
+        _sel_label = []
+        if filtre_chauffeur:
+            _sel_label.append(f"{len(filtre_chauffeur)} chauffeur(s)")
+        if filtre_remorque:
+            _sel_label.append(f"{len(filtre_remorque)} remorque(s)")
+        if filtre_tracteur:
+            _sel_label.append(f"{len(filtre_tracteur)} tracteur(s)")
+        st.markdown(f"##### 📊 Aperçu — {', '.join(_sel_label)}")
 
-    cols_show = ["dossier", "chauffeur", "tracteur", "date_debut", "date_fin",
-                 "client", "etat_vente", "nb_stops", "stops_texte",
-                 "prix_transport", "total_vente"]
+        fk1, fk2, fk3, fk4, fk5, fk6 = st.columns(6)
+        _tv = df_display["total_vente"].sum()
+        _pt = df_display["prix_transport"].sum()
+        _nd = len(df_display)
+        fk1.metric("📁 Dossiers",       _nd)
+        fk2.metric("📍 Stops",          int(df_display["nb_stops"].sum()))
+        fk3.metric("💶 Prix Transport", f"{_pt:,.0f} €")
+        fk4.metric("💶 Total Ventes",   f"{_tv:,.0f} €")
+        fk5.metric("📈 CA moy/dossier", f"{(_tv / _nd if _nd else 0):,.0f} €")
 
+        if "df_result" in st.session_state:
+            _dr_f = st.session_state["df_result"].copy()
+            if filtre_chauffeur:
+                _dr_f = _dr_f[_dr_f["chauffeur"].isin(filtre_chauffeur)]
+            if filtre_remorque and "remorque" in _dr_f.columns:
+                _dr_f = _dr_f[_dr_f["remorque"].isin(filtre_remorque)]
+            if filtre_tracteur and "tracteur" in _dr_f.columns:
+                _dr_f = _dr_f[_dr_f["tracteur"].isin(filtre_tracteur)]
+            _km   = _dr_f["km_total"].sum()
+            _rent = _dr_f["total_vente"].sum() / _km if _km > 0 else 0
+            fk6.metric("⚡ Rentabilité", f"{_rent:.2f} €/km")
+        else:
+            fk6.metric("⚡ Rentabilité", "— (après PTV)")
+
+    cols_show = [
+        "dossier", "chauffeur", "tracteur", "remorque",
+        "date_debut", "date_fin", "client", "etat_vente",
+        "nb_stops", "stops_texte", "prix_transport", "total_vente",
+    ]
     st.dataframe(
         df_display[[c for c in cols_show if c in df_display.columns]].rename(columns={
-            "dossier": "N° Dossier", "chauffeur": "Chauffeur", "tracteur": "Tracteur",
-            "date_debut": "Date début", "date_fin": "Date fin", "client": "Client",
-            "etat_vente": "État vente", "nb_stops": "Nb stops",
-            "stops_texte": "Séquence stops",
-            "prix_transport": "Prix Transport (€)", "total_vente": "Total Vente (€)",
+            "dossier":        "N° Dossier",
+            "chauffeur":      "Chauffeur",
+            "tracteur":       "Tracteur",
+            "remorque":       "Remorque",
+            "date_debut":     "Date début",
+            "date_fin":       "Date fin",
+            "client":         "Client",
+            "etat_vente":     "État vente",
+            "nb_stops":       "Nb stops",
+            "stops_texte":    "Séquence stops",
+            "prix_transport": "Prix Transport (€)",
+            "total_vente":    "Total Vente (€)",
         }),
         use_container_width=True,
         height=400,
@@ -1001,49 +1027,89 @@ if file_missions and file_ca:
 
     st.divider()
 
-    # ── Calcul PTV ────────────────────────────────────────────
+    # ══════════════════════════════════════════════════════════
+    #  CALCUL KM via PTV
+    # ══════════════════════════════════════════════════════════
     st.markdown("### 🗺️ Calcul KM via PTV")
 
-    chauffeurs_ptv = st.multiselect(
-        "Sélectionner les chauffeurs pour le calcul PTV :",
-        options=chauffeurs_dispo,
-        default=[],
-        placeholder="Sélectionner des chauffeurs..."
-    )
+    ptv_c1, ptv_c2, ptv_c3 = st.columns(3)
+    with ptv_c1:
+        chauffeurs_ptv = st.multiselect(
+            "🚛 Chauffeurs :",
+            options=chauffeurs_dispo,
+            default=[],
+            placeholder="Sélectionner des chauffeurs...",
+        )
+    with ptv_c2:
+        remorques_ptv = st.multiselect(
+            "🔗 Remorques :",
+            options=remorques_dispo,
+            default=[],
+            placeholder="Toutes les remorques",
+        )
+    with ptv_c3:
+        tracteurs_ptv = st.multiselect(
+            "🚜 Tracteurs :",
+            options=tracteurs_dispo,
+            default=[],
+            placeholder="Tous les tracteurs",
+        )
 
-    if chauffeurs_ptv:
+    # ── Construire la liste des chauffeurs à calculer ──
+    chauffeurs_a_calculer = list(chauffeurs_ptv)
+
+    if remorques_ptv and "remorque" in df_cons_f.columns:
+        ch_remorque = (
+            df_cons_f[df_cons_f["remorque"].isin(remorques_ptv)]["chauffeur"]
+            .dropna().unique().tolist()
+        )
+        chauffeurs_a_calculer = list(set(chauffeurs_a_calculer + ch_remorque))
+
+    if tracteurs_ptv and "tracteur" in df_cons_f.columns:
+        ch_tracteur = (
+            df_cons_f[df_cons_f["tracteur"].isin(tracteurs_ptv)]["chauffeur"]
+            .dropna().unique().tolist()
+        )
+        chauffeurs_a_calculer = list(set(chauffeurs_a_calculer + ch_tracteur))
+
+    nb_dossiers_ptv = len(df_cons_f[df_cons_f["chauffeur"].isin(chauffeurs_a_calculer)])
+
+    if chauffeurs_a_calculer:
+        extras = []
+        if remorques_ptv:
+            extras.append(f"{len(remorques_ptv)} remorque(s)")
+        if tracteurs_ptv:
+            extras.append(f"{len(tracteurs_ptv)} tracteur(s)")
+        extras_str = f", {', '.join(extras)}" if extras else ""
         st.info(
-            f"ℹ️ Le calcul PTV va géocoder tous les stops et calculer les routes pour "
-            f"**{len(df_cons[df_cons['chauffeur'].isin(chauffeurs_ptv)])} dossiers** "
-            f"({len(chauffeurs_ptv)} chauffeur(s)). Cela peut prendre quelques minutes."
+            f"ℹ️ Calcul pour **{nb_dossiers_ptv} dossiers** "
+            f"({len(chauffeurs_a_calculer)} chauffeur(s){extras_str})."
         )
 
     btn_ptv = st.button(
         "🚀 Lancer le calcul PTV",
-        disabled=(not chauffeurs_ptv),
+        disabled=(not chauffeurs_a_calculer),
         type="primary",
     )
 
-    if btn_ptv and chauffeurs_ptv:
+    if btn_ptv and chauffeurs_a_calculer:
         all_results = []
         all_vide    = []
 
         progress_bar = st.progress(0)
         status_text  = st.empty()
+        total_ch     = len(chauffeurs_a_calculer)
 
-        total_ch = len(chauffeurs_ptv)
-
-        for ch_idx, chauffeur in enumerate(chauffeurs_ptv):
+        for ch_idx, chauffeur in enumerate(chauffeurs_a_calculer):
             status_text.text(f"⏳ Chauffeur {ch_idx+1}/{total_ch} : {chauffeur}")
 
             def _progress(msg):
                 status_text.text(msg)
 
             try:
-                res = compute_ptv_for_driver(df_cons, chauffeur, progress_cb=_progress)
+                res = compute_ptv_for_driver(df_cons_f, chauffeur, progress_cb=_progress)
                 all_results.extend(res)
 
-                # Extraire km à vide détails
                 for r in res:
                     for leg in r.get("vide_details", []):
                         all_vide.append({
@@ -1054,7 +1120,6 @@ if file_missions and file_ca:
                             "to_localite":     leg["to_localite"],
                             "km_vide":         leg["km_vide"],
                         })
-
             except Exception as e:
                 st.error(f"❌ Erreur chauffeur {chauffeur} : {e}")
 
@@ -1063,32 +1128,10 @@ if file_missions and file_ca:
         status_text.success("✅ Calcul PTV terminé !")
         progress_bar.progress(100)
 
-        df_result = pd.DataFrame(all_results)
-        df_vide   = pd.DataFrame(all_vide)
+        st.session_state["df_result"] = pd.DataFrame(all_results)
+        st.session_state["df_vide"]   = pd.DataFrame(all_vide)
 
-        # ── Debug : tester calculate_route directement ──────
-        with st.expander("🔍 Debug résultats bruts PTV", expanded=True):
-            st.write(f"**Import modules OK :** {_IMPORTS_OK}")
-            st.write(f"**Nb résultats :** {len(all_results)}")
-            if all_results:
-                st.write("**km_total (10 premiers) :**", df_result["km_total"].head(10).tolist())
-            # Test calculate_route avec 2 coords connues
-            coords_test = [(50.506, 5.654), (50.495, 4.164)]  # SPRIMONT → HOUDENG
-            import requests as _req
-            qp = [("profile", VEHICLE), ("results", "POLYLINE"),
-                  ("waypoints", f"{coords_test[0][0]},{coords_test[0][1]}"),
-                  ("waypoints", f"{coords_test[1][0]},{coords_test[1][1]}")]
-            try:
-                r = _req.get(f"{PTV_BASE_URL}/routes", headers=HEADERS, params=qp, timeout=15)
-                st.write(f"**Test route HTTP status :** {r.status_code}")
-                st.write(f"**Test route réponse :** {r.text[:300]}")
-            except Exception as e:
-                st.write(f"**Test route exception :** {e}")
-
-        st.session_state["df_result"] = df_result
-        st.session_state["df_vide"]   = df_vide
-
-    # ── Affichage résultats PTV ───────────────────────────────
+    # ── Affichage résultats PTV ──
     if "df_result" in st.session_state:
         df_result = st.session_state["df_result"]
         df_vide   = st.session_state.get("df_vide", pd.DataFrame())
@@ -1096,60 +1139,87 @@ if file_missions and file_ca:
         st.divider()
         st.markdown("### 📈 Résultats KM")
 
-        # KPIs PTV
-        km_total_sum = df_result["km_total"].sum()
-        km_vide_sum  = df_result["km_vide"].sum()
-        pct_vide     = (km_vide_sum / km_total_sum * 100) if km_total_sum > 0 else 0
+        km_total_sum    = df_result["km_total"].sum()
+        km_vide_sum     = df_result["km_vide"].sum()
+        _km_complet     = km_total_sum + km_vide_sum
+        pct_vide        = (km_vide_sum / _km_complet * 100) if _km_complet > 0 else 0
+        _ca_ptv         = df_result["total_vente"].sum()
+        _rent_ptv       = _ca_ptv / _km_complet if _km_complet > 0 else 0
 
-        kp1, kp2, kp3, kp4 = st.columns(4)
-        kp1.metric("📏 KM Totaux (PTV)", f"{km_total_sum:,.0f} km")
-        kp2.metric("⚡ KM À Vide",        f"{km_vide_sum:,.0f} km")
-        kp3.metric("% À Vide",            f"{pct_vide:.1f}%")
-        kp4.metric("💶 CA Total",          f"{df_result['total_vente'].sum():,.0f} €")
+        kp1, kp2, kp3, kp4, kp5, kp6 = st.columns(6)
+        kp1.metric("📏 KM Chargés",       f"{km_total_sum:,.0f} km")
+        kp2.metric("⚡ KM À Vide",         f"{km_vide_sum:,.0f} km")
+        kp3.metric("🔄 KM Total complet", f"{_km_complet:,.0f} km")
+        kp4.metric("% À Vide",             f"{pct_vide:.1f}%")
+        kp5.metric("💶 CA Total",          f"{_ca_ptv:,.0f} €")
+        kp6.metric("📈 Rentabilité",       f"{_rent_ptv:.2f} €/km")
 
-        # Tableau résultats
-        tab1, tab2, tab3 = st.tabs(["📋 Détail dossiers", "👤 Résumé par chauffeur", "⚡ Détail KM à vide"])
+        tab1, tab2, tab3 = st.tabs([
+            "📋 Détail dossiers",
+            "👤 Résumé par chauffeur",
+            "⚡ Détail KM à vide",
+        ])
 
         with tab1:
-            cols_res = ["dossier", "chauffeur", "tracteur", "date_debut", "client",
-                        "stops_texte", "km_total", "km_vide", "prix_transport", "total_vente"]
+            cols_res = [
+                "dossier", "chauffeur", "tracteur", "date_debut", "client",
+                "stops_texte", "km_total", "km_vide", "prix_transport", "total_vente",
+            ]
             st.dataframe(
                 df_result[[c for c in cols_res if c in df_result.columns]].rename(columns={
-                    "dossier": "N° Dossier", "chauffeur": "Chauffeur", "tracteur": "Tracteur",
-                    "date_debut": "Date", "client": "Client", "stops_texte": "Séquence",
-                    "km_total": "KM Total", "km_vide": "KM À Vide",
-                    "prix_transport": "Prix Transport €", "total_vente": "Total Vente €"
+                    "dossier":        "N° Dossier",
+                    "chauffeur":      "Chauffeur",
+                    "tracteur":       "Tracteur",
+                    "date_debut":     "Date",
+                    "client":         "Client",
+                    "stops_texte":    "Séquence",
+                    "km_total":       "KM Total",
+                    "km_vide":        "KM À Vide",
+                    "prix_transport": "Prix Transport €",
+                    "total_vente":    "Total Vente €",
                 }),
-                use_container_width=True, height=400
+                use_container_width=True,
+                height=400,
             )
 
         with tab2:
             df_resume_ptv = df_result.groupby("chauffeur", as_index=False).agg(
-                Dossiers      = ("dossier",        "count"),
-                KM_Total      = ("km_total",        "sum"),
-                KM_Vide       = ("km_vide",          "sum"),
-                Prix_Transport= ("prix_transport",   "sum"),
-                Total_Vente   = ("total_vente",      "sum"),
+                Dossiers       = ("dossier",        "count"),
+                KM_Total       = ("km_total",        "sum"),
+                KM_Vide        = ("km_vide",          "sum"),
+                Prix_Transport = ("prix_transport",   "sum"),
+                Total_Vente    = ("total_vente",      "sum"),
             ).round(1)
-            df_resume_ptv.columns = ["Chauffeur", "Nb Dossiers", "KM Total",
-                                      "KM À Vide", "Prix Transport €", "Total Vente €"]
+            df_resume_ptv["KM Complet"]       = df_resume_ptv["KM_Total"] + df_resume_ptv["KM_Vide"]
+            df_resume_ptv["% KM Vide"]        = (
+                df_resume_ptv["KM_Vide"] / df_resume_ptv["KM Complet"].replace(0, np.nan) * 100
+            ).round(1)
+            df_resume_ptv["Rentabilité €/km"] = (
+                df_resume_ptv["Total_Vente"] / df_resume_ptv["KM Complet"].replace(0, np.nan)
+            ).round(2)
+            df_resume_ptv.columns = [
+                "Chauffeur", "Nb Dossiers", "KM Chargés", "KM À Vide",
+                "Prix Transport €", "Total Vente €",
+                "KM Complet", "% KM Vide", "Rentabilité €/km",
+            ]
             st.dataframe(df_resume_ptv, use_container_width=True)
 
         with tab3:
             if not df_vide.empty:
                 st.dataframe(
                     df_vide.rename(columns={
-                        "chauffeur": "Chauffeur", "dossier_depart": "Dossier départ",
+                        "chauffeur":       "Chauffeur",
+                        "dossier_depart":  "Dossier départ",
                         "dossier_arrivee": "Dossier arrivée",
-                        "from_localite": "Ville départ", "to_localite": "Ville arrivée",
-                        "km_vide": "KM à vide"
+                        "from_localite":   "Ville départ",
+                        "to_localite":     "Ville arrivée",
+                        "km_vide":         "KM à vide",
                     }),
-                    use_container_width=True
+                    use_container_width=True,
                 )
             else:
                 st.info("Aucun trajet à vide détecté.")
 
-        # ── Export ────────────────────────────────────────────
         st.divider()
         excel_bytes = export_excel(df_result, df_vide)
         st.download_button(
@@ -1162,8 +1232,10 @@ if file_missions and file_ca:
 
 elif file_missions and not file_ca:
     st.info("📂 Fichier missions chargé. En attente du fichier CA...")
+
 elif file_ca and not file_missions:
     st.info("📂 Fichier CA chargé. En attente du fichier missions...")
+
 else:
     st.markdown("""
     #### Comment utiliser cet outil
