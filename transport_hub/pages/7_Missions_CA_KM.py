@@ -906,7 +906,7 @@ if file_missions and file_ca:
 
     k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("📁 Dossiers",       len(df_cons_f))
-    k2.metric("🚛 Chauffeurs",     df_cons_f["chauffeur"].nunique())
+    k2.metric("👨🏻‍✈️ Chauffeurs",     df_cons_f["chauffeur"].nunique())
     k3.metric("📍 Stops totaux",   int(df_cons_f["nb_stops"].sum()))
     k4.metric("💶 Prix Transport", f"{prix_total:,.0f} €")
     k5.metric("💶 Total Ventes",   f"{ca_total:,.0f} €")
@@ -937,24 +937,24 @@ if file_missions and file_ca:
     fc1, fc2, fc3 = st.columns(3)
     with fc1:
         filtre_chauffeur = st.multiselect(
-            "🚛 Filtrer par chauffeur :",
+            "👨🏻‍✈️ Filtrer par chauffeur :",
             options=chauffeurs_dispo,
             default=[],
             placeholder="Tous les chauffeurs",
         )
     with fc2:
-        filtre_remorque = st.multiselect(
-            "🔗 Filtrer par remorque :",
-            options=remorques_dispo,
-            default=[],
-            placeholder="Toutes les remorques",
-        )
-    with fc3:
         filtre_tracteur = st.multiselect(
             "🚜 Filtrer par tracteur :",
             options=tracteurs_dispo,
             default=[],
             placeholder="Tous les tracteurs",
+        )
+    with fc3:
+        filtre_remorque = st.multiselect(
+            "🚛 Filtrer par remorque :",
+            options=remorques_dispo,
+            default=[],
+            placeholder="Toutes les remorques",
         )
 
     # ── Application des filtres ──
