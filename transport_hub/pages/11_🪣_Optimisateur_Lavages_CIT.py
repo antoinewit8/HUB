@@ -364,36 +364,68 @@ with tab_carte:
             try:
                 import pydeck as pdk
 
-                # Layer stations lavage
+                # Layer stations lavage (bleu, contour blanc)
                 layer_stations = pdk.Layer(
                     "ScatterplotLayer",
                     data=df_geo,
                     get_position="[lon, lat]",
                     get_radius=5000,
-                    get_fill_color=[74, 144, 217, 200],
+                    get_fill_color=[74, 144, 217, 210],
+                    get_line_color=[255, 255, 255, 180],
+                    stroked=True,
+                    line_width_min_pixels=1,
                     pickable=True,
                     auto_highlight=True,
                 )
 
-                layers = [layer_stations]
+                # Labels stations lavage
+                layer_stations_text = pdk.Layer(
+                    "TextLayer",
+                    data=df_geo,
+                    get_position="[lon, lat]",
+                    get_text="nom",
+                    get_size=12,
+                    get_color=[220, 235, 255, 220],
+                    get_anchor="middle",
+                    get_alignment_baseline="'bottom'",
+                    get_pixel_offset=[0, -10],
+                )
 
-                # Layer destination
+                layers = [layer_stations, layer_stations_text]
+
+                # Layer point déchargement (rouge vif + contour blanc + label)
                 if dest_coords:
                     df_dest = pd.DataFrame([{
                         "lat": dest_coords[0],
                         "lon": dest_coords[1],
                         "nom": f"Déchargement : {query}",
-                        "nb": 0,
+                        "label": query.upper(),
                     }])
                     layer_dest = pdk.Layer(
                         "ScatterplotLayer",
                         data=df_dest,
                         get_position="[lon, lat]",
-                        get_radius=8000,
-                        get_fill_color=[255, 100, 50, 220],
+                        get_radius=10000,
+                        get_fill_color=[220, 30, 30, 240],
+                        get_line_color=[255, 255, 255, 255],
+                        stroked=True,
+                        line_width_min_pixels=2,
                         pickable=True,
                     )
+                    layer_dest_text = pdk.Layer(
+                        "TextLayer",
+                        data=df_dest,
+                        get_position="[lon, lat]",
+                        get_text="label",
+                        get_size=14,
+                        get_color=[255, 80, 80, 255],
+                        get_anchor="middle",
+                        get_alignment_baseline="'bottom'",
+                        get_pixel_offset=[0, -14],
+                        font_weight=800,
+                    )
                     layers.append(layer_dest)
+                    layers.append(layer_dest_text)
 
                 center_lat = dest_coords[0] if dest_coords else df_geo["lat"].mean()
                 center_lon = dest_coords[1] if dest_coords else df_geo["lon"].mean()
