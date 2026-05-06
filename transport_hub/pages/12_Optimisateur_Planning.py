@@ -489,7 +489,7 @@ ptv_badge = (
 )
 st.markdown(f"""
 <div class="hero">
-    <h1>🚛 Optimisateur Trajets Vides</h1>
+    <h1>🚛 Optimisateur Planning</h1>
     <p>Je viens de décharger en X — où aller recharger pour maximiser l'efficacité ?</p>
     {ptv_badge}
 </div>
