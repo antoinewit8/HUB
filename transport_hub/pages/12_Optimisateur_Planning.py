@@ -1,5 +1,5 @@
 """
-Page Streamlit : Optimisateur Trajets Vides CIT
+Page Streamlit : Optimisateur Planning
 Je viens de décharger en X → quels sont les meilleurs endroits pour aller recharger ?
 Score = fréquence historique × prix moyen × (1 / distance routière PTV) × (1 / délai)
 
