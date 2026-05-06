@@ -525,14 +525,28 @@ with tab_carte:
                     tooltip=tooltip,
                     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
                 )
-                st.pydeck_chart(deck)
+                st.pydeck_chart(deck, use_container_width=True, height=600)
 
                 # Légende
                 st.markdown("""
                 <small>
-                🔵 Stations de lavage &nbsp;|&nbsp; 🟠 Localité de déchargement cible
+                🔵 Stations de lavage &nbsp;|&nbsp; 🔴 Localité de déchargement
                 </small>
                 """, unsafe_allow_html=True)
+
+                # Bouton plein écran via page dédiée
+                map_params = urllib.parse.urlencode({
+                    "localite": query,
+                    "lat": center_lat,
+                    "lon": center_lon,
+                })
+                st.markdown(
+                    f'<a href="/Carte_Plein_Ecran_Lavages?{map_params}" target="_blank">'
+                    f'<button style="margin-top:0.5rem;padding:0.4rem 1rem;background:#4a90d9;'
+                    f'color:white;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;">'
+                    f'🗺️ Ouvrir la carte en plein écran</button></a>',
+                    unsafe_allow_html=True,
+                )
 
             except ImportError:
                 # Fallback st.map
@@ -594,3 +608,4 @@ with tab_stats:
             df_tmp["Mois"] = pd.to_datetime(df_tmp["Date"], errors="coerce").dt.to_period("M").astype(str)
             monthly = df_tmp.groupby("Mois").size().reset_index(name="Nb lavages")
             st.bar_chart(monthly.set_index("Mois"))
+            
