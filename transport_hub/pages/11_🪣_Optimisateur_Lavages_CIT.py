@@ -86,12 +86,22 @@ def load_data(missions_bytes, lavages_bytes):
     df_m["N° Dossier"] = df_m["N° Dossier"].str.strip()
     df_l["N° Dossier"] = df_l["N° Dossier"].str.strip()
 
-    # Parsing date
+    # Parsing dates
     if "Date chargement" in df_m.columns:
         df_m["Date chargement"] = pd.to_datetime(df_m["Date chargement"], errors="coerce")
-
     if "Date" in df_l.columns:
         df_l["Date"] = pd.to_datetime(df_l["Date"], errors="coerce")
+
+    # Déduire le pays du lavage depuis le code postal
+    # CP 4 chiffres = NL ou BE, 5 chiffres = FR/DE/etc.
+    def detect_pays_lavage(cp):
+        cp = str(cp).strip()
+        if len(cp) == 4 and cp.isdigit():
+            return "NL/BE"
+        elif len(cp) == 5 and cp.isdigit():
+            return "FR/DE/ES"
+        return "Autre"
+    df_l["_pays_lavage"] = df_l["Code postal"].apply(detect_pays_lavage)
 
     # Normalisation localité pour recherche
     df_m["_localite_norm"] = df_m["Localité déchargement"].apply(normalize)
@@ -245,6 +255,15 @@ with st.expander("🎛️ Filtres avancés", expanded=False):
             help="Laisser vide = toutes les dates"
         )
 
+col_f4, _ = st.columns([2, 2])
+with col_f4:
+    pays_lavage_opts = ["Tous"] + sorted(df_l["_pays_lavage"].dropna().unique().tolist())
+    pays_lavage_filter = st.selectbox(
+        "🌍 Filtrer lavages par zone géographique",
+        pays_lavage_opts,
+        help="NL/BE = Pays-Bas/Belgique (CP 4 chiffres) | FR/DE/ES = France/Allemagne (CP 5 chiffres)"
+    )
+
 if not query:
     st.info("👆 Sélectionnez ou tapez une localité de déchargement pour voir les lavages associés")
     st.stop()
@@ -271,7 +290,24 @@ if df_missions_filtre.empty:
 
 # ─── Croisement avec lavages ──────────────────────────────────────────────────
 dossiers_ids = df_missions_filtre["N° Dossier"].unique()
-df_lavages_match = df_l[df_l["N° Dossier"].isin(dossiers_ids)].copy()
+df_lavages_raw = df_l[df_l["N° Dossier"].isin(dossiers_ids)].copy()
+
+# Filtre date : ne garder que les lavages APRÈS la date de chargement du dossier
+# (élimine les lavages avant-chargement faits dans le pays d'origine)
+df_lavages_raw = df_lavages_raw.merge(
+    df_missions_filtre[["N° Dossier", "Date chargement"]],
+    on="N° Dossier", how="left"
+)
+df_lavages_raw = df_lavages_raw[
+    df_lavages_raw["Date"].isna() |
+    (df_lavages_raw["Date"] >= df_lavages_raw["Date chargement"])
+].drop(columns=["Date chargement"])
+
+df_lavages_match = df_lavages_raw.copy()
+
+# Filtre zone géographique du lavage
+if pays_lavage_filter != "Tous":
+    df_lavages_match = df_lavages_match[df_lavages_match["_pays_lavage"] == pays_lavage_filter]
 
 # ─── Résultats ───────────────────────────────────────────────────────────────
 st.markdown(f"### 📍 Résultats pour : **{query}**")
@@ -597,10 +633,29 @@ with tab_stats:
             chauf.columns = ["Chauffeur", "Nb lavages"]
             st.dataframe(chauf, hide_index=True, use_container_width=True)
 
-        # Evol temporelle
+        # Evol temporelle par station
         if "Date" in df_lavages_match.columns:
             st.markdown("**Évolution mensuelle des lavages**")
+
+            # Sélecteur station
+            stations_dispo = ["Toutes les stations"] + sorted(
+                df_lavages_match["Nom 1"].dropna().unique().tolist()
+            )
+            station_sel = st.selectbox("📍 Choisir une station", stations_dispo, key="stat_station")
+
             df_tmp = df_lavages_match.copy()
+            if station_sel != "Toutes les stations":
+                df_tmp = df_tmp[df_tmp["Nom 1"] == station_sel]
+
             df_tmp["Mois"] = pd.to_datetime(df_tmp["Date"], errors="coerce").dt.to_period("M").astype(str)
             monthly = df_tmp.groupby("Mois").size().reset_index(name="Nb lavages")
             st.bar_chart(monthly.set_index("Mois"))
+
+            # KPI station sélectionnée
+            if station_sel != "Toutes les stations" and not df_tmp.empty:
+                pct_total = len(df_tmp) / len(df_lavages_match) * 100
+                avg_month = len(df_tmp) / max(monthly["Mois"].nunique(), 1)
+                sc1, sc2, sc3 = st.columns(3)
+                sc1.metric("Total lavages", len(df_tmp))
+                sc2.metric("% du total", f"{pct_total:.1f}%")
+                sc3.metric("Moy / mois", f"{avg_month:.1f}")
