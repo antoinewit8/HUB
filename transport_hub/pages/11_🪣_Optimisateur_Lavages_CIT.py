@@ -371,14 +371,20 @@ with tab_carte:
             cp_dech = df_missions_filtre["C.P. déchargement"].dropna().mode()
             cp_str = cp_dech.iloc[0].strip() if not cp_dech.empty else ""
 
+            # Normalisation du nom : ST → SAINT, STE → SAINTE
+            import re as _re
+            query_expanded = _re.sub(r'\bST\b', 'SAINT', query, flags=_re.IGNORECASE)
+            query_expanded = _re.sub(r'\bSTE\b', 'SAINTE', query_expanded, flags=_re.IGNORECASE)
+
             # Tentatives de géocodage par ordre de précision
             dest_coords = None
             attempts = []
-            if cp_str and pays_label:
-                attempts.append(f"{query}, {cp_str}, {pays_label}")
-            if pays_label:
-                attempts.append(f"{query}, {pays_label}")
-            attempts.append(query)
+            for q in ([query_expanded, query] if query_expanded != query else [query]):
+                if cp_str and pays_label:
+                    attempts.append(f"{q}, {cp_str}, {pays_label}")
+                if pays_label:
+                    attempts.append(f"{q}, {pays_label}")
+                attempts.append(q)
 
             for attempt in attempts:
                 dest_coords = geocode_location(attempt)
