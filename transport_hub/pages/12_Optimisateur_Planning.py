@@ -308,7 +308,7 @@ def build_pairs(df_bytes):
 # ─── Header ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
-    <h1>🚛 OPTIMISATEUR TRAJETS VIDES</h1>
+    <h1>OPTIMISATEUR PLANNING</h1>
     <p>Je viens de décharger en X — où aller recharger pour maximiser l'efficacité ?</p>
 </div>
 """, unsafe_allow_html=True)
