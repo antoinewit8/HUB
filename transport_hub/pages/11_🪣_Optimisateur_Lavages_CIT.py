@@ -99,31 +99,57 @@ def load_data(missions_bytes, lavages_bytes):
 
     return df_m, df_l
 
-# ─── Géocodage nominatim (simple, sans clé API) ───────────────────────────────
-@st.cache_data(show_spinner=False, ttl=86400)
-def geocode_location(query: str):
-    """Géocode via Nominatim — résultat mis en cache (pour les stations)."""
-    return _nominatim_call(query)
+# ─── Géocodage (Photon/Komoot en priorité, fallback Nominatim) ───────────────
+import urllib.request as _ureq
+import urllib.parse as _uparse
+import json as _json
 
-def geocode_dest(query: str):
-    """Géocode la destination — PAS de cache pour éviter de garder None en mémoire."""
-    return _nominatim_call(query)
+def _photon_call(query: str):
+    """Photon (Komoot) — OSM, sans clé, fonctionne sur Streamlit Cloud."""
+    url = f"https://photon.komoot.io/api/?q={_uparse.quote(query)}&limit=1&lang=fr"
+    try:
+        req = _ureq.Request(url, headers={"User-Agent": "CB-Transport-Hub/1.0"})
+        with _ureq.urlopen(req, timeout=6) as r:
+            data = _json.loads(r.read())
+        features = data.get("features", [])
+        if features:
+            coords = features[0]["geometry"]["coordinates"]
+            return float(coords[1]), float(coords[0])
+    except Exception:
+        pass
+    return None
 
 def _nominatim_call(query: str):
-    import urllib.request, json
+    """Nominatim fallback."""
     url = (
         "https://nominatim.openstreetmap.org/search"
-        f"?q={urllib.parse.quote(query)}&format=json&limit=1"
+        f"?q={_uparse.quote(query)}&format=json&limit=1"
     )
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "CB-Transport-Hub/1.0"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            data = json.loads(r.read())
+        req = _ureq.Request(url, headers={"User-Agent": "CB-Transport-Hub/1.0"})
+        with _ureq.urlopen(req, timeout=6) as r:
+            data = _json.loads(r.read())
         if data:
             return float(data[0]["lat"]), float(data[0]["lon"])
     except Exception:
         pass
     return None
+
+def _geocode_raw(query: str):
+    """Essaie Photon puis Nominatim."""
+    result = _photon_call(query)
+    if result:
+        return result
+    return _nominatim_call(query)
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def geocode_location(query: str):
+    """Géocode une station — résultat mis en cache."""
+    return _geocode_raw(query)
+
+def geocode_dest(query: str):
+    """Géocode la destination — sans cache pour ne pas bloquer sur None."""
+    return _geocode_raw(query)
 
 import urllib.parse
 
