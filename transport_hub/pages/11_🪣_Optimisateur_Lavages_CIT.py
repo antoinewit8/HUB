@@ -21,41 +21,205 @@ st.set_page_config(
 # ─── Style ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-[data-testid="stAppViewContainer"] { background: #0e1b28; }
-[data-testid="stSidebar"] { background: #0a1520; }
-h1, h2, h3, .stMarkdown { color: #e8f4fd; }
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@400;500;600&display=swap');
 
+:root {
+  --bg:            #f5f3f0;
+  --surface:       #faf9f7;
+  --surface-alt:   #eeebe6;
+  --border:        #d4cfc8;
+  --border-strong: #b0a99f;
+  --ink:           #1c1a17;
+  --ink-2:         #4a4540;
+  --ink-3:         #7a736a;
+  --accent:        #1e3a5f;
+  --accent-dim:    #e4eaf2;
+  --font-ui:       'Barlow Condensed', 'Arial Narrow', sans-serif;
+  --font-body:     'Barlow', system-ui, sans-serif;
+}
+
+[data-testid="stAppViewContainer"] {
+  background: var(--bg) !important;
+  font-family: var(--font-body);
+  color: var(--ink);
+}
+[data-testid="stSidebar"] {
+  background: var(--surface) !important;
+  border-right: 1px solid var(--border);
+}
+[data-testid="stSidebar"] * { color: var(--ink) !important; }
+
+h1, h2, h3 {
+  font-family: var(--font-ui);
+  color: var(--ink);
+  font-weight: 700;
+}
+.stMarkdown { color: var(--ink); }
+
+/* ── KPI ─────────────────────────────────────────────────────────── */
 .kpi-box {
-    background: linear-gradient(145deg, #152a3e, #0e1b28);
-    border: 1px solid rgba(74,144,217,0.2);
-    border-radius: 12px;
-    padding: 1rem 1.2rem;
-    text-align: center;
-    margin-bottom: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top: 2px solid var(--accent);
+  border-radius: 2px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
 }
-.kpi-box .kpi-val { font-size: 1.9rem; font-weight: 700; color: #4a90d9; }
-.kpi-box .kpi-lbl { font-size: 0.78rem; color: #8aa4bc; text-transform: uppercase; letter-spacing: 1px; }
+.kpi-box .kpi-val {
+  font-family: var(--font-ui);
+  font-size: 2.1rem;
+  font-weight: 700;
+  color: var(--ink);
+  line-height: 1;
+  letter-spacing: -0.01em;
+}
+.kpi-box .kpi-lbl {
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 0.25rem;
+}
 
+/* ── Station cards ───────────────────────────────────────────────── */
 .lavage-card {
-    background: #152a3e;
-    border: 1px solid rgba(74,144,217,0.15);
-    border-left: 3px solid #4a90d9;
-    border-radius: 8px;
-    padding: 0.8rem 1rem;
-    margin-bottom: 0.5rem;
-    font-size: 0.88rem;
-    color: #cde;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  padding: 0.65rem 0.9rem;
+  margin-bottom: 0.35rem;
+  display: grid;
+  grid-template-columns: 2.2rem 1fr;
+  gap: 0 0.7rem;
+  align-items: start;
 }
-.lavage-card .station { font-weight: 600; color: #6bb8f0; font-size: 0.95rem; }
-.lavage-card .meta { color: #8aa4bc; font-size: 0.8rem; }
+.lavage-card .rank {
+  font-family: var(--font-ui);
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--ink-3);
+  line-height: 1.2;
+}
+.lavage-card .station {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+.lavage-card .localite {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  margin-top: 0.1rem;
+}
+.lavage-card .count {
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-top: 0.2rem;
+}
 
+/* ── Section titles ──────────────────────────────────────────────── */
 .section-title {
-    color: #e8f4fd;
-    font-size: 1.1rem;
-    font-weight: 600;
-    border-bottom: 1px solid rgba(74,144,217,0.2);
-    padding-bottom: 0.4rem;
-    margin: 1.2rem 0 0.8rem 0;
+  font-family: var(--font-ui);
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
+  margin: 1.4rem 0 0.75rem 0;
+}
+
+/* ── Tabs ────────────────────────────────────────────────────────── */
+[data-baseweb="tab-list"] {
+  background: var(--surface-alt) !important;
+  border-bottom: 1px solid var(--border-strong) !important;
+  border-radius: 0 !important;
+  gap: 0 !important;
+}
+[data-baseweb="tab"] {
+  font-family: var(--font-ui) !important;
+  font-size: 0.75rem !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.09em !important;
+  color: var(--ink-3) !important;
+  border-radius: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  padding: 0.5rem 1.1rem !important;
+}
+[aria-selected="true"][data-baseweb="tab"] {
+  color: var(--accent) !important;
+  border-bottom-color: var(--accent) !important;
+  background: transparent !important;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────── */
+[data-testid="stButton"] button,
+[data-testid="stDownloadButton"] button {
+  font-family: var(--font-ui) !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.07em !important;
+  font-size: 0.75rem !important;
+  background: var(--accent) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 2px !important;
+  padding: 0.45rem 1.1rem !important;
+}
+[data-testid="stButton"] button:hover,
+[data-testid="stDownloadButton"] button:hover {
+  background: #162d4a !important;
+}
+
+/* ── Inputs / selects ────────────────────────────────────────────── */
+[data-baseweb="select"] > div,
+[data-baseweb="input"] > div {
+  border-radius: 2px !important;
+  border-color: var(--border) !important;
+  background: var(--surface) !important;
+  font-family: var(--font-body) !important;
+  font-size: 0.875rem !important;
+}
+
+/* ── Misc ────────────────────────────────────────────────────────── */
+hr { border-color: var(--border) !important; opacity: 1 !important; }
+
+[data-testid="stAlert"] {
+  border-radius: 2px !important;
+  font-family: var(--font-body) !important;
+  font-size: 0.875rem !important;
+}
+
+[data-testid="stHeading"] h2 {
+  font-family: var(--font-ui) !important;
+  font-size: 1.4rem !important;
+  font-weight: 700 !important;
+  color: var(--ink) !important;
+  letter-spacing: 0.01em !important;
+}
+
+[data-testid="stCaptionContainer"] {
+  color: var(--ink-3) !important;
+  font-size: 0.82rem !important;
+}
+
+/* Dataframe header */
+[data-testid="stDataFrame"] thead th {
+  font-family: var(--font-ui) !important;
+  font-size: 0.72rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  color: var(--ink-2) !important;
+  background: var(--surface-alt) !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -78,32 +242,26 @@ def load_data(missions_bytes, lavages_bytes):
     df_m = pd.read_excel(io.BytesIO(missions_bytes), dtype=str)
     df_l = pd.read_excel(io.BytesIO(lavages_bytes), dtype=str)
 
-    # Nettoyage colonnes
     df_m.columns = df_m.columns.str.strip()
     df_l.columns = df_l.columns.str.strip()
 
-    # Nettoyage N° Dossier
     df_m["N° Dossier"] = df_m["N° Dossier"].str.strip()
     df_l["N° Dossier"] = df_l["N° Dossier"].str.strip()
 
-    # Parsing date
     if "Date chargement" in df_m.columns:
         df_m["Date chargement"] = pd.to_datetime(df_m["Date chargement"], errors="coerce")
-
     if "Date" in df_l.columns:
         df_l["Date"] = pd.to_datetime(df_l["Date"], errors="coerce")
 
-    # Normalisation localité pour recherche
     df_m["_localite_norm"] = df_m["Localité déchargement"].apply(normalize)
     df_l["_localite_lavage_norm"] = df_l["Localité"].apply(normalize)
 
     return df_m, df_l
 
-# ─── Géocodage nominatim (simple, sans clé API) ───────────────────────────────
+# ─── Géocodage nominatim ──────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False, ttl=86400)
 def geocode_location(query: str):
-    """Géocode via Nominatim (OpenStreetMap) — pas de clé API requise."""
-    import urllib.request, json, time
+    import urllib.request, json
     url = (
         "https://nominatim.openstreetmap.org/search"
         f"?q={urllib.parse.quote(query)}&format=json&limit=1"
@@ -147,18 +305,18 @@ if not missions_file or not lavages_file:
     st.stop()
 
 # ─── Chargement ──────────────────────────────────────────────────────────────
-with st.spinner("⏳ Chargement et croisement des données..."):
+with st.spinner("Chargement et croisement des données..."):
     try:
         df_m, df_l = load_data(missions_file.read(), lavages_file.read())
     except Exception as e:
-        st.error(f"❌ Erreur chargement : {e}")
+        st.error(f"Erreur chargement : {e}")
         st.stop()
 
 # ─── KPIs globaux ────────────────────────────────────────────────────────────
-total_missions = len(df_m)
-total_lavages  = len(df_l)
-dossiers_avec_lavage = len(set(df_m["N° Dossier"]) & set(df_l["N° Dossier"]))
-nb_localites = df_m["Localité déchargement"].nunique()
+total_missions         = len(df_m)
+total_lavages          = len(df_l)
+dossiers_avec_lavage   = len(set(df_m["N° Dossier"]) & set(df_l["N° Dossier"]))
+nb_localites           = df_m["Localité déchargement"].nunique()
 
 k1, k2, k3, k4 = st.columns(4)
 with k1:
@@ -173,9 +331,8 @@ with k4:
 st.divider()
 
 # ─── Recherche ───────────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">🔍 Recherche par localité de déchargement</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">Recherche par localité de déchargement</div>', unsafe_allow_html=True)
 
-# Autocomplete : liste triée des localités
 localites_list = sorted(df_m["Localité déchargement"].dropna().unique().tolist())
 
 col_search, col_pays = st.columns([3, 1])
@@ -192,8 +349,7 @@ with col_pays:
         ["Tous"] + sorted(df_m["Pays déchargement"].dropna().unique().tolist())
     )
 
-# Filtre produit optionnel
-with st.expander("🎛️ Filtres avancés", expanded=False):
+with st.expander("Filtres avancés", expanded=False):
     col_f1, col_f2, col_f3 = st.columns(3)
     with col_f1:
         produit_filter = st.multiselect(
@@ -213,7 +369,7 @@ with st.expander("🎛️ Filtres avancés", expanded=False):
         )
 
 if not query:
-    st.info("👆 Sélectionnez ou tapez une localité de déchargement pour voir les lavages associés")
+    st.info("Sélectionnez ou tapez une localité de déchargement pour voir les lavages associés")
     st.stop()
 
 # ─── Filtrage missions ────────────────────────────────────────────────────────
@@ -233,15 +389,15 @@ if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
 df_missions_filtre = df_m[mask].copy()
 
 if df_missions_filtre.empty:
-    st.warning(f"⚠️ Aucune mission trouvée pour « {query} »")
+    st.warning(f"Aucune mission trouvée pour « {query} »")
     st.stop()
 
 # ─── Croisement avec lavages ──────────────────────────────────────────────────
-dossiers_ids = df_missions_filtre["N° Dossier"].unique()
-df_lavages_match = df_l[df_l["N° Dossier"].isin(dossiers_ids)].copy()
+dossiers_ids      = df_missions_filtre["N° Dossier"].unique()
+df_lavages_match  = df_l[df_l["N° Dossier"].isin(dossiers_ids)].copy()
 
-# ─── Résultats ───────────────────────────────────────────────────────────────
-st.markdown(f"### 📍 Résultats pour : **{query}**")
+# ─── Résultats header ────────────────────────────────────────────────────────
+st.markdown(f'<div class="section-title">Résultats — {query}</div>', unsafe_allow_html=True)
 
 r1, r2, r3 = st.columns(3)
 with r1:
@@ -249,12 +405,12 @@ with r1:
 with r2:
     st.markdown(f'<div class="kpi-box"><div class="kpi-val">{len(df_lavages_match)}</div><div class="kpi-lbl">Lavages associés</div></div>', unsafe_allow_html=True)
 with r3:
-    nb_stations = df_lavages_match["Nom 1"].nunique()
+    nb_stations = df_lavages_match["Nom 1"].nunique() if not df_lavages_match.empty else 0
     st.markdown(f'<div class="kpi-box"><div class="kpi-val">{nb_stations}</div><div class="kpi-lbl">Stations distinctes</div></div>', unsafe_allow_html=True)
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
 tab_lavages, tab_carte, tab_missions, tab_stats = st.tabs([
-    "🧼 Lavages", "🗺️ Carte", "📋 Missions", "📊 Statistiques"
+    "Lavages", "Carte", "Missions", "Statistiques"
 ])
 
 # ── Tab Lavages ───────────────────────────────────────────────────────────────
@@ -262,26 +418,31 @@ with tab_lavages:
     if df_lavages_match.empty:
         st.info("Aucun lavage enregistré pour ces dossiers.")
     else:
-        # Résumé par station
-        st.markdown('<div class="section-title">🏆 Stations les plus utilisées</div>', unsafe_allow_html=True)
-        station_counts = df_lavages_match.groupby(["Nom 1", "Localité", "Code postal"]).size().reset_index(name="Nb lavages")
-        station_counts = station_counts.sort_values("Nb lavages", ascending=False)
+        st.markdown('<div class="section-title">Stations les plus utilisées</div>', unsafe_allow_html=True)
 
-        for _, row in station_counts.head(10).iterrows():
+        station_counts = (
+            df_lavages_match
+            .groupby(["Nom 1", "Localité", "Code postal"])
+            .size()
+            .reset_index(name="Nb lavages")
+            .sort_values("Nb lavages", ascending=False)
+        )
+
+        for i, (_, row) in enumerate(station_counts.head(10).iterrows()):
             pct = int(row["Nb lavages"] / len(df_lavages_match) * 100)
             st.markdown(f"""
             <div class="lavage-card">
-                <div class="station">🏭 {row['Nom 1']}</div>
-                <div>📍 {row['Localité']} ({row['Code postal']})</div>
-                <div class="meta">✅ {row['Nb lavages']} lavage(s) — {pct}% du total</div>
+              <div class="rank">#{i+1}</div>
+              <div>
+                <div class="station">{row['Nom 1']}</div>
+                <div class="localite">{row['Localité']} — {row['Code postal']}</div>
+                <div class="count">{row['Nb lavages']} lavage(s) · {pct}%</div>
+              </div>
             </div>
             """, unsafe_allow_html=True)
 
-        st.markdown('<div class="section-title">📄 Détail des lavages</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Détail des lavages</div>', unsafe_allow_html=True)
 
-        # Merge pour avoir le contexte mission
-        # On sélectionne uniquement les colonnes utiles côté missions, sans "Chauffeur"
-        # (déjà présent dans df_lavages_match) pour éviter les conflits de colonnes dupliquées
         cols_mission_merge = [c for c in [
             "N° Dossier", "Date chargement", "Localité chargement",
             "Localité déchargement", "Produit", "Client facturation"
@@ -300,17 +461,17 @@ with tab_lavages:
         ] if c in df_detail.columns]
 
         st.dataframe(
-            df_detail[cols_show].sort_values("Date", ascending=False) if "Date" in df_detail.columns else df_detail[cols_show],
+            df_detail[cols_show].sort_values("Date", ascending=False)
+            if "Date" in df_detail.columns else df_detail[cols_show],
             use_container_width=True,
             hide_index=True,
         )
 
-        # Export
         import io as _io
         buf = _io.BytesIO()
         df_detail[cols_show].to_excel(buf, index=False, engine="openpyxl")
         st.download_button(
-            "📥 Exporter les lavages (Excel)",
+            "Exporter les lavages (Excel)",
             data=buf.getvalue(),
             file_name=f"lavages_{normalize(query).replace(' ','_')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -318,32 +479,36 @@ with tab_lavages:
 
 # ── Tab Carte ─────────────────────────────────────────────────────────────────
 with tab_carte:
-    st.markdown('<div class="section-title">🗺️ Carte des stations de lavage</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Carte des stations de lavage</div>', unsafe_allow_html=True)
 
     if df_lavages_match.empty:
         st.info("Aucun lavage à afficher sur la carte.")
     else:
-        # Géocoder les stations uniques
-        stations_unique = station_counts.copy()
+        station_counts = (
+            df_lavages_match
+            .groupby(["Nom 1", "Localité", "Code postal"])
+            .size()
+            .reset_index(name="Nb lavages")
+            .sort_values("Nb lavages", ascending=False)
+        )
 
         geocoded = []
         progress_bar = st.progress(0, text="Géocodage des stations...")
-        total_s = len(stations_unique)
+        total_s = len(station_counts)
 
-        for i, (_, row) in enumerate(stations_unique.iterrows()):
+        for i, (_, row) in enumerate(station_counts.iterrows()):
             search_q = f"{row['Nom 1']}, {row['Localité']}, {row['Code postal']}"
             coords = geocode_location(search_q)
             if coords is None:
-                # Fallback : juste ville + CP
                 coords = geocode_location(f"{row['Localité']}, {row['Code postal']}")
             if coords:
                 geocoded.append({
-                    "nom": row["Nom 1"],
+                    "nom":      row["Nom 1"],
                     "localite": row["Localité"],
-                    "cp": row["Code postal"],
-                    "nb": int(row["Nb lavages"]),
-                    "lat": coords[0],
-                    "lon": coords[1],
+                    "cp":       row["Code postal"],
+                    "nb":       int(row["Nb lavages"]),
+                    "lat":      coords[0],
+                    "lon":      coords[1],
                 })
             progress_bar.progress((i + 1) / total_s, text=f"Géocodage {i+1}/{total_s}")
 
@@ -353,39 +518,30 @@ with tab_carte:
             st.warning("Impossible de géocoder les stations pour cette localité.")
         else:
             df_geo = pd.DataFrame(geocoded)
+            dest_coords = geocode_location(f"{query}, France") or geocode_location(query)
 
-            # Géocoder aussi la localité de déchargement cible
-            dest_coords = geocode_location(f"{query}, France")
-            if dest_coords is None:
-                dest_coords = geocode_location(query)
-
-            # Carte MapLibre via st.map (fallback simple)
-            # Utiliser pydeck pour une carte plus riche
             try:
                 import pydeck as pdk
 
-                # Layer stations lavage (bleu, contour blanc)
                 layer_stations = pdk.Layer(
                     "ScatterplotLayer",
                     data=df_geo,
                     get_position="[lon, lat]",
                     get_radius=5000,
-                    get_fill_color=[74, 144, 217, 210],
+                    get_fill_color=[30, 58, 95, 200],      # accent slate
                     get_line_color=[255, 255, 255, 180],
                     stroked=True,
                     line_width_min_pixels=1,
                     pickable=True,
                     auto_highlight=True,
                 )
-
-                # Labels stations lavage
                 layer_stations_text = pdk.Layer(
                     "TextLayer",
                     data=df_geo,
                     get_position="[lon, lat]",
                     get_text="nom",
                     get_size=12,
-                    get_color=[220, 235, 255, 220],
+                    get_color=[28, 26, 23, 220],            # ink
                     get_anchor="middle",
                     get_alignment_baseline="'bottom'",
                     get_pixel_offset=[0, -10],
@@ -393,12 +549,11 @@ with tab_carte:
 
                 layers = [layer_stations, layer_stations_text]
 
-                # Layer point déchargement (rouge vif + contour blanc + label)
                 if dest_coords:
                     df_dest = pd.DataFrame([{
-                        "lat": dest_coords[0],
-                        "lon": dest_coords[1],
-                        "nom": f"Déchargement : {query}",
+                        "lat":   dest_coords[0],
+                        "lon":   dest_coords[1],
+                        "nom":   f"Déchargement : {query}",
                         "label": query.upper(),
                     }])
                     layer_dest = pdk.Layer(
@@ -406,7 +561,7 @@ with tab_carte:
                         data=df_dest,
                         get_position="[lon, lat]",
                         get_radius=10000,
-                        get_fill_color=[220, 30, 30, 240],
+                        get_fill_color=[180, 30, 30, 230],  # rouge statut
                         get_line_color=[255, 255, 255, 255],
                         stroked=True,
                         line_width_min_pixels=2,
@@ -417,57 +572,50 @@ with tab_carte:
                         data=df_dest,
                         get_position="[lon, lat]",
                         get_text="label",
-                        get_size=14,
-                        get_color=[255, 80, 80, 255],
+                        get_size=13,
+                        get_color=[180, 30, 30, 255],
                         get_anchor="middle",
                         get_alignment_baseline="'bottom'",
                         get_pixel_offset=[0, -14],
                         font_weight=800,
                     )
-                    layers.append(layer_dest)
-                    layers.append(layer_dest_text)
+                    layers += [layer_dest, layer_dest_text]
 
                 center_lat = dest_coords[0] if dest_coords else df_geo["lat"].mean()
                 center_lon = dest_coords[1] if dest_coords else df_geo["lon"].mean()
 
-                view = pdk.ViewState(
-                    latitude=center_lat,
-                    longitude=center_lon,
-                    zoom=5,
-                    pitch=0,
-                )
+                view = pdk.ViewState(latitude=center_lat, longitude=center_lon, zoom=5, pitch=0)
 
                 tooltip = {
-                    "html": "<b>{nom}</b><br>{localite} ({cp})<br>🧼 {nb} lavage(s)",
-                    "style": {"background": "#0e1b28", "color": "#e8f4fd", "font-size": "13px", "padding": "8px"}
+                    "html": "<b>{nom}</b><br>{localite} ({cp})<br>{nb} lavage(s)",
+                    "style": {
+                        "background": "#faf9f7",
+                        "color": "#1c1a17",
+                        "font-size": "13px",
+                        "padding": "8px",
+                        "border": "1px solid #d4cfc8",
+                        "border-radius": "2px",
+                    }
                 }
 
                 deck = pdk.Deck(
                     layers=layers,
                     initial_view_state=view,
                     tooltip=tooltip,
-                    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+                    map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
                 )
                 st.pydeck_chart(deck)
-
-                # Légende
-                st.markdown("""
-                <small>
-                🔵 Stations de lavage &nbsp;|&nbsp; 🟠 Localité de déchargement cible
-                </small>
-                """, unsafe_allow_html=True)
+                st.caption("● Stations de lavage (bleu slate)   ● Localité de déchargement (rouge)")
 
             except ImportError:
-                # Fallback st.map
                 st.map(df_geo.rename(columns={"lat": "latitude", "lon": "longitude"}))
 
-            # Tableau récapitulatif géocodé
-            with st.expander("📋 Stations géocodées"):
-                st.dataframe(df_geo[["nom","localite","cp","nb","lat","lon"]], hide_index=True)
+            with st.expander("Stations géocodées"):
+                st.dataframe(df_geo[["nom", "localite", "cp", "nb", "lat", "lon"]], hide_index=True)
 
 # ── Tab Missions ──────────────────────────────────────────────────────────────
 with tab_missions:
-    st.markdown('<div class="section-title">📋 Missions vers cette localité</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Missions vers cette localité</div>', unsafe_allow_html=True)
 
     cols_m = [c for c in [
         "N° Dossier", "Date chargement", "Localité chargement", "C.P. chargement",
@@ -485,32 +633,34 @@ with tab_missions:
 
 # ── Tab Stats ─────────────────────────────────────────────────────────────────
 with tab_stats:
-    st.markdown('<div class="section-title">📊 Analyse des lavages</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Analyse des lavages</div>', unsafe_allow_html=True)
 
     if df_lavages_match.empty:
         st.info("Pas de données pour les statistiques.")
     else:
-        col_s1, col_s2 = st.columns(2)
+        station_counts_stats = (
+            df_lavages_match
+            .groupby(["Nom 1", "Localité", "Code postal"])
+            .size()
+            .reset_index(name="Nb lavages")
+            .sort_values("Nb lavages", ascending=False)
+        )
 
+        col_s1, col_s2 = st.columns(2)
         with col_s1:
             st.markdown("**Répartition par station**")
-            st.bar_chart(
-                station_counts.set_index("Nom 1")["Nb lavages"].head(10)
-            )
-
+            st.bar_chart(station_counts_stats.set_index("Nom 1")["Nb lavages"].head(10))
         with col_s2:
-            st.markdown("**Produits transportés (missions concernées)**")
+            st.markdown("**Produits transportés**")
             prod_counts = df_missions_filtre["Produit"].value_counts().head(10)
             st.bar_chart(prod_counts)
 
-        # Chauffeurs les plus actifs
         if "Chauffeur" in df_lavages_match.columns:
             st.markdown("**Top chauffeurs (lavages)**")
             chauf = df_lavages_match["Chauffeur"].value_counts().head(10).reset_index()
             chauf.columns = ["Chauffeur", "Nb lavages"]
             st.dataframe(chauf, hide_index=True, use_container_width=True)
 
-        # Evol temporelle
         if "Date" in df_lavages_match.columns:
             st.markdown("**Évolution mensuelle des lavages**")
             df_tmp = df_lavages_match.copy()
