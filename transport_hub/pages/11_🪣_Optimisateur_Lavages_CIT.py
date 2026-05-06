@@ -102,8 +102,15 @@ def load_data(missions_bytes, lavages_bytes):
 # ─── Géocodage nominatim (simple, sans clé API) ───────────────────────────────
 @st.cache_data(show_spinner=False, ttl=86400)
 def geocode_location(query: str):
-    """Géocode via Nominatim (OpenStreetMap) — pas de clé API requise."""
-    import urllib.request, json, time
+    """Géocode via Nominatim — résultat mis en cache (pour les stations)."""
+    return _nominatim_call(query)
+
+def geocode_dest(query: str):
+    """Géocode la destination — PAS de cache pour éviter de garder None en mémoire."""
+    return _nominatim_call(query)
+
+def _nominatim_call(query: str):
+    import urllib.request, json
     url = (
         "https://nominatim.openstreetmap.org/search"
         f"?q={urllib.parse.quote(query)}&format=json&limit=1"
@@ -386,10 +393,19 @@ with tab_carte:
                     attempts.append(f"{q}, {pays_label}")
                 attempts.append(q)
 
+            debug_results = []
             for attempt in attempts:
-                dest_coords = geocode_location(attempt)
+                dest_coords = geocode_dest(attempt)
+                debug_results.append((attempt, dest_coords))
                 if dest_coords:
                     break
+
+            with st.expander("🔧 Debug géocodage destination", expanded=dest_coords is None):
+                for att, res in debug_results:
+                    icon = "✅" if res else "❌"
+                    st.write(f"{icon} `{att}` → `{res}`")
+                if dest_coords is None:
+                    st.error("Toutes les tentatives ont échoué — Nominatim ne reconnaît pas cette localité.")
 
             # Carte MapLibre via st.map (fallback simple)
             # Utiliser pydeck pour une carte plus riche
