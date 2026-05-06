@@ -79,13 +79,7 @@ def normalize_ville(text: str) -> str:
 st.markdown(f"### 🗺️ Carte des lavages — **{localite or 'Localité non précisée'}**")
 col_back, col_title = st.columns([1, 8])
 with col_back:
-    st.markdown(
-        '<a href="/Optimisateur_Lavages_CIT" target="_self">'
-        '<button style="padding:0.35rem 0.9rem;background:#152a3e;color:#4a90d9;'
-        'border:1px solid #4a90d9;border-radius:6px;cursor:pointer;font-size:0.85rem;">'
-        '↩️ Retour</button></a>',
-        unsafe_allow_html=True
-    )
+    st.markdown("↩️ *Fermez cet onglet pour revenir*")
 
 if not localite:
     st.warning("Aucune localité passée en paramètre. Ouvrez cette page depuis l'optimisateur lavages.")
