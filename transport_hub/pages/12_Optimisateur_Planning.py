@@ -376,8 +376,10 @@ if not lieu_choisi:
 # ─── Calcul recommandations ───────────────────────────────────────────────────
 loc_norm = normalize(lieu_choisi)
 
-# Missions déchargeant en ce lieu
-df_dech = df[df["_loc_dech_norm"].str.contains(loc_norm, na=False, regex=False)].copy()
+# Missions déchargeant en ce lieu — match exact normalisé
+df_dech = df[df["_loc_dech_norm"] == loc_norm].copy()
+if df_dech.empty:
+    df_dech = df[df["_loc_dech_norm"].str.contains(loc_norm, na=False, regex=False)].copy()
 
 if df_dech.empty:
     st.warning(f"Aucune mission trouvée pour « {lieu_choisi} »")
@@ -402,6 +404,9 @@ with st.spinner(f"🔍 Analyse de {len(df_dech)} missions vers {lieu_choisi}..."
         for _, nrow in window.iterrows():
             loc_ch = str(nrow["Localité chargement"] or "").strip()
             if not loc_ch:
+                continue
+            # Exclure si même lieu normalisé que le déchargement
+            if normalize(loc_ch) == loc_norm:
                 continue
             prix = nrow["Prix transport"]
             if prix_min > 0 and (pd.isna(prix) or prix < prix_min):
@@ -461,7 +466,7 @@ def compute_score(row):
     coords = geocoded_ch.get(row["loc_ch"])
     if coords and coords_dech:
         dist_km = haversine_km(coords_dech[0], coords_dech[1], coords[0], coords[1])
-        dist_km = max(dist_km, 1)
+        dist_km = max(dist_km, 20)  # min 20km — évite score artificiel sur même zone
     else:
         dist_km = 500  # valeur neutre si non géocodé
 
