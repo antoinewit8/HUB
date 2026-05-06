@@ -249,85 +249,77 @@ def geocode_ville(ville: str, cp: str = "", pays: str = "") -> tuple:
 
 # ─── Chargement données ───────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
-def load_missions(file_bytes):
+def load_missions(missions_bytes, lavages_bytes):
+    """Charge missions + joint Remorque/Tracteur/Chauffeur depuis lavages pour chaîner par véhicule."""
     import io
-    df = pd.read_excel(io.BytesIO(file_bytes), dtype=str)
+    df = pd.read_excel(io.BytesIO(missions_bytes), dtype=str)
     df.columns = df.columns.str.strip()
     df["Date chargement"] = pd.to_datetime(df["Date chargement"], errors="coerce")
     df["Prix transport"] = pd.to_numeric(df["Prix transport"], errors="coerce")
     df["Total des ventes"] = pd.to_numeric(df["Total des ventes"], errors="coerce")
+    df["N° Dossier"] = df["N° Dossier"].str.strip()
+
+    # Joindre les IDs véhicule depuis le fichier lavages
+    df_l = pd.read_excel(io.BytesIO(lavages_bytes), dtype=str)
+    df_l.columns = df_l.columns.str.strip()
+    df_l["N° Dossier"] = df_l["N° Dossier"].str.strip()
+    vehicule = df_l[["N° Dossier","Remorque","Tracteur","Chauffeur"]].drop_duplicates("N° Dossier")
+    df = df.merge(vehicule, on="N° Dossier", how="left")
+
     df["_loc_ch_norm"] = df["Localité chargement"].apply(normalize)
     df["_loc_dech_norm"] = df["Localité déchargement"].apply(normalize)
+    df = df.dropna(subset=["Date chargement"]).sort_values("Date chargement").reset_index(drop=True)
     return df
 
-@st.cache_data(show_spinner=False)
-def build_pairs(df_bytes):
-    """Construit toutes les paires (déchargement → chargement suivant) par fenêtre de 7j."""
-    import io
-    df = pd.read_excel(io.BytesIO(df_bytes), dtype=str)
-    df.columns = df.columns.str.strip()
-    df["Date chargement"] = pd.to_datetime(df["Date chargement"], errors="coerce")
-    df["Prix transport"] = pd.to_numeric(df["Prix transport"], errors="coerce")
-    df["Total des ventes"] = pd.to_numeric(df["Total des ventes"], errors="coerce")
-    df = df.dropna(subset=["Date chargement"]).reset_index(drop=True)
-
-    pairs = []
-    # Pour chaque ligne (déchargement), chercher les chargements dans les 3 jours suivants
-    # On groupe par date pour éviter l'explosion combinatoire
-    for _, row in df.iterrows():
-        date_dech = row["Date chargement"]  # proxy : date chargement = date du transport
-        loc_dech  = str(row["Localité déchargement"] or "").strip()
-        cp_dech   = str(row["C.P. déchargement"] or "").strip()
-        pays_dech = str(row["Pays déchargement"] or "").strip()
-        if not loc_dech:
-            continue
-
-        # Chargements dans les 3 jours suivants (fenêtre resserrée)
-        window = df[
-            (df["Date chargement"] > date_dech) &
-            (df["Date chargement"] <= date_dech + pd.Timedelta(days=3))
-        ]
-        for _, nrow in window.iterrows():
-            loc_ch = str(nrow["Localité chargement"] or "").strip()
-            if not loc_ch or loc_ch == loc_dech:
-                continue
-            pairs.append({
-                "loc_dech":  loc_dech,
-                "cp_dech":   cp_dech,
-                "pays_dech": pays_dech,
-                "loc_ch":    loc_ch,
-                "cp_ch":     str(nrow["C.P. chargement"] or "").strip(),
-                "pays_ch":   str(nrow["Pays chargement"] or "").strip(),
-                "delta_j":   (nrow["Date chargement"] - date_dech).days,
-                "prix_ch":   nrow["Prix transport"],
-                "ventes_ch": nrow["Total des ventes"],
-            })
-
-    return pd.DataFrame(pairs) if pairs else pd.DataFrame()
 
 # ─── Header ──────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="hero">
-    <h1>OPTIMISATEUR PLANNING</h1>
+    <h1>🚛 OPTIMISATEUR TRAJETS VIDES</h1>
     <p>Je viens de décharger en X — où aller recharger pour maximiser l'efficacité ?</p>
 </div>
 """, unsafe_allow_html=True)
 
 # ─── Upload ───────────────────────────────────────────────────────────────────
-missions_file = st.file_uploader(
-    "📋 Fichier Missions CA CIT",
-    type=["xlsx","xls"],
-    help="Fichier CA_CIT_25-ajd"
-)
+col_u1, col_u2 = st.columns(2)
+with col_u1:
+    missions_file = st.file_uploader(
+        "📋 Fichier Missions CA CIT",
+        type=["xlsx","xls"],
+        help="Fichier CA_CIT_25-ajd"
+    )
+with col_u2:
+    lavages_file = st.file_uploader(
+        "🧼 Fichier Lavages",
+        type=["xlsx","xls"],
+        help="Fichier liste_lavages — permet de chaîner les missions par véhicule (Remorque/Tracteur)"
+    )
 
 if not missions_file:
     st.info("👆 Chargez le fichier missions pour démarrer")
     st.stop()
 
-file_bytes = missions_file.read()
+missions_bytes = missions_file.read()
+lavages_bytes  = lavages_file.read() if lavages_file else None
+
+if lavages_bytes is None:
+    st.warning("⚠️ Sans le fichier lavages, les recommandations seront moins précises (pas de chaînage par véhicule)")
 
 with st.spinner("⏳ Chargement et analyse des enchaînements historiques..."):
-    df = load_missions(file_bytes)
+    if lavages_bytes:
+        df = load_missions(missions_bytes, lavages_bytes)
+    else:
+        import io as _io2
+        df_tmp = pd.read_excel(_io2.BytesIO(missions_bytes), dtype=str)
+        df_tmp.columns = df_tmp.columns.str.strip()
+        df_tmp["Date chargement"] = pd.to_datetime(df_tmp["Date chargement"], errors="coerce")
+        df_tmp["Prix transport"] = pd.to_numeric(df_tmp["Prix transport"], errors="coerce")
+        df_tmp["Total des ventes"] = pd.to_numeric(df_tmp["Total des ventes"], errors="coerce")
+        df_tmp["N° Dossier"] = df_tmp["N° Dossier"].str.strip()
+        df_tmp["_loc_ch_norm"] = df_tmp["Localité chargement"].apply(normalize)
+        df_tmp["_loc_dech_norm"] = df_tmp["Localité déchargement"].apply(normalize)
+        df_tmp["Remorque"] = None
+        df = df_tmp.dropna(subset=["Date chargement"]).sort_values("Date chargement").reset_index(drop=True)
 
 # KPIs globaux
 c1, c2, c3, c4 = st.columns(4)
@@ -356,8 +348,8 @@ with col_s1:
         help="Sélectionnez ou tapez le lieu de déchargement"
     )
 with col_s2:
-    fenetre_jours = st.selectbox("Fenêtre historique", [3, 7, 14], index=0,
-        help="Jours suivants à analyser dans l'historique")
+    fenetre_jours = st.selectbox("Fenêtre max (jours)", [3, 7, 14], index=0,
+        help="Nombre de jours max après déchargement pour trouver le prochain chargement du même véhicule")
 with col_s3:
     nb_recos = st.selectbox("Nb recommandations", [5, 10, 15, 20], index=1)
 
@@ -388,7 +380,7 @@ if df_dech.empty:
 # Pour chaque date de déchargement, trouver les chargements dans la fenêtre
 with st.spinner(f"🔍 Analyse de {len(df_dech)} missions vers {lieu_choisi}..."):
 
-    df_sorted = df.sort_values("Date chargement").reset_index(drop=True)
+    has_vehicle = df["Remorque"].notna().any()
     records = []
 
     for _, row in df_dech.iterrows():
@@ -396,17 +388,27 @@ with st.spinner(f"🔍 Analyse de {len(df_dech)} missions vers {lieu_choisi}..."
         if pd.isna(date_ref):
             continue
 
-        window = df_sorted[
-            (df_sorted["Date chargement"] > date_ref) &
-            (df_sorted["Date chargement"] <= date_ref + pd.Timedelta(days=fenetre_jours))
-        ]
+        rem = row.get("Remorque")
+        trac = row.get("Tracteur")
 
-        for _, nrow in window.iterrows():
+        if has_vehicle and pd.notna(rem) and rem:
+            # ── Méthode précise : prochaine mission du même véhicule (Remorque) ──
+            next_m = df[
+                (df["Remorque"] == rem) &
+                (df["Date chargement"] > date_ref) &
+                (df["Date chargement"] <= date_ref + pd.Timedelta(days=fenetre_jours))
+            ].head(1)
+        else:
+            # ── Fallback : fenêtre temporelle resserrée (J+1 seulement) ──
+            next_day = df[
+                (df["Date chargement"] > date_ref) &
+                (df["Date chargement"] <= date_ref + pd.Timedelta(days=1))
+            ]
+            next_m = next_day.head(1) if not next_day.empty else pd.DataFrame()
+
+        for _, nrow in next_m.iterrows():
             loc_ch = str(nrow["Localité chargement"] or "").strip()
-            if not loc_ch:
-                continue
-            # Exclure si même lieu normalisé que le déchargement
-            if normalize(loc_ch) == loc_norm:
+            if not loc_ch or normalize(loc_ch) == loc_norm:
                 continue
             prix = nrow["Prix transport"]
             if prix_min > 0 and (pd.isna(prix) or prix < prix_min):
@@ -414,15 +416,18 @@ with st.spinner(f"🔍 Analyse de {len(df_dech)} missions vers {lieu_choisi}..."
             if pays_filtre and nrow["Pays chargement"] not in pays_filtre:
                 continue
             records.append({
-                "loc_ch":    loc_ch,
-                "cp_ch":     str(nrow["C.P. chargement"] or "").strip(),
-                "pays_ch":   str(nrow["Pays chargement"] or "").strip(),
-                "delta_j":   (nrow["Date chargement"] - date_ref).days,
-                "prix":      prix,
-                "ventes":    nrow["Total des ventes"],
-                "produit":   str(nrow["Produit"] or "").strip(),
-                "client":    str(nrow["Client facturation"] or "").strip(),
+                "loc_ch":  loc_ch,
+                "cp_ch":   str(nrow["C.P. chargement"] or "").strip(),
+                "pays_ch": str(nrow["Pays chargement"] or "").strip(),
+                "delta_j": (nrow["Date chargement"] - date_ref).days,
+                "prix":    prix,
+                "ventes":  nrow["Total des ventes"],
+                "produit": str(nrow["Produit"] or "").strip(),
+                "client":  str(nrow["Client facturation"] or "").strip(),
             })
+
+    mode_label = "véhicule (Remorque)" if has_vehicle else "fenêtre temporelle J+1 (pas de fichier lavages)"
+    st.caption(f"ℹ️ Chaînage par {mode_label} — {len(records)} enchaînements analysés")
 
 if not records:
     st.warning("Pas d'enchaînements trouvés dans cette fenêtre temporelle.")
