@@ -26,31 +26,77 @@ import sys
 import time
 import json
 
-# ─── Injection du path KM pour accéder aux modules PTV ───────────────────────
-# Adapter ce chemin selon ton déploiement Streamlit Cloud
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_KM_CANDIDATES = [
-    os.path.join(_HERE, "tools", "km_calcul"),   # structure hub classique
-    os.path.join(_HERE, "km_calcul"),
-    _HERE,
-]
-for _p in _KM_CANDIDATES:
-    if os.path.isdir(os.path.join(_p, "modules")):
-        if _p not in sys.path:
-            sys.path.insert(0, _p)
-        break
+# ─── Import PTV (gestion imports relatifs du package) ────────────────────────
+# ptv_router_km.py utilise "from .route_optimizer import ..." (import relatif).
+# On le charge via importlib en lui injectant le bon __package__ pour que
+# les imports relatifs se résolvent, sans avoir besoin d'un vrai dossier modules/.
 
-try:
-    from modules.ptv_router_km import (
-        geocode_by_postal_code,
-        _geocode_by_text,
-        calculate_km_route,
-        PAYS_TO_ISO,
-        GPS_FIXES,
-    )
-    PTV_AVAILABLE = True
-except ImportError:
-    PTV_AVAILABLE = False
+import importlib.util as _ilu
+import types as _types
+
+def _load_ptv(project_root: str):
+    """Charge ptv_router_km depuis project_root en simulant le package 'modules'."""
+    # 1. Créer le faux package 'modules'
+    if "modules" not in sys.modules:
+        pkg = _types.ModuleType("modules")
+        pkg.__path__ = [project_root]
+        pkg.__package__ = "modules"
+        sys.modules["modules"] = pkg
+
+    # 2. Charger route_optimizer sous les deux noms attendus
+    for mod_name, filename in [
+        ("modules.route_optimizer", "route_optimizer.py"),
+        ("modules.villes_jalons",   "villes_jalons.py"),   # dépendance transitive
+    ]:
+        if mod_name not in sys.modules:
+            path = os.path.join(project_root, filename)
+            if os.path.exists(path):
+                spec = _ilu.spec_from_file_location(mod_name, path)
+                mod  = _ilu.module_from_spec(spec)
+                mod.__package__ = "modules"
+                sys.modules[mod_name] = mod
+                try:
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    pass  # villes_jalons peut échouer sans PTV_API_KEY — pas bloquant
+
+    # 3. Charger ptv_router_km
+    ptv_path = os.path.join(project_root, "ptv_router_km.py")
+    if not os.path.exists(ptv_path):
+        return None
+    spec = _ilu.spec_from_file_location("modules.ptv_router_km", ptv_path)
+    mod  = _ilu.module_from_spec(spec)
+    mod.__package__ = "modules"
+    sys.modules["modules.ptv_router_km"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+# Chercher le project_root : même dossier que cette page, ou parent
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOTS = [_HERE, os.path.dirname(_HERE)]
+
+PTV_AVAILABLE = False
+_ptv_mod = None
+for _root in _ROOTS:
+    if os.path.exists(os.path.join(_root, "ptv_router_km.py")):
+        try:
+            _ptv_mod = _load_ptv(_root)
+            if _ptv_mod:
+                PTV_AVAILABLE = True
+                break
+        except Exception:
+            pass
+
+if PTV_AVAILABLE and _ptv_mod:
+    geocode_by_postal_code = _ptv_mod.geocode_by_postal_code
+    _geocode_by_text       = _ptv_mod._geocode_by_text
+    calculate_km_route     = _ptv_mod.calculate_km_route
+    PAYS_TO_ISO            = _ptv_mod.PAYS_TO_ISO
+    GPS_FIXES              = _ptv_mod.GPS_FIXES
+else:
+    # Stubs vides — le reste du code bascule sur OSM
+    PAYS_TO_ISO = {}
+    GPS_FIXES   = {}
 
 # ─── Config colonne date déchargement ────────────────────────────────────────
 # Si ton fichier missions a une vraie colonne de date de déchargement, mets son nom ici.
