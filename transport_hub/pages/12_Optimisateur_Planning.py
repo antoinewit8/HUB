@@ -574,7 +574,7 @@ if map_data:
         df_map = pd.DataFrame(map_data)
 
         # Rayon fixe — tous les points à taille identique
-        df_map["radius"] = 4000
+        df_map["radius"] = 500
         df_map["color"] = df_map["rang"].apply(
             lambda r: [0, 255, 136, 230] if r == 1 else
                       ([0, 200, 100, 210] if r <= 3 else [0, 160, 80, 180])
