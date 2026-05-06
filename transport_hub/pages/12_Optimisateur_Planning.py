@@ -1,5 +1,5 @@
 """
-Page Streamlit : Optimisateur Planning
+Page Streamlit : Optimisateur Trajets Vides CIT
 Je viens de décharger en X → quels sont les meilleurs endroits pour aller recharger ?
 Score = fréquence historique × prix moyen × (1 / distance routière PTV) × (1 / délai)
 
@@ -106,7 +106,7 @@ DATE_DECH_COL = None  # ex: "Date déchargement"
 
 # ─── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Optimisateur Planning",
+    page_title="Optimisateur Trajets Vides",
     page_icon="🚛",
     layout="wide",
 )
