@@ -418,11 +418,11 @@ with tab_carte:
         # Filtre avant/après déchargement
         col_toggle1, col_toggle2, _ = st.columns([1, 1, 3])
         with col_toggle1:
-            show_avant = st.checkbox("🟢 Lavages avant déchargement", value=True,
-                help="Lavages effectués en transit, avant livraison (ex: NL → FR)")
+            show_avant = st.checkbox("🟢 Lavages avant chargement", value=True,
+                help="Lavages effectués avant de charger le produit (citerne à nettoyer)")
         with col_toggle2:
             show_apres = st.checkbox("🔵 Lavages après déchargement", value=True,
-                help="Lavages effectués après livraison, à proximité du lieu de déchargement")
+                help="Lavages effectués après déchargement chez le client, citerne vidée")
 
         df_carte = df_lavages_match.copy()
         if not show_avant:
@@ -619,7 +619,7 @@ with tab_carte:
                 st.markdown("""
                 <small>
                 🔵 Lavage après déchargement &nbsp;|&nbsp;
-                🟢 Lavage avant chargement (en transit) &nbsp;|&nbsp;
+                🟢 Lavage avant chargement &nbsp;|&nbsp;
                 🔴 Localité de déchargement
                 </small>
                 """, unsafe_allow_html=True)
