@@ -280,12 +280,15 @@ with tab_lavages:
         st.markdown('<div class="section-title">📄 Détail des lavages</div>', unsafe_allow_html=True)
 
         # Merge pour avoir le contexte mission
+        # On sélectionne uniquement les colonnes utiles côté missions, sans "Chauffeur"
+        # (déjà présent dans df_lavages_match) pour éviter les conflits de colonnes dupliquées
+        cols_mission_merge = [c for c in [
+            "N° Dossier", "Date chargement", "Localité chargement",
+            "Localité déchargement", "Produit", "Client facturation"
+        ] if c in df_missions_filtre.columns]
+
         df_detail = df_lavages_match.merge(
-            df_missions_filtre[["N° Dossier", "Date chargement", "Localité chargement",
-                                 "Localité déchargement", "Produit", "Client facturation",
-                                 "Chauffeur" if "Chauffeur" in df_missions_filtre.columns else "N° Dossier"]].rename(
-                columns={"Chauffeur": "Chauffeur_mission"} if "Chauffeur" in df_missions_filtre.columns else {}
-            ),
+            df_missions_filtre[cols_mission_merge],
             on="N° Dossier",
             how="left"
         )
