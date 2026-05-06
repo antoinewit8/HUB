@@ -619,7 +619,7 @@ with tab_carte:
                 st.markdown("""
                 <small>
                 🔵 Lavage après déchargement &nbsp;|&nbsp;
-                🟢 Lavage avant déchargement (en transit) &nbsp;|&nbsp;
+                🟢 Lavage avant chargement (en transit) &nbsp;|&nbsp;
                 🔴 Localité de déchargement
                 </small>
                 """, unsafe_allow_html=True)
