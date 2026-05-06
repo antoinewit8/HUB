@@ -574,7 +574,7 @@ if map_data:
         df_map = pd.DataFrame(map_data)
 
         # Rayon fixe — tous les points à taille identique
-        df_map["radius"] = 500
+        df_map["radius"] = 1000
         df_map["color"] = df_map["rang"].apply(
             lambda r: [0, 255, 136, 230] if r == 1 else
                       ([0, 200, 100, 210] if r <= 3 else [0, 160, 80, 180])
@@ -610,7 +610,7 @@ if map_data:
             }])
             layers.append(pdk.Layer(
                 "ScatterplotLayer", data=df_origin,
-                get_position="[lon, lat]", get_radius=10000,
+                get_position="[lon, lat]", get_radius=2000,
                 get_fill_color=[220, 30, 30, 240],
                 get_line_color=[255, 255, 255, 200],
                 stroked=True, line_width_min_pixels=2, pickable=True,
