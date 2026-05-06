@@ -573,12 +573,11 @@ if map_data:
 
         df_map = pd.DataFrame(map_data)
 
-        # Rayon proportionnel au score
-        df_map["radius"] = (df_map["score"] / 100 * 12000 + 4000).astype(int)
-        # Couleur : top3 vert vif, reste vert foncé
+        # Rayon fixe — tous les points à taille identique
+        df_map["radius"] = 4000
         df_map["color"] = df_map["rang"].apply(
             lambda r: [0, 255, 136, 230] if r == 1 else
-                      ([0, 200, 100, 200] if r <= 3 else [0, 120, 60, 160])
+                      ([0, 200, 100, 210] if r <= 3 else [0, 160, 80, 180])
         )
 
         layers = [
