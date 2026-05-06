@@ -292,22 +292,45 @@ if df_missions_filtre.empty:
 dossiers_ids = df_missions_filtre["N° Dossier"].unique()
 df_lavages_raw = df_l[df_l["N° Dossier"].isin(dossiers_ids)].copy()
 
-# Filtre date : ne garder que les lavages APRÈS la date de chargement du dossier
-# (élimine les lavages avant-chargement faits dans le pays d'origine)
+# Joindre les infos mission pour calculer le timing du lavage
 df_lavages_raw = df_lavages_raw.merge(
-    df_missions_filtre[["N° Dossier", "Date chargement"]],
+    df_missions_filtre[["N° Dossier", "Date chargement",
+                         "Pays chargement", "Pays déchargement",
+                         "C.P. chargement", "C.P. déchargement"]],
     on="N° Dossier", how="left"
 )
-df_lavages_raw = df_lavages_raw[
-    df_lavages_raw["Date"].isna() |
-    (df_lavages_raw["Date"] >= df_lavages_raw["Date chargement"])
-].drop(columns=["Date chargement"])
+
+# Classifier chaque lavage : avant ou après déchargement
+# Logique : CP 4 chiffres du lavage = zone NL/BE
+#           Si pays chargement = NL/BE et lavage en NL/BE → avant déchargement
+#           Sinon → après déchargement (lavage proche du lieu de livraison)
+def classify_lavage(row):
+    cp_lav = str(row.get("Code postal", "") or "").strip()
+    pays_ch = str(row.get("Pays chargement", "") or "").strip().upper()
+    pays_dech = str(row.get("Pays déchargement", "") or "").strip().upper()
+
+    # CP 4 chiffres = zone NL/BE
+    lav_zone_nl_be = len(cp_lav) == 4 and cp_lav.isdigit()
+    # Chargement en NL/BE
+    ch_nl_be = pays_ch in ("NL", "B", "BE")
+
+    if lav_zone_nl_be and ch_nl_be:
+        return "avant"   # lavage en transit avant livraison
+    elif not lav_zone_nl_be and not ch_nl_be:
+        return "apres"   # lavage après livraison, zone cohérente
+    elif lav_zone_nl_be and not ch_nl_be:
+        return "avant"   # lavage en zone nord alors que chargement au sud → avant
+    else:
+        return "apres"   # lavage en zone sud alors que chargement au nord → après livraison
+
+df_lavages_raw["timing"] = df_lavages_raw.apply(classify_lavage, axis=1)
+df_lavages_raw = df_lavages_raw.drop(
+    columns=["Date chargement", "Pays chargement", "Pays déchargement",
+             "C.P. chargement", "C.P. déchargement"],
+    errors="ignore"
+)
 
 df_lavages_match = df_lavages_raw.copy()
-
-# Filtre zone géographique du lavage
-if pays_lavage_filter != "Tous":
-    df_lavages_match = df_lavages_match[df_lavages_match["_pays_lavage"] == pays_lavage_filter]
 
 # ─── Résultats ───────────────────────────────────────────────────────────────
 st.markdown(f"### 📍 Résultats pour : **{query}**")
@@ -392,8 +415,23 @@ with tab_carte:
     if df_lavages_match.empty:
         st.info("Aucun lavage à afficher sur la carte.")
     else:
-        # Géocoder les stations uniques
-        stations_unique = station_counts.copy()
+        # Filtre avant/après déchargement
+        col_toggle1, col_toggle2, _ = st.columns([1, 1, 3])
+        with col_toggle1:
+            show_avant = st.checkbox("🟢 Lavages avant déchargement", value=True,
+                help="Lavages effectués en transit, avant livraison (ex: NL → FR)")
+        with col_toggle2:
+            show_apres = st.checkbox("🔵 Lavages après déchargement", value=True,
+                help="Lavages effectués après livraison, à proximité du lieu de déchargement")
+
+        df_carte = df_lavages_match.copy()
+        if not show_avant:
+            df_carte = df_carte[df_carte["timing"] != "avant"]
+        if not show_apres:
+            df_carte = df_carte[df_carte["timing"] != "apres"]
+
+        # Géocoder les stations filtrées
+        stations_unique = df_carte.groupby(["Nom 1","Localité","Code postal","timing"]).size().reset_index(name="Nb lavages")
 
         geocoded = []
         progress_bar = st.progress(0, text="Géocodage des stations...")
@@ -403,14 +441,15 @@ with tab_carte:
             search_q = f"{row['Nom 1']}, {row['Localité']}, {row['Code postal']}"
             coords = geocode_location(search_q)
             if coords is None:
-                # Fallback : juste ville + CP
                 coords = geocode_location(f"{row['Localité']}, {row['Code postal']}")
             if coords:
+                timing = row.get("timing", "apres")
                 geocoded.append({
                     "nom": row["Nom 1"],
                     "localite": row["Localité"],
                     "cp": row["Code postal"],
                     "nb": int(row["Nb lavages"]),
+                    "timing": timing,
                     "lat": coords[0],
                     "lon": coords[1],
                 })
@@ -474,34 +513,47 @@ with tab_carte:
             try:
                 import pydeck as pdk
 
-                # Layer stations lavage (bleu, contour blanc)
-                layer_stations = pdk.Layer(
-                    "ScatterplotLayer",
-                    data=df_geo,
-                    get_position="[lon, lat]",
-                    get_radius=5000,
-                    get_fill_color=[74, 144, 217, 210],
-                    get_line_color=[255, 255, 255, 180],
-                    stroked=True,
-                    line_width_min_pixels=1,
-                    pickable=True,
-                    auto_highlight=True,
-                )
+                # Séparer les deux catégories
+                df_apres = df_geo[df_geo["timing"] == "apres"].copy() if not df_geo.empty else pd.DataFrame()
+                df_avant = df_geo[df_geo["timing"] == "avant"].copy() if not df_geo.empty else pd.DataFrame()
 
-                # Labels stations lavage
-                layer_stations_text = pdk.Layer(
-                    "TextLayer",
-                    data=df_geo,
-                    get_position="[lon, lat]",
-                    get_text="nom",
-                    get_size=12,
-                    get_color=[220, 235, 255, 220],
-                    get_anchor="middle",
-                    get_alignment_baseline="'bottom'",
-                    get_pixel_offset=[0, -10],
-                )
+                layers = []
 
-                layers = [layer_stations, layer_stations_text]
+                # Layer lavages APRÈS déchargement (bleu)
+                if not df_apres.empty:
+                    layers.append(pdk.Layer(
+                        "ScatterplotLayer", data=df_apres,
+                        get_position="[lon, lat]", get_radius=5000,
+                        get_fill_color=[74, 144, 217, 220],
+                        get_line_color=[255, 255, 255, 180],
+                        stroked=True, line_width_min_pixels=1,
+                        pickable=True, auto_highlight=True,
+                    ))
+                    layers.append(pdk.Layer(
+                        "TextLayer", data=df_apres,
+                        get_position="[lon, lat]", get_text="nom",
+                        get_size=12, get_color=[180, 220, 255, 220],
+                        get_anchor="middle", get_alignment_baseline="'bottom'",
+                        get_pixel_offset=[0, -10],
+                    ))
+
+                # Layer lavages AVANT déchargement (vert)
+                if not df_avant.empty:
+                    layers.append(pdk.Layer(
+                        "ScatterplotLayer", data=df_avant,
+                        get_position="[lon, lat]", get_radius=5000,
+                        get_fill_color=[46, 184, 92, 220],
+                        get_line_color=[255, 255, 255, 180],
+                        stroked=True, line_width_min_pixels=1,
+                        pickable=True, auto_highlight=True,
+                    ))
+                    layers.append(pdk.Layer(
+                        "TextLayer", data=df_avant,
+                        get_position="[lon, lat]", get_text="nom",
+                        get_size=12, get_color=[160, 255, 180, 220],
+                        get_anchor="middle", get_alignment_baseline="'bottom'",
+                        get_pixel_offset=[0, -10],
+                    ))
 
                 # Layer point déchargement (rouge vif + contour blanc + label)
                 if dest_coords:
@@ -566,7 +618,9 @@ with tab_carte:
                 # Légende
                 st.markdown("""
                 <small>
-                🔵 Stations de lavage &nbsp;|&nbsp; 🔴 Localité de déchargement
+                🔵 Lavage après déchargement &nbsp;|&nbsp;
+                🟢 Lavage avant déchargement (en transit) &nbsp;|&nbsp;
+                🔴 Localité de déchargement
                 </small>
                 """, unsafe_allow_html=True)
 
