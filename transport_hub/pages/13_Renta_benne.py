@@ -387,26 +387,28 @@ def compute_km_benne(df, progress_cb=None):
         if coords is None and (ville or cp):
             st.warning(f"⚠️ Géocodage échoué : **{label}** ({pays})")
 
-    # 2. Km chargés
-    km_charges = []
-    for i, row in df.iterrows():
-        key_ch = (str(row.get("ville_charg",    "") or "").strip(),
-                  str(row.get("cp_charg_num",   "") or "").strip(),
-                  str(row.get("pays_charg",     "") or "").upper())
-        key_de = (str(row.get("ville_decharg",  "") or "").strip(),
-                  str(row.get("cp_decharg_num", "") or "").strip(),
-                  str(row.get("pays_decharg",   "") or "").upper())
-        if progress_cb:
-            pct = (total_geo + i) / (total_geo + len(df) * 2)
-            progress_cb(
-                f"📍 Km chargé {i+1}/{len(df)} : "
-                f"{row.get('ville_charg','?')} → {row.get('ville_decharg','?')}…", pct)
-        km_charges.append(calculate_route_km(points.get(key_ch), points.get(key_de)))
+    # 2. Km chargés — sur TOUTES les rotations (df complet, y compris sans date)
+    def _km_charges_for(df_src):
+        result = []
+        for i, row in df_src.iterrows():
+            key_ch = (str(row.get("ville_charg",    "") or "").strip(),
+                      str(row.get("cp_charg_num",   "") or "").strip(),
+                      str(row.get("pays_charg",     "") or "").upper())
+            key_de = (str(row.get("ville_decharg",  "") or "").strip(),
+                      str(row.get("cp_decharg_num", "") or "").strip(),
+                      str(row.get("pays_decharg",   "") or "").upper())
+            if progress_cb:
+                pct = (total_geo + len(result)) / (total_geo + len(df) * 2)
+                progress_cb(
+                    f"📍 Km chargé {len(result)+1}/{len(df_src)} : "
+                    f"{row.get('ville_charg','?')} → {row.get('ville_decharg','?')}…", pct)
+            result.append(calculate_route_km(points.get(key_ch), points.get(key_de)))
+        return result
 
-    df["km_charge"] = km_charges
+    df_valid["km_charge"]   = _km_charges_for(df_valid)
+    df_no_date["km_charge"] = _km_charges_for(df_no_date) if not df_no_date.empty else []
 
     # 3. Km à vide — uniquement sur les rotations avec date valide (ordre chronologique garanti)
-    # On travaille sur df_valid ; on réinjectera les km_vide dans df complet après
     km_vides_valid = [None] * len(df_valid)
     vide_detail    = []
 
