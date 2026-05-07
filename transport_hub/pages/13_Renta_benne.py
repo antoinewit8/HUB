@@ -246,8 +246,28 @@ def parse_benne(file):
 
     df = df[df["dossier"] != ""].reset_index(drop=True)
 
-    df["date_charg_dt"]   = pd.to_datetime(df["date_charg"],   dayfirst=False, errors="coerce")
-    df["date_decharg_dt"] = pd.to_datetime(df["date_decharg"], dayfirst=False, errors="coerce")
+    import datetime as _dt
+
+    def _parse_date(s):
+        """
+        Parse les dates benne : ISO '2026-04-01 00:00:00', FR '20/04/2026'.
+        Dates < 2000 = cellule vide/corrompue (numéro série Excel) -> NaT.
+        """
+        s = str(s or "").strip()
+        if not s or s.lower() == "nan":
+            return pd.NaT
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
+            try:
+                d = _dt.datetime.strptime(s, fmt)
+                if d.year < 2000:
+                    return pd.NaT
+                return pd.Timestamp(d)
+            except Exception:
+                pass
+        return pd.NaT
+
+    df["date_charg_dt"]   = df["date_charg"].apply(_parse_date)
+    df["date_decharg_dt"] = df["date_decharg"].apply(_parse_date)
 
     # Parse "F 91270" → (pays, cp_num)
     df[["pays_charg",  "cp_charg_num"]]  = df["cp_charg"].apply(
@@ -330,9 +350,21 @@ def join_ca(df_benne, ca_dict):
 # ══════════════════════════════════════════════════════════════════
 
 def compute_km_benne(df, progress_cb=None):
-    df = df.copy().sort_values("date_charg_dt").reset_index(drop=True)
+    df = df.copy().sort_values("date_charg_dt", na_position="last").reset_index(drop=True)
 
-    # 1. Géocodage points uniques
+    # Lignes sans date valide : km chargé calculé quand même, mais EXCLUES des km à vide
+    # (une rotation sans date ne peut pas être placée chronologiquement → trajet à vide incalculable)
+    df_valid   = df[df["date_charg_dt"].notna()].copy().reset_index(drop=True)
+    df_no_date = df[df["date_charg_dt"].isna()].copy()
+
+    if not df_no_date.empty:
+        dossiers_nd = df_no_date["dossier"].tolist()
+        st.warning(
+            f"⚠️ **{len(df_no_date)} rotation(s) sans date valide** — km à vide non calculé pour : "
+            f"`{dossiers_nd}`. Vérifiez la cellule date dans le fichier source."
+        )
+
+    # 1. Géocodage points uniques (sur TOUTES les rotations y compris sans date)
     points = {}
     for _, row in df.iterrows():
         for prefix in ("charg", "decharg"):
@@ -373,39 +405,44 @@ def compute_km_benne(df, progress_cb=None):
 
     df["km_charge"] = km_charges
 
-    # 3. Km à vide entre rotations consécutives
-    km_vides    = [None] * len(df)
-    vide_detail = []
+    # 3. Km à vide — uniquement sur les rotations avec date valide (ordre chronologique garanti)
+    # On travaille sur df_valid ; on réinjectera les km_vide dans df complet après
+    km_vides_valid = [None] * len(df_valid)
+    vide_detail    = []
 
-    for i in range(len(df) - 1):
-        key_de = (str(df.at[i,   "ville_decharg"]  or "").strip(),
-                  str(df.at[i,   "cp_decharg_num"] or "").strip(),
-                  str(df.at[i,   "pays_decharg"]   or "").upper())
-        key_ch_next = (str(df.at[i+1, "ville_charg"]    or "").strip(),
-                       str(df.at[i+1, "cp_charg_num"]   or "").strip(),
-                       str(df.at[i+1, "pays_charg"]     or "").upper())
+    for i in range(len(df_valid) - 1):
+        key_de = (str(df_valid.at[i,   "ville_decharg"]  or "").strip(),
+                  str(df_valid.at[i,   "cp_decharg_num"] or "").strip(),
+                  str(df_valid.at[i,   "pays_decharg"]   or "").upper())
+        key_ch_next = (str(df_valid.at[i+1, "ville_charg"]    or "").strip(),
+                       str(df_valid.at[i+1, "cp_charg_num"]   or "").strip(),
+                       str(df_valid.at[i+1, "pays_charg"]     or "").upper())
         if progress_cb:
             pct = (total_geo + len(df) + i) / (total_geo + len(df) * 2)
             progress_cb(
-                f"⚡ Km à vide {i+1}/{len(df)-1} : "
-                f"{df.at[i, 'ville_decharg']} → {df.at[i+1, 'ville_charg']}…", pct)
+                f"⚡ Km à vide {i+1}/{len(df_valid)-1} : "
+                f"{df_valid.at[i, 'ville_decharg']} → {df_valid.at[i+1, 'ville_charg']}…", pct)
         km_v = calculate_route_km(points.get(key_de), points.get(key_ch_next))
-        km_vides[i] = km_v
+        km_vides_valid[i] = km_v
         vide_detail.append({
             "rotation_depart":  i + 1,
             "rotation_arrivee": i + 2,
-            "dossier_depart":   df.at[i,   "dossier"],
-            "dossier_arrivee":  df.at[i+1, "dossier"],
-            "ville_depart":     df.at[i,   "ville_decharg"],
-            "cp_depart":        df.at[i,   "cp_decharg"],
-            "ville_arrivee":    df.at[i+1, "ville_charg"],
-            "cp_arrivee":       df.at[i+1, "cp_charg"],
-            "date_depart":      df.at[i,   "date_decharg_dt"],
-            "date_arrivee":     df.at[i+1, "date_charg_dt"],
+            "dossier_depart":   df_valid.at[i,   "dossier"],
+            "dossier_arrivee":  df_valid.at[i+1, "dossier"],
+            "ville_depart":     df_valid.at[i,   "ville_decharg"],
+            "cp_depart":        df_valid.at[i,   "cp_decharg"],
+            "ville_arrivee":    df_valid.at[i+1, "ville_charg"],
+            "cp_arrivee":       df_valid.at[i+1, "cp_charg"],
+            "date_depart":      df_valid.at[i,   "date_decharg_dt"],
+            "date_arrivee":     df_valid.at[i+1, "date_charg_dt"],
             "km_vide":          km_v,
         })
 
-    df["km_vide"]    = km_vides
+    df_valid["km_vide"] = km_vides_valid
+
+    # Réassembler : rotations sans date → km_vide = None
+    df = pd.concat([df_valid, df_no_date], ignore_index=True)
+
     df["km_complet"] = df["km_charge"].fillna(0) + df["km_vide"].fillna(0)
     df["renta_km"]   = (df["total_ventes"] / df["km_complet"].replace(0, np.nan)).round(3)
 
