@@ -558,8 +558,8 @@ def _style_sheet(ws, nb_rows):
 #  INTERFACE STREAMLIT
 # ══════════════════════════════════════════════════════════════════
 
-st.set_page_config(page_title="Rentabilité Benne", page_icon="🪣", layout="wide")
-st.title("🪣 Rentabilité Benne")
+st.set_page_config(page_title="Rentabilité Benne", page_icon="🚛", layout="wide")
+st.title("🚛 Rentabilité Benne")
 st.caption("Rotations benne : CA (Total Ventes), km chargés, km à vide, rentabilité €/km.")
 
 if not PTV_API_KEY or PTV_API_KEY == "METS_TA_CLE_ICI":
@@ -570,7 +570,7 @@ st.divider()
 # ── Upload ──
 col_up1, col_up2 = st.columns(2)
 with col_up1:
-    st.markdown("#### 🪣 Fichier Benne")
+    st.markdown("#### 🚛 Fichier Benne")
     st.caption("Colonnes : Dossier · Date charg. · C.P. charg. · Localité charg. · "
                "Date Décharg. · C.P. Déharg. · Localité Décharg.")
     file_benne = st.file_uploader("Export benne (.xlsx)", type=["xlsx"], key="benne")
