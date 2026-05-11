@@ -323,4 +323,4 @@ for i, (label, path) in enumerate(tools):
         try:
             st.page_link(path, label=label, use_container_width=True)
         except Exception:
-            pass
+            passs
