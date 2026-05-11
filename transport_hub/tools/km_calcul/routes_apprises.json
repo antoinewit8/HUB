@@ -1,0 +1,13 @@
+[
+  {
+    "origine": "TARASCON, 13150, France",
+    "destination": "BAD FALLINGBOSTEL, 29683, Germany",
+    "waypoints": [
+      "49.133280, 6.176332"
+    ],
+    "km_reference": 1333.2,
+    "source": "carte_manuelle",
+    "date": "2026-05-11",
+    "confiance": 1
+  }
+]
