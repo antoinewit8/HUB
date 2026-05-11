@@ -84,10 +84,10 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
     flex-shrink: 0;
 }
 .cb-logo img {
-    height: 110px;
+    height: 220px;
     width: auto;
     display: block;
-    border-radius: 12px;
+    border-radius: 14px;
 }
 .cb-hero-live {
     display: flex;
@@ -179,7 +179,7 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
     gap: 0.5rem;
     border-right: 1px solid rgba(255,255,255,0.05);
     border-bottom: 1px solid rgba(255,255,255,0.05);
-    min-height: 200px;
+    min-height: 280px;
 }
 .cb-tool-card:last-child { border-right: none; }
 .cb-tool-card:hover { background: #0f1e30; }
@@ -232,10 +232,10 @@ with st.sidebar:
     st.divider()
     st.markdown('<p style="color:#2a3a4d;font-size:0.62rem;letter-spacing:3px;text-transform:uppercase;padding:0 0 0.5rem;font-weight:700;">Navigation</p>', unsafe_allow_html=True)
     nav_pages = [
-        ("Analyse TX-FLEX", "pages/1___Analyse_TX_FLEX.py"),
-        ("Calcul KM",       "pages/2____Calcul_KM.py"),
-        ("Carte Manuelle",  "pages/3____Carte_Manuelle.py"),
-        ("Prix Gasoil",     "pages/5___Prix_Gasoil.py"),
+        ("Analyse TX-FLEX", "transport_hub/1___Analyse_TX_FLEX.py"),
+        ("Calcul KM",       "transport_hub/2____Calcul_KM.py"),
+        ("Carte Manuelle",  "transport_hub/3____Carte_Manuelle.py"),
+        ("Prix Gasoil",     "transport_hub/5___Prix_Gasoil.py"),
     ]
     for nav_label, nav_path in nav_pages:
         try:
@@ -276,10 +276,10 @@ st.markdown(
 
 # === GRILLE OUTILS ===
 tools = [
-    ("Analyse TX-FLEX", "Analyse de flotte, performance et rentabilite transport",  "pages/1___Analyse_TX_FLEX.py"),
-    ("Calcul KM",       "Distances PTV et optimisation des itineraires",            "pages/2____Calcul_KM.py"),
-    ("Carte Manuelle",  "Visualisation interactive des trajets sur carte",          "pages/3____Carte_Manuelle.py"),
-    ("Prix Gasoil",     "Suivi des prix carburant et tendances",                    "pages/5___Prix_Gasoil.py"),
+    ("Analyse TX-FLEX", "Analyse de flotte, performance et rentabilite transport",  "transport_hub/1___Analyse_TX_FLEX.py"),
+    ("Calcul KM",       "Distances PTV et optimisation des itineraires",            "transport_hub/2____Calcul_KM.py"),
+    ("Carte Manuelle",  "Visualisation interactive des trajets sur carte",          "transport_hub/3____Carte_Manuelle.py"),
+    ("Prix Gasoil",     "Suivi des prix carburant et tendances",                    "transport_hub/5___Prix_Gasoil.py"),
 ]
 
 cards_html = ""
@@ -303,11 +303,11 @@ st.markdown(
 # Boutons Streamlit invisibles superposés aux cards pour la navigation
 st.markdown("""
 <style>
-.cb-nav-overlay { margin-top: -204px; position: relative; z-index: 20; padding: 0 3rem; }
+.cb-nav-overlay { margin-top: -284px; position: relative; z-index: 20; padding: 0 3rem; }
 .cb-nav-overlay .stButton > button {
     width: 100% !important;
-    height: 200px !important;
-    min-height: 200px !important;
+    height: 280px !important;
+    min-height: 280px !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
