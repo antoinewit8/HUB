@@ -51,8 +51,8 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
 .cb-hero-wrap {
     position: relative;
     width: 100%;
-    height: 100vh;
-    min-height: 640px;
+    height: 55vh;
+    min-height: 400px; 
     overflow: hidden;
     display: flex;
     flex-direction: column;
