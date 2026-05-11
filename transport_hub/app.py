@@ -326,11 +326,9 @@ st.markdown(f"""
 # BLOC 5 : Liens de navigation Streamlit (sous la grille)
 # ============================================================
 cols = st.columns(4)
-# CORRECTION : On déballe 3 éléments : label, desc, path
 for i, (label, desc, path) in enumerate(tools):
     with cols[i]:
         try:
             st.page_link(path, label=label, use_container_width=True)
         except Exception:
-            pass # CORRECTION : 'pass' au lieu de 'passs'
-            passs
+            pass
