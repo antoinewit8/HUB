@@ -51,8 +51,10 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
 .cb-hero-wrap {
     position: relative;
     width: 100%;
-    height: 100vh;
-    min-height: 640px;
+    /* CORRECTION : On passe de 100vh à 55vh pour ne prendre que la moitié de l'écran */
+    height: 55vh; 
+    /* CORRECTION : On réduit la hauteur minimale */
+    min-height: 400px; 
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -169,19 +171,22 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
 }
 .cb-tool-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    /* CORRECTION : On passe minmax à 260px (au lieu de 220px) pour des cases plus larges */
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); 
     border: 1px solid rgba(255,255,255,0.07);
     border-radius: 12px;
     overflow: hidden;
 }
+
 .cb-tool-card {
     background: #0b1420;
-    padding: 1.8rem 2rem 1.6rem;
+    /* CORRECTION : On augmente le padding (espacement interne) pour des cases plus hautes */
+    padding: 2.5rem 2rem 2.5rem; 
     cursor: pointer;
     transition: background 0.18s ease;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.6rem; /* Un peu plus d'espace entre le titre et la description */
     border-right: 1px solid rgba(255,255,255,0.05);
     border-bottom: 1px solid rgba(255,255,255,0.05);
 }
@@ -189,15 +194,18 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
 .cb-tool-card:hover { background: #0f1e30; }
 .cb-tool-name {
     font-family: 'Barlow Condensed', sans-serif;
-    font-size: 1.35rem;
+    /* CORRECTION : On augmente la taille de la police du titre des options */
+    font-size: 1.6rem; 
     font-weight: 700;
     color: #e8f0fb;
     margin: 0;
 }
+
 .cb-tool-desc {
-    font-size: 0.82rem;
+    /* CORRECTION : On augmente légèrement la description */
+    font-size: 0.95rem; 
     font-weight: 400;
-    color: rgba(255,255,255,0.28);
+    color: rgba(255,255,255,0.4); /* Légèrement plus lisible */
     line-height: 1.55;
     margin: 0;
 }
@@ -318,9 +326,11 @@ st.markdown(f"""
 # BLOC 5 : Liens de navigation Streamlit (sous la grille)
 # ============================================================
 cols = st.columns(4)
-for i, (label, path) in enumerate(tools):
+# CORRECTION : On déballe 3 éléments : label, desc, path
+for i, (label, desc, path) in enumerate(tools):
     with cols[i]:
         try:
             st.page_link(path, label=label, use_container_width=True)
         except Exception:
+            pass # CORRECTION : 'pass' au lieu de 'passs'
             passs
