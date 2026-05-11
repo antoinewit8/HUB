@@ -29,39 +29,39 @@ TRUCK_B64 = "/9j/4AAQSkZJRgABAQEAYABgAAD//gA7Q1JFQVRPUjogZ2QtanBlZyB2MS4wICh1c2l
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Barlow:wght@300;400;500;600;700&family=Barlow+Condensed:wght@400;600;700;800&display=swap');
 
 * { box-sizing: border-box; }
 
-.stApp { background: #0a0e14; font-family: 'Barlow', sans-serif; }
+.stApp { background: #060b12; font-family: 'Barlow', sans-serif; }
 .stDeployButton, #MainMenu, footer, header, .stToolbar { display: none !important; }
 
 section[data-testid="stSidebar"] {
-    background: #0d1219 !important;
-    border-right: 1px solid rgba(255,255,255,0.06) !important;
+    background: #080e17 !important;
+    border-right: 1px solid rgba(255,255,255,0.05) !important;
 }
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] label { color: #8898aa !important; }
 
 .block-container { padding: 0 !important; max-width: 100% !important; }
 
+/* HERO */
 .cb-hero-wrap {
     position: relative;
     width: 100%;
     height: 100vh;
-    min-height: 600px;
+    min-height: 640px;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
-    overflow: hidden;
 }
 .cb-hero-bg {
     position: absolute;
     inset: 0;
     background-size: cover;
     background-position: center 42%;
-    filter: blur(5px) brightness(0.28) saturate(0.7);
-    transform: scale(1.06);
+    filter: blur(6px) brightness(0.22) saturate(0.6);
+    transform: scale(1.08);
     z-index: 0;
 }
 .cb-hero-overlay {
@@ -69,123 +69,168 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
     inset: 0;
     background: linear-gradient(
         180deg,
-        rgba(10,14,20,0.3) 0%,
-        rgba(10,14,20,0.15) 35%,
-        rgba(10,14,20,0.72) 70%,
-        rgba(10,14,20,1.0) 100%
+        rgba(6,11,18,0.55) 0%,
+        rgba(6,11,18,0.25) 30%,
+        rgba(6,11,18,0.35) 60%,
+        rgba(6,11,18,0.92) 88%,
+        rgba(6,11,18,1.0)  100%
     );
     z-index: 1;
 }
-.cb-hero-top {
+
+/* Logo top-left */
+.cb-hero-topbar {
     position: relative;
-    z-index: 2;
-    padding: 2.2rem 3rem 0;
+    z-index: 3;
+    padding: 2rem 2.8rem 0;
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-shrink: 0;
 }
 .cb-logo img {
-    height: 66px;
+    height: 64px;
     width: auto;
     display: block;
-    border-radius: 10px;
+    border-radius: 9px;
 }
-.cb-hero-status {
+.cb-hero-live {
+    display: flex;
+    align-items: center;
+    gap: 7px;
     font-family: 'Barlow Condensed', sans-serif;
     font-size: 0.7rem;
     font-weight: 600;
-    letter-spacing: 2px;
+    letter-spacing: 2.5px;
     text-transform: uppercase;
-    color: #2d4a70;
+    color: rgba(255,255,255,0.25);
 }
-.cb-hero-bottom {
+.cb-live-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #2ecc71;
+    box-shadow: 0 0 6px #2ecc71;
+    animation: blink 2.2s ease-in-out infinite;
+}
+@keyframes blink {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* Center block */
+.cb-hero-center {
     position: relative;
-    z-index: 2;
-    padding: 0 3rem 3.5rem;
+    z-index: 3;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 0 2rem;
 }
 .cb-hero-eyebrow {
     font-family: 'Barlow Condensed', sans-serif;
-    font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 3.5px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 5px;
     text-transform: uppercase;
-    color: #3d5a80;
-    margin-bottom: 0.7rem;
+    color: rgba(255,255,255,0.38);
+    margin-bottom: 1rem;
 }
 .cb-hero-title {
     font-family: 'Barlow Condensed', sans-serif;
-    font-size: clamp(3rem, 6vw, 5rem);
-    font-weight: 700;
-    line-height: 0.95;
-    color: #eaf0fa;
-    letter-spacing: -1px;
-    margin-bottom: 0.9rem;
+    font-size: clamp(4.5rem, 9vw, 8rem);
+    font-weight: 800;
+    line-height: 0.88;
+    color: #ffffff;
+    letter-spacing: -2px;
+    margin-bottom: 1.4rem;
+    text-shadow: 0 2px 40px rgba(0,0,0,0.8);
 }
 .cb-hero-sub {
-    font-size: 0.95rem;
+    font-size: 1.0rem;
     font-weight: 300;
-    color: #4e6480;
-    letter-spacing: 0.3px;
+    color: rgba(255,255,255,0.5);
+    letter-spacing: 0.4px;
+    max-width: 440px;
+    line-height: 1.6;
 }
+
+/* TOOLS SECTION */
 .cb-tools-section {
-    background: #0a0e14;
-    padding: 2.5rem 3rem 5rem;
+    background: #060b12;
+    padding: 2.8rem 3rem 5rem;
 }
 .cb-tools-label {
     font-family: 'Barlow Condensed', sans-serif;
-    font-size: 0.68rem;
-    font-weight: 600;
-    letter-spacing: 4px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 4.5px;
     text-transform: uppercase;
-    color: #2a3a4d;
-    margin-bottom: 1.2rem;
+    color: rgba(255,255,255,0.18);
+    margin-bottom: 1.4rem;
 }
 .cb-tool-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-    border: 1px solid rgba(255,255,255,0.05);
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    border: 1px solid rgba(255,255,255,0.06);
     border-radius: 12px;
     overflow: hidden;
 }
 .cb-tool-card {
-    background: #0d1219;
-    padding: 1.8rem 1.8rem 1.6rem;
+    background: #0b1420;
+    padding: 1.8rem 2rem 1.6rem;
     cursor: pointer;
     transition: background 0.18s ease;
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    border-right: 1px solid rgba(255,255,255,0.04);
-    border-bottom: 1px solid rgba(255,255,255,0.04);
-    text-decoration: none;
+    gap: 0.4rem;
+    border-right: 1px solid rgba(255,255,255,0.05);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    text-decoration: none !important;
 }
 .cb-tool-card:last-child { border-right: none; }
-.cb-tool-card:hover { background: #121b26; }
+.cb-tool-card:hover { background: #0f1e30; }
 .cb-tool-name {
     font-family: 'Barlow Condensed', sans-serif;
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #ccdaf0;
-    letter-spacing: 0.3px;
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: #e8f0fb;
+    letter-spacing: 0.2px;
     margin: 0;
 }
 .cb-tool-desc {
     font-size: 0.82rem;
     font-weight: 400;
-    color: #3d5470;
-    line-height: 1.5;
+    color: rgba(255,255,255,0.28);
+    line-height: 1.55;
     margin: 0;
 }
 .cb-tool-arrow {
-    margin-top: 1rem;
-    font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 2px;
+    margin-top: 1.2rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 2.5px;
     text-transform: uppercase;
-    color: #1e3450;
+    color: rgba(255,255,255,0.14);
     transition: color 0.18s;
 }
-.cb-tool-card:hover .cb-tool-arrow { color: #4e7aaa; }
+.cb-tool-card:hover .cb-tool-arrow { color: rgba(255,255,255,0.45); }
+
+/* page_link overrides */
+[data-testid="stPageLink"] a {
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    color: #b0c0d8 !important;
+    border-radius: 8px !important;
+    font-family: 'Barlow', sans-serif !important;
+    font-size: 0.88rem !important;
+    transition: background 0.18s !important;
+}
+[data-testid="stPageLink"] a:hover {
+    background: rgba(255,255,255,0.07) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -194,14 +239,14 @@ with st.sidebar:
     <div style="padding:1.2rem 0 0.8rem; display:flex; align-items:center; gap:0.8rem;">
         <img src="data:image/jpeg;base64,{LOGO_B64}" style="height:42px; border-radius:7px;" />
         <div>
-            <div style="font-size:0.65rem; color:#2a3a4d; letter-spacing:2.5px; text-transform:uppercase; font-family:'Barlow Condensed',sans-serif; font-weight:600;">Transport Hub</div>
-            <div style="font-size:0.72rem; color:#1e2d3d; font-family:'Barlow',sans-serif;">v{VERSION}</div>
+            <div style="font-size:0.62rem; color:#1e2e42; letter-spacing:2.5px; text-transform:uppercase; font-family:'Barlow Condensed',sans-serif; font-weight:700;">Transport Hub</div>
+            <div style="font-size:0.7rem; color:#141e2c; font-family:'Barlow',sans-serif;">v{VERSION}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.divider()
-    st.markdown('<p style="color:#2a3a4d; font-size:0.65rem; letter-spacing:3px; text-transform:uppercase; padding:0 0 0.4rem; font-family:Barlow,sans-serif;">Navigation</p>', unsafe_allow_html=True)
+    st.markdown('<p style="color:#1e2e42; font-size:0.62rem; letter-spacing:3px; text-transform:uppercase; padding:0 0 0.5rem; font-family:Barlow,sans-serif; font-weight:700;">Navigation</p>', unsafe_allow_html=True)
 
     nav_pages = [
         ("Analyse TX-FLEX",  "pages/1___Analyse_TX_FLEX.py"),
@@ -216,23 +261,28 @@ with st.sidebar:
             pass
 
     st.divider()
-    st.markdown(f'<p style="color:#1a2535; font-size:0.72rem;">{datetime.now().strftime("%A %d %B %Y")}</p>', unsafe_allow_html=True)
+    st.markdown(f'<p style="color:#111925; font-size:0.7rem;">{datetime.now().strftime("%A %d %B %Y")}</p>', unsafe_allow_html=True)
 
 st.markdown(f"""
 <style>.cb-hero-bg {{ background-image: url('data:image/jpeg;base64,{TRUCK_B64}'); }}</style>
 <div class="cb-hero-wrap">
     <div class="cb-hero-bg"></div>
     <div class="cb-hero-overlay"></div>
-    <div class="cb-hero-top">
+
+    <div class="cb-hero-topbar">
         <div class="cb-logo">
             <img src="data:image/jpeg;base64,{LOGO_B64}" alt="CB Groupe" />
         </div>
-        <div class="cb-hero-status">{datetime.now().strftime('%H:%M')} &nbsp;&middot;&nbsp; Systeme actif</div>
+        <div class="cb-hero-live">
+            <span class="cb-live-dot"></span>
+            {datetime.now().strftime('%H:%M')} &nbsp; Systeme actif
+        </div>
     </div>
-    <div class="cb-hero-bottom">
+
+    <div class="cb-hero-center">
         <p class="cb-hero-eyebrow">CB Groupe &mdash; Transport &amp; Logistique</p>
         <h1 class="cb-hero-title">Transport<br>Hub</h1>
-        <p class="cb-hero-sub">Outils internes de gestion et d'optimisation des transports</p>
+        <p class="cb-hero-sub">Outils internes de gestion<br>et d'optimisation des transports</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -246,7 +296,7 @@ tools = [
 
 cards = ""
 for name, desc, path in tools:
-    cards += f"""<div class="cb-tool-card" onclick="window.parent.location.href='/{path}'">
+    cards += f"""<div class="cb-tool-card">
         <p class="cb-tool-name">{name}</p>
         <p class="cb-tool-desc">{desc}</p>
         <div class="cb-tool-arrow">Ouvrir &rarr;</div>
