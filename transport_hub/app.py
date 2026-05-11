@@ -229,7 +229,7 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
 # ============================================================
 # BLOC 2 : background image (seul dans son propre st.markdown)
 # ============================================================
-st.markdown(f"""<style>.cb-hero-bg { background-image: url('data:image/jpeg;base64,{TRUCK_B64}'); }</style>""", unsafe_allow_html=True)
+st.markdown(f"""<style>.cb-hero-bg {{ background-image: url('data:image/jpeg;base64,{TRUCK_B64}'); }}</style>""", unsafe_allow_html=True)
 
 # ============================================================
 # SIDEBAR
