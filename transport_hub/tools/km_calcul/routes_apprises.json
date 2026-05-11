@@ -9,5 +9,16 @@
     "source": "carte_manuelle",
     "date": "2026-05-11",
     "confiance": 1
+  },
+  {
+    "origine": "TARASCON, 13150, France",
+    "destination": "HENNEF, 53773, Germany",
+    "waypoints": [
+      "47.808837, 5.234377"
+    ],
+    "km_reference": 1021.3,
+    "source": "carte_manuelle",
+    "date": "2026-05-11",
+    "confiance": 1
   }
 ]
