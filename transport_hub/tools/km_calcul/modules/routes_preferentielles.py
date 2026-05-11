@@ -4,13 +4,15 @@ import math
 import unicodedata
 import re
 import requests
+from modules.villes_jalons import detecter_villes_jalons
 
 # ==========================================
 # CONFIG
 # ==========================================
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-JSON_PATH  = os.path.join(BASE_DIR, "..", "routes_preferentielles.json")
-CACHE_PATH = os.path.join(BASE_DIR, "..", "cache_geocodage.json")
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+JSON_PATH     = os.path.join(BASE_DIR, "..", "routes_preferentielles.json")
+JSON_APPRISES = os.path.join(BASE_DIR, "..", "routes_apprises.json")
+CACHE_PATH    = os.path.join(BASE_DIR, "..", "cache_geocodage.json")
 
 PTV_API_KEY = os.environ.get("PTV_API_KEY", "")
 PTV_GEO_URL = "https://api.myptv.com/geocoding/v1/locations/by-text"
@@ -42,24 +44,38 @@ _geocache: dict = charger_cache()
 # ==========================================
 _routes_cache: list | None = None
 
+def _lire_json(path: str) -> list:
+    """Lit un fichier JSON de routes, retourne [] si absent ou corrompu."""
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"⚠️ Erreur lecture {os.path.basename(path)} : {e}")
+        return []
+
 def charger_routes() -> list:
+    """
+    Fusionne routes_preferentielles.json + routes_apprises.json.
+    Les routes apprises sont placées en tête (priorité sur les manuelles).
+    """
     global _routes_cache
     if _routes_cache is not None:
         return _routes_cache
 
-    path = os.path.abspath(JSON_PATH)
-    if not os.path.exists(path):
-        print(f"⚠️ routes_preferentielles.json introuvable : {path}")
-        _routes_cache = []
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            _routes_cache = json.load(f)
-            return _routes_cache
-    except json.JSONDecodeError as e:
-        print(f"⚠️ Erreur lecture JSON : {e}")
-        _routes_cache = []
-        return []
+    manuelles = _lire_json(JSON_PATH)
+    apprises  = _lire_json(JSON_APPRISES)
+
+    if apprises:
+        print(f"   📚 {len(apprises)} routes apprises chargées (+ {len(manuelles)} manuelles)")
+    else:
+        print(f"   📋 {len(manuelles)} routes manuelles chargées (pas encore de routes apprises)")
+
+    # Routes apprises en tête → matchées en priorité
+    _routes_cache = apprises + manuelles
+    return _routes_cache
 
 # ==========================================
 # NORMALISATION
@@ -100,9 +116,8 @@ def geocoder_ville(ville: str) -> tuple[float, float] | None:
             cp = parts[1].strip() if parts[1].strip().isdigit() else ""
             pays = parts[-1].strip() if len(parts) >= 3 else ""
 
-            # ── Recherche avec ville + CP pour ancrer le département ──
-            search_text = f"{city_name} {cp}" if cp else city_name
-            params = {"searchText": search_text}
+            # ── Recherche 1 : ville seule (plus fiable que ville+CP) ──
+            params = {"searchText": city_name}
 
             country_filter = ""
             if pays:
@@ -229,6 +244,8 @@ def geocoder_ville(ville: str) -> tuple[float, float] | None:
         return None
 
 
+
+
 # ==========================================
 # DISTANCE HAVERSINE
 # ==========================================
@@ -243,7 +260,7 @@ def haversine(lat1, lon1, lat2, lon2) -> float:
     return R * 2 * math.asin(math.sqrt(a))
 
 # ==========================================
-# FONCTION PRINCIPALE
+# FONCTION PRINCIPALE (remplace l'ancienne)
 # ==========================================
 def get_waypoints(origin: str, dest: str) -> list:
     routes = charger_routes()
@@ -254,7 +271,7 @@ def get_waypoints(origin: str, dest: str) -> list:
     norm_origin   = normalize(origin)
     norm_dest     = normalize(dest)
 
-    # ── 1. Chercher route manuelle (texte exact) ──
+        # ── 1. Chercher route manuelle (texte exact) ──
     for route in routes:
         origine_ref = route.get("origine", "")
         dest_ref    = route.get("destination", "")
@@ -283,6 +300,7 @@ def get_waypoints(origin: str, dest: str) -> list:
         mots_ref_o = set(norm_orig_ref.split())
         mots_ref_d = set(norm_dest_ref.split())
 
+        # Skip si aucun mot commun ni côté départ ni côté arrivée
         if not (mots_origin & mots_ref_o) and not (mots_dest & mots_ref_d):
             continue
 
@@ -318,24 +336,18 @@ def get_waypoints(origin: str, dest: str) -> list:
                   f"({len(waypoints)} waypoints)")
             return waypoints
 
-    # ── 3. Détection ciblée : Massif Central / Limousin → Nord/Ouest ──
-    # PTV prend systématiquement A75/A71/A10 (très cher) pour ces trajets.
-    # On injecte Poitiers pour le forcer sur les nationales gratuites (N145/N147).
+
+
+    # ── 2. Sinon : détection automatique villes-jalons ──
     if coords_origin and coords_dest:
-        lat_o, lon_o = coords_origin
-        lat_d, lon_d = coords_dest
+        print(f"   🔄 Pas de route manuelle → détection villes-jalons...")
+        jalons = detecter_villes_jalons(
+            coords_origin[0], coords_origin[1],
+            coords_dest[0], coords_dest[1]
+        )
+        if jalons:
+            print(f"   ✅ {len(jalons)} villes-jalons détectées automatiquement")
+            return jalons
 
-        def is_massif_limousin(lat, lon):
-            return 44.0 <= lat <= 46.5 and 1.0 <= lon <= 4.5
-
-        def is_nord_ouest(lat, lon):
-            return lat >= 47.0 and lon <= 1.0
-
-        if ((is_massif_limousin(lat_o, lon_o) and is_nord_ouest(lat_d, lon_d))
-                or (is_massif_limousin(lat_d, lon_d) and is_nord_ouest(lat_o, lon_o))):
-            print(f"   🛣️  Massif Central/Limousin ↔ Nord/Ouest détecté → waypoint Poitiers injecté")
-            return ["46.5800, 0.3400"]
-
-    # ── 4. Aucune route manuelle → PTV choisit le trajet ──
-    print(f"   📍 Pas de route manuelle → PTV choisit le trajet")
+    print(f"   📍 Aucune route préférentielle → PTV choisit le trajet")
     return []
