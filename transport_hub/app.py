@@ -84,10 +84,10 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
     flex-shrink: 0;
 }
 .cb-logo img {
-    height: 64px;
+    height: 110px;
     width: auto;
     display: block;
-    border-radius: 9px;
+    border-radius: 12px;
 }
 .cb-hero-live {
     display: flex;
@@ -171,14 +171,15 @@ section[data-testid="stSidebar"] label { color: #8898aa !important; }
 }
 .cb-tool-card {
     background: #0b1420;
-    padding: 1.8rem 2rem 1.6rem;
+    padding: 2.8rem 2.2rem 2.4rem;
     cursor: pointer;
     transition: background 0.18s ease;
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.5rem;
     border-right: 1px solid rgba(255,255,255,0.05);
     border-bottom: 1px solid rgba(255,255,255,0.05);
+    min-height: 200px;
 }
 .cb-tool-card:last-child { border-right: none; }
 .cb-tool-card:hover { background: #0f1e30; }
@@ -299,11 +300,28 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Liens Streamlit natifs sous la grille
+# Boutons Streamlit invisibles superposés aux cards pour la navigation
+st.markdown("""
+<style>
+.cb-nav-overlay { margin-top: -204px; position: relative; z-index: 20; padding: 0 3rem; }
+.cb-nav-overlay .stButton > button {
+    width: 100% !important;
+    height: 200px !important;
+    min-height: 200px !important;
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    cursor: pointer !important;
+    opacity: 0 !important;
+    padding: 0 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="cb-nav-overlay">', unsafe_allow_html=True)
 nav_cols = st.columns(4)
 for idx, (t_name, t_desc, t_path) in enumerate(tools):
     with nav_cols[idx]:
-        try:
-            st.page_link(t_path, label=t_name, use_container_width=True)
-        except Exception:
-            pass
+        if st.button(t_name, key=f"nav_{idx}", use_container_width=True):
+            st.switch_page(t_path)
+st.markdown('</div>', unsafe_allow_html=True)
