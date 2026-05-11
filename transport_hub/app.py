@@ -232,10 +232,10 @@ with st.sidebar:
     st.divider()
     st.markdown('<p style="color:#2a3a4d;font-size:0.62rem;letter-spacing:3px;text-transform:uppercase;padding:0 0 0.5rem;font-weight:700;">Navigation</p>', unsafe_allow_html=True)
     nav_pages = [
-        ("Analyse TX-FLEX", "transport_hub/1___Analyse_TX_FLEX.py"),
-        ("Calcul KM",       "transport_hub/2____Calcul_KM.py"),
-        ("Carte Manuelle",  "transport_hub/3____Carte_Manuelle.py"),
-        ("Prix Gasoil",     "transport_hub/5___Prix_Gasoil.py"),
+        ("Analyse TX-FLEX", os.path.join(_here, "1___Analyse_TX_FLEX.py")),
+        ("Calcul KM",       os.path.join(_here, "2____Calcul_KM.py")),
+        ("Carte Manuelle",  os.path.join(_here, "3____Carte_Manuelle.py")),
+        ("Prix Gasoil",     os.path.join(_here, "5___Prix_Gasoil.py")),
     ]
     for nav_label, nav_path in nav_pages:
         try:
@@ -275,11 +275,14 @@ st.markdown(
 )
 
 # === GRILLE OUTILS ===
+# Build page paths dynamically relative to this script
+_here = os.path.dirname(os.path.abspath(__file__))
+
 tools = [
-    ("Analyse TX-FLEX", "Analyse de flotte, performance et rentabilite transport",  "transport_hub/1___Analyse_TX_FLEX.py"),
-    ("Calcul KM",       "Distances PTV et optimisation des itineraires",            "transport_hub/2____Calcul_KM.py"),
-    ("Carte Manuelle",  "Visualisation interactive des trajets sur carte",          "transport_hub/3____Carte_Manuelle.py"),
-    ("Prix Gasoil",     "Suivi des prix carburant et tendances",                    "transport_hub/5___Prix_Gasoil.py"),
+    ("Analyse TX-FLEX", "Analyse de flotte, performance et rentabilite transport",  os.path.join(_here, "1___Analyse_TX_FLEX.py")),
+    ("Calcul KM",       "Distances PTV et optimisation des itineraires",            os.path.join(_here, "2____Calcul_KM.py")),
+    ("Carte Manuelle",  "Visualisation interactive des trajets sur carte",          os.path.join(_here, "3____Carte_Manuelle.py")),
+    ("Prix Gasoil",     "Suivi des prix carburant et tendances",                    os.path.join(_here, "5___Prix_Gasoil.py")),
 ]
 
 cards_html = ""
