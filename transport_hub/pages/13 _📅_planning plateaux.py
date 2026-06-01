@@ -733,25 +733,6 @@ if dfx.empty:
 n_charg = int((dfx["type"] == "C").sum())
 n_dech  = int((dfx["type"] == "D").sum())
 n_tra   = int(dfx["is_tra"].sum())
-pct_tra = (n_tra / len(dfx) * 100) if len(dfx) else 0
-kpis = [
-    (f"{dfx['dossier'].nunique():,}", "Dossiers"),
-    (f"{n_charg:,}", "Chargements"),
-    (f"{n_dech:,}", "Déchargements"),
-    (f"{dfx['chauffeur'].replace('', np.nan).nunique():,}", "Chauffeurs"),
-    (f"{dfx['immat'].replace('', np.nan).nunique():,}", "Tracteurs"),
-    (f"{dfx['remorque'].replace('', np.nan).nunique():,}", "Remorques"),
-]
-cards = "".join(f'<div class="kpi"><div class="v">{v}</div><div class="l">{l}</div></div>' for v, l in kpis)
-cards += f'<div class="kpi tra"><div class="v">{pct_tra:.0f}%</div><div class="l">Tractionnaires</div></div>'
-st.markdown(f'<div class="kgrid">{cards}</div>', unsafe_allow_html=True)
-
-st.markdown(
-    '<div class="legendline">Légende : <b class="c">●</b> chargement &nbsp; '
-    '<b class="d">●</b> déchargement &nbsp; <b class="x">●</b> regroupement géo &nbsp;·&nbsp; '
-    'badge <span class="tag tra" style="padding:1px 6px">TRA</span> = tractionnaire, '
-    '<span class="tag cb" style="padding:1px 6px">CB</span> = flotte CB</div>',
-    unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════════════════
 # ─── CARTE (EN HAUT, AFFICHAGE DIRECT) ───────────────────────────────────────
