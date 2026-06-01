@@ -925,6 +925,32 @@ with st.expander("Afficher la carte (géocodage à la demande)", expanded=False)
     if dmap.empty:
         st.info("Aucune activité pour ces filtres carte.")
     else:
+        # ── Contrôles d'affichage de la carte ───────────────────────────────
+        oc1, oc2, oc3 = st.columns([1.3, 1, 1.6])
+        with oc1:
+            show_mode = st.radio("Afficher", ["Les deux", "Chargements", "Déchargements"],
+                                 horizontal=True)
+        with oc2:
+            show_arcs = st.checkbox("Relier les points (arcs)", value=True)
+        with oc3:
+            loc_opts = sorted({l for l in dmap["localite"] if str(l).strip()})
+            focus_choice = st.selectbox("🔎 Isoler un point (n'afficher que ses liaisons)",
+                                        ["— tout afficher"] + loc_opts)
+
+        # Sélection par clic sur la carte (si la version de Streamlit le gère)
+        clicked_norm = None
+        try:
+            _state = st.session_state.get("planmap")
+            if _state and "selection" in _state:
+                _objs = _state["selection"]["objects"]
+                _pts = _objs.get("pts") if isinstance(_objs, dict) else None
+                if _pts:
+                    clicked_norm = _pts[0].get("loc_norm")
+        except Exception:
+            clicked_norm = None
+
+        focus_norm = clicked_norm or (normalize(focus_choice) if focus_choice != "— tout afficher" else None)
+
         # ── Agrégat par lieu + type : nb de camions = nb de dossiers distincts ──
         agg = (dmap.assign(loc_norm=dmap["localite"].apply(normalize))
                    .groupby(["loc_norm", "type"])
@@ -946,24 +972,47 @@ with st.expander("Afficher la carte (géocodage à la demande)", expanded=False)
                 if c:
                     n = int(row["camions"])
                     points.append({
-                        "nom": row["localite"], "label": str(n), "camions": n,
-                        "typ": "Chargement" if row["type"] == "C" else "Déchargement",
+                        "nom": row["localite"], "loc_norm": row["loc_norm"], "label": str(n),
+                        "camions": n, "typ": "Chargement" if row["type"] == "C" else "Déchargement",
                         "pays": row["pays"], "dossiers": row["dossiers"],
                         "lat": c[0], "lon": c[1],
-                        "radius": 900 + (n ** 0.5) * 1150,      # surface ∝ nb camions
+                        "radius": 900 + (n ** 0.5) * 1150,
                         "color": [74, 191, 106, 215] if row["type"] == "C" else [74, 138, 191, 215],
                     })
 
-        # ── Arcs charg → déch par dossier (sur le périmètre carte) ──────────────
+        # ── Arcs charg → déch par dossier (avec lieux pour l'isolation) ─────────
         arcs = []
         for dos in dmap["dossier"].unique():
             lg = legs.get(dos, {})
-            ck = (normalize(lg.get("c_loc", "")), lg.get("c_cp", ""), lg.get("c_pays", ""))
-            dk = (normalize(lg.get("d_loc", "")), lg.get("d_cp", ""), lg.get("d_pays", ""))
+            cn, dn = normalize(lg.get("c_loc", "")), normalize(lg.get("d_loc", ""))
+            ck, dk = (cn, lg.get("c_cp", ""), lg.get("c_pays", "")), (dn, lg.get("d_cp", ""), lg.get("d_pays", ""))
             cc = coords_cache.get(ck) or (geocode_cached(lg.get("c_loc", ""), lg.get("c_cp", ""), lg.get("c_pays", "")) if lg.get("c_loc") else None)
             dc = coords_cache.get(dk) or (geocode_cached(lg.get("d_loc", ""), lg.get("d_cp", ""), lg.get("d_pays", "")) if lg.get("d_loc") else None)
             if cc and dc:
-                arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0]})
+                arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0],
+                             "dos": dos, "cn": cn, "dn": dn, "w": 1.6})
+
+        # ── Application des options (isolation > filtre type) ───────────────────
+        if focus_norm:
+            arcs_draw = [a for a in arcs if a["cn"] == focus_norm or a["dn"] == focus_norm]
+            related = {focus_norm} | {a["cn"] for a in arcs_draw} | {a["dn"] for a in arcs_draw}
+            points = [p for p in points if p["loc_norm"] in related]   # uniquement le point + ses bouts
+            for a in arcs_draw:
+                a["w"] = 3.0
+            for p in points:                                           # met le point isolé en avant
+                if p["loc_norm"] == focus_norm:
+                    p["radius"] *= 1.5
+                    p["color"] = p["color"][:3] + [255]
+            foc_name = next((p["nom"] for p in points if p["loc_norm"] == focus_norm), focus_choice)
+            st.info(f"🔎 Point isolé : **{foc_name}** — {len(arcs_draw)} liaison(s) affichée(s). "
+                    + ("(sélection par clic — recliquez le point pour désélectionner)"
+                       if clicked_norm else "Repassez sur « — tout afficher » pour réinitialiser."))
+        else:
+            arcs_draw = arcs if show_arcs else []
+            if show_mode == "Chargements":
+                points = [p for p in points if p["typ"] == "Chargement"]
+            elif show_mode == "Déchargements":
+                points = [p for p in points if p["typ"] == "Déchargement"]
 
         n_charg_cam = int(dmap[dmap["type"] == "C"]["dossier"].nunique())
         n_dech_cam  = int(dmap[dmap["type"] == "D"]["dossier"].nunique())
@@ -980,28 +1029,25 @@ with st.expander("Afficher la carte (géocodage à la demande)", expanded=False)
                 import pydeck as pdk
                 dfp = pd.DataFrame(points)
                 layers = [
-                    pdk.Layer("ScatterplotLayer", data=dfp,
+                    pdk.Layer("ScatterplotLayer", data=dfp, id="pts",
                               get_position="[lon, lat]", get_radius="radius",
-                              radius_min_pixels=8, radius_max_pixels=46,
-                              get_fill_color="color", get_line_color=[255, 255, 255, 90],
+                              radius_min_pixels=8, radius_max_pixels=48,
+                              get_fill_color="color", get_line_color=[255, 255, 255, 110],
                               stroked=True, line_width_min_pixels=1, pickable=True,
                               auto_highlight=True),
-                    # Chiffre = nb de camions, centré sur le point
                     pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
                               get_text="label", get_size=14, get_color=[10, 14, 18, 255],
-                              get_anchor="middle", get_alignment_baseline="'center'",
-                              font_weight=800),
-                    # Nom du lieu, au-dessus
+                              get_anchor="middle", get_alignment_baseline="'center'", font_weight=800),
                     pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
                               get_text="nom", get_size=11, get_color=[200, 210, 230, 210],
                               get_anchor="middle", get_alignment_baseline="'bottom'",
                               get_pixel_offset=[0, -16]),
                 ]
-                if arcs:
-                    layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs),
+                if arcs_draw:
+                    layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs_draw),
                         get_source_position="[sl, sla]", get_target_position="[tl, tla]",
-                        get_source_color=[74, 191, 106, 120], get_target_color=[74, 138, 191, 150],
-                        get_width=1.6))
+                        get_source_color=[74, 191, 106, 150], get_target_color=[74, 138, 191, 170],
+                        get_width="w", width_min_pixels=1))
                 deck = pdk.Deck(
                     layers=layers,
                     initial_view_state=pdk.ViewState(latitude=dfp["lat"].mean(),
@@ -1012,8 +1058,15 @@ with st.expander("Afficher la carte (géocodage à la demande)", expanded=False)
                                        "font-family": "Barlow Condensed, sans-serif", "padding": "9px"}},
                     map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
                 )
-                st.pydeck_chart(deck, use_container_width=True, height=560)
-                if len(agg) >= MAX_GEO:
+                # Clic = isolation, si supporté par la version de Streamlit ; sinon repli simple
+                try:
+                    st.pydeck_chart(deck, use_container_width=True, height=560,
+                                    key="planmap", selection_mode="single-object", on_select="rerun")
+                except TypeError:
+                    st.pydeck_chart(deck, use_container_width=True, height=560)
+                    st.caption("💡 Clic-pour-isoler indisponible sur cette version de Streamlit — "
+                               "utilise le menu « Isoler un point » ci-dessus.")
+                if len(agg) >= MAX_GEO and not focus_norm:
                     st.caption(f"Géocodage limité aux {MAX_GEO} lieux avec le plus de camions — affine les filtres pour le reste.")
             except ImportError:
                 st.map(pd.DataFrame(points).rename(columns={"lat": "latitude", "lon": "longitude"}))
