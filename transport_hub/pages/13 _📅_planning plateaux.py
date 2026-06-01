@@ -14,7 +14,8 @@ reconstruit les dossiers (jambe chargement → jambe déchargement) et propose :
   • Regroupements géographiques : ≥2 chargements OU ≥2 déchargements le même
     jour dans le même département → alertes (réflexe planning).
   • Deux vues : "Par jour" (worklist charg | déch) et "Par ressource" (swimlane).
-  • Carte : points charg (vert) / déch (bleu) + arcs charg→déch par dossier.
+  • Carte EN HAUT : affichée directement, avec panneau pays en surimpression.
+    Communes frontalières remappées vers le pays logistique (ex: Bazeilles → BE).
 
 Colonnes source attendues (ordre indicatif, résolution robuste par nom) :
   N° Dossier | Activité | Date | Heure | Type de transport | Nom 1 | Nom 2 |
@@ -96,9 +97,6 @@ else:
 st.set_page_config(page_title="Planning Plateaux", page_icon="🗂️", layout="wide")
 
 # ─── Style ───────────────────────────────────────────────────────────────────
-# Direction : dispatch board industriel/utilitaire. Pas de bordure latérale,
-# pas de dégradé de texte, pas de glow. Bordures pleines, numéros de tête,
-# neutres teintés bleu nuit. Cohérent avec le hub CB Groupe.
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@300;400;500;600&display=swap');
@@ -150,6 +148,24 @@ st.markdown("""
 }
 .sect .hint{ color:var(--faint); letter-spacing:1px; font-size:.66rem; }
 
+/* Panneau pays superposé sur la carte */
+.pays-panel{
+  background:rgba(14,16,22,0.88); border:1px solid #222838;
+  border-radius:7px; padding:.7rem .95rem; min-width:170px; max-width:260px;
+  font-family:'Barlow Condensed',sans-serif;
+}
+.pays-panel .pp-title{
+  font-size:.62rem; font-weight:700; letter-spacing:2px; text-transform:uppercase;
+  color:#3a4258; margin-bottom:.5rem;
+}
+.pp-row{ display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; margin:.18rem 0; }
+.pp-flag{ font-size:.95rem; }
+.pp-code{ font-weight:700; font-size:.92rem; color:#cdd4ea; min-width:24px; }
+.pp-val{ font-weight:700; font-size:1.05rem; color:#4abf6a; }
+.pp-val.d{ color:#4a8abf; }
+.pp-detail{ font-size:.7rem; color:#5b6480; margin-left:.3rem; font-weight:500; }
+.pp-sep{ border:none; border-top:1px solid #222838; margin:.4rem 0; }
+
 /* Jour : en-tête + colonnes */
 .dayhead{
   font-family:'Barlow Condensed',sans-serif; color:var(--txt);
@@ -169,7 +185,7 @@ st.markdown("""
   padding:.7rem .85rem; margin-bottom:.55rem; display:grid;
   grid-template-columns:auto 1fr; gap:.7rem; align-items:start;
 }
-.card.c{ border-color:var(--charg-l); background:linear-gradient(0deg,var(--panel),var(--panel)); }
+.card.c{ border-color:var(--charg-l); }
 .card.d{ border-color:var(--dech-l); }
 .card .hour{
   font-family:'Barlow Condensed',sans-serif; font-size:1.25rem; font-weight:700;
@@ -211,21 +227,7 @@ st.markdown("""
 .stop.d{ color:var(--dech); border-color:var(--dech-l); background:var(--dech-d); }
 .stop .t{ opacity:.7; font-weight:500; margin-right:5px; }
 
-/* Vue Par jour : une carte par dossier (charg → déch lié) */
-.trips{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:.5rem; margin-bottom:.5rem; }
-.trip{ background:var(--panel2); border:1px solid var(--line2); border-radius:7px; padding:.5rem .65rem .55rem; }
-.trip-h{ display:flex; justify-content:space-between; align-items:center; gap:.4rem; margin-bottom:.3rem; flex-wrap:wrap; }
-.trip-h .dos{ font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:.72rem; letter-spacing:1.2px; color:var(--faint); }
-.trip-tags{ display:flex; flex-wrap:wrap; gap:3px; }
-.leg{ display:grid; grid-template-columns:auto 1fr; column-gap:.65rem; align-items:baseline; padding:.08rem 0; }
-.leg .lh{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:.9rem; line-height:1.25; white-space:nowrap; letter-spacing:.3px; }
-.leg.c .lh{ color:var(--charg); } .leg.d .lh{ color:var(--dech); }
-.leg .ll{ grid-column:2; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:.95rem; color:var(--txt); text-transform:uppercase; letter-spacing:.2px; line-height:1.25; }
-.leg .ls{ grid-column:2; font-size:.72rem; color:var(--muted); line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.leg.off{ display:block; grid-template-columns:none; font-size:.72rem; font-style:italic; color:var(--faint); padding:.12rem 0; }
-.arrow{ color:var(--faint); font-size:.78rem; line-height:1; margin:.1rem 0 .15rem .15rem; }
-
-/* Vue Par jour — disposition Lignes (lecture gauche → droite) */
+/* Vue Par jour — disposition Lignes */
 .rows{ border:1px solid var(--line); border-radius:7px; overflow:hidden; margin-bottom:.5rem; }
 .row{ display:grid; grid-template-columns:108px minmax(0,1.5fr) 16px minmax(0,1.5fr) minmax(0,1.4fr);
       gap:.45rem .75rem; align-items:center; padding:.42rem .75rem; border-bottom:1px solid var(--line2); }
@@ -252,6 +254,20 @@ st.markdown("""
   .rarrow{ display:none; }
 }
 
+/* Vue Cartes */
+.trips{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:.5rem; margin-bottom:.5rem; }
+.trip{ background:var(--panel2); border:1px solid var(--line2); border-radius:7px; padding:.5rem .65rem .55rem; }
+.trip-h{ display:flex; justify-content:space-between; align-items:center; gap:.4rem; margin-bottom:.3rem; flex-wrap:wrap; }
+.trip-h .dos{ font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:.72rem; letter-spacing:1.2px; color:var(--faint); }
+.trip-tags{ display:flex; flex-wrap:wrap; gap:3px; }
+.leg{ display:grid; grid-template-columns:auto 1fr; column-gap:.65rem; align-items:baseline; padding:.08rem 0; }
+.leg .lh{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:.9rem; line-height:1.25; white-space:nowrap; letter-spacing:.3px; }
+.leg.c .lh{ color:var(--charg); } .leg.d .lh{ color:var(--dech); }
+.leg .ll{ grid-column:2; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:.95rem; color:var(--txt); text-transform:uppercase; letter-spacing:.2px; line-height:1.25; }
+.leg .ls{ grid-column:2; font-size:.72rem; color:var(--muted); line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.leg.off{ display:block; grid-template-columns:none; font-size:.72rem; font-style:italic; color:var(--faint); padding:.12rem 0; }
+.arrow{ color:var(--faint); font-size:.78rem; line-height:1; margin:.1rem 0 .15rem .15rem; }
+
 /* Regroupements */
 .cluster{
   background:var(--alert-d); border:1px solid var(--alert-l); border-radius:6px;
@@ -266,11 +282,40 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ─── Communes frontalières → pays logistique (override d'affichage carte) ─────
+# Ces communes sont encodées côté client avec le pays source (FR) mais
+# logistiquement rattachées à un autre pays pour le compteur carte.
+# Format : { normalize(localite) : "CODE_PAYS_LOGISTIQUE" }
+COMMUNES_PAYS_LOGISTIQUE = {
+    # Ardennes 08 – zone Sedan/Carignan frontalière Belgique
+    "bazeilles":         "BE",
+    "carignan":          "BE",
+    "mouzon":            "BE",
+    "remilly aillicourt":"BE",
+    "douzy":             "BE",
+    "sedan":             "BE",
+    # Moselle 57 – zone frontalière Luxembourg
+    "thionville":        "LU",
+    "yutz":              "LU",
+    "metzange":          "LU",
+    # Ajoutez ici d'autres communes si besoin
+}
+
 # ─── Utilitaires ─────────────────────────────────────────────────────────────
 def normalize(text) -> str:
     if text is None or (isinstance(text, float) and np.isnan(text)):
         return ""
     text = str(text).upper().strip()
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    text = re.sub(r"['\-–/]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+def normalize_key(text) -> str:
+    """Version minuscule pour les clés dict."""
+    if not text:
+        return ""
+    text = str(text).lower().strip()
     text = unicodedata.normalize("NFD", text)
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
     text = re.sub(r"['\-–/]", " ", text)
@@ -282,15 +327,14 @@ def _norm_col(c) -> str:
     return re.sub(r"[^a-z0-9]", "", c.lower())
 
 def find_col(cols, *candidates):
-    """Résolution robuste : match exact normalisé, puis containment."""
     nmap = {}
     for c in cols:
         nmap.setdefault(_norm_col(c), c)
-    for cand in candidates:                       # 1) exact
+    for cand in candidates:
         nc = _norm_col(cand)
         if nc in nmap:
             return nmap[nc]
-    for cand in candidates:                       # 2) containment
+    for cand in candidates:
         nc = _norm_col(cand)
         if not nc:
             continue
@@ -300,7 +344,6 @@ def find_col(cols, *candidates):
     return None
 
 def classify_activite(v) -> str:
-    """Renvoie 'C' (chargement), 'D' (déchargement) ou '?'."""
     n = normalize(v)
     if not n:
         return "?"
@@ -311,7 +354,6 @@ def classify_activite(v) -> str:
     return "?"
 
 def parse_heure(v):
-    """Renvoie (affichage 'HH:MM', valeur triable en heures décimales)."""
     if v is None:
         return "", 99.0
     s = str(v).strip()
@@ -319,7 +361,7 @@ def parse_heure(v):
     if m:
         h = int(m.group(1)); mi = int(m.group(2) or 0)
         return f"{h:02d}:{mi:02d}", h + mi / 60.0
-    try:                                           # fraction de jour Excel
+    try:
         f = float(s.replace(",", "."))
         if 0 <= f < 1:
             h = int(f * 24); mi = int(round((f * 24 - h) * 60))
@@ -339,14 +381,25 @@ PAYS_FLAGS = {
     "L":"🇱🇺","LU":"🇱🇺","E":"🇪🇸","ES":"🇪🇸","I":"🇮🇹","IT":"🇮🇹","CH":"🇨🇭",
     "A":"🇦🇹","AT":"🇦🇹","GB":"🇬🇧","UK":"🇬🇧","PL":"🇵🇱","P":"🇵🇹","PT":"🇵🇹",
 }
-DEPT_NOM = {  # quelques départements fréquents pour lisibilité (non exhaustif)
+DEPT_NOM = {
     "59":"Nord","62":"Pas-de-Calais","80":"Somme","02":"Aisne","60":"Oise","76":"Seine-Maritime",
     "27":"Eure","75":"Paris","77":"Seine-et-Marne","93":"Seine-St-Denis","51":"Marne","54":"Meurthe-et-M.",
     "57":"Moselle","67":"Bas-Rhin","69":"Rhône","13":"Bouches-du-Rh.","33":"Gironde","31":"Hte-Garonne",
     "44":"Loire-Atl.","35":"Ille-et-V.","49":"Maine-et-L.","53":"Mayenne","72":"Sarthe","85":"Vendée",
 }
 
-# ─── Géocodage (PTV prioritaire, fallback OSM) ───────────────────────────────
+def pays_logistique(localite: str, pays_source: str) -> str:
+    """Renvoie le code pays logistique : override frontalier si connu, sinon pays source normalisé."""
+    key = normalize_key(localite)
+    if key in COMMUNES_PAYS_LOGISTIQUE:
+        return COMMUNES_PAYS_LOGISTIQUE[key]
+    # Normalise FR/F → FR, BE/B → BE, etc.
+    p = (pays_source or "").upper().strip()
+    MAP = {"F": "FR", "B": "BE", "D": "DE", "E": "ES", "I": "IT",
+           "L": "LU", "A": "AT", "P": "PT", "UK": "GB"}
+    return MAP.get(p, p) if p else "??"
+
+# ─── Géocodage ───────────────────────────────────────────────────────────────
 def _photon(query: str):
     url = f"https://photon.komoot.io/api/?q={_uparse.quote(query)}&limit=1&lang=fr"
     try:
@@ -412,23 +465,19 @@ def geocode_cached(ville: str, cp: str, pays: str):
                     return r
     return None
 
-# ─── Chargement / préparation des données ────────────────────────────────────
+# ─── Chargement / préparation ─────────────────────────────────────────────────
 def smart_to_datetime(s):
-    """Détecte automatiquement jour/mois vs mois/jour. Un fichier de planning
-    couvre quelques jours, pas 11 mois : on garde l'interprétation valide la
-    plus resserrée. Renvoie (series, libellé ordre)."""
     s = s.fillna("").astype(str).str.strip()
-    a = pd.to_datetime(s, errors="coerce", dayfirst=True)   # jour/mois (EU)
-    b = pd.to_datetime(s, errors="coerce", dayfirst=False)  # mois/jour (US)
+    a = pd.to_datetime(s, errors="coerce", dayfirst=True)
+    b = pd.to_datetime(s, errors="coerce", dayfirst=False)
 
     def span_days(x):
         x = x.dropna()
         return (x.max() - x.min()).days if len(x) > 1 else 0
 
     na_a, na_b = int(a.isna().sum()), int(b.isna().sum())
-    if na_a != na_b:                       # une interprétation casse plus de lignes → écartée
+    if na_a != na_b:
         return (a, "jour/mois") if na_a < na_b else (b, "mois/jour")
-    # même validité → la plus resserrée gagne (planning = fenêtre courte)
     if span_days(a) == span_days(b):
         return a, "jour/mois (défaut)"
     return (a, "jour/mois") if span_days(a) < span_days(b) else (b, "mois/jour")
@@ -440,24 +489,24 @@ def load_activites(file_bytes):
     cols = list(df.columns)
 
     C = {
-        "dossier": find_col(cols, "N° Dossier", "No Dossier", "Dossier", "N Dossier"),
-        "activite": find_col(cols, "Activité", "Activite", "Activ"),
-        "date": find_col(cols, "Date"),
-        "heure": find_col(cols, "Heure"),
-        "type_tr": find_col(cols, "Type de transport", "Type transport"),
-        "nom1": find_col(cols, "Nom 1", "Nom1", "Nom"),
-        "nom2": find_col(cols, "Nom 2", "Nom2"),
-        "adresse": find_col(cols, "Adresse"),
-        "numero": find_col(cols, "Numéro", "Numero", "No"),
-        "pays": find_col(cols, "Code pays", "Pays"),
-        "dept": find_col(cols, "Département", "Departement", "Dept"),
-        "cp": find_col(cols, "Code postal", "CP"),
-        "localite": find_col(cols, "Localité", "Localite", "Ville"),
-        "produit": find_col(cols, "Produit"),
-        "chauffeur": find_col(cols, "Chauffeur"),
-        "depart_trac": find_col(cols, "Départ. tracteur", "Depart tracteur", "Depart. tracteur", "Départ tracteur"),
-        "immat": find_col(cols, "Immat. tracteur", "Immat tracteur", "Immatriculation", "Immat"),
-        "remorque": find_col(cols, "Remorque"),
+        "dossier":    find_col(cols, "N° Dossier", "No Dossier", "Dossier", "N Dossier"),
+        "activite":   find_col(cols, "Activité", "Activite", "Activ"),
+        "date":       find_col(cols, "Date"),
+        "heure":      find_col(cols, "Heure"),
+        "type_tr":    find_col(cols, "Type de transport", "Type transport"),
+        "nom1":       find_col(cols, "Nom 1", "Nom1", "Nom"),
+        "nom2":       find_col(cols, "Nom 2", "Nom2"),
+        "adresse":    find_col(cols, "Adresse"),
+        "numero":     find_col(cols, "Numéro", "Numero", "No"),
+        "pays":       find_col(cols, "Code pays", "Pays"),
+        "dept":       find_col(cols, "Département", "Departement", "Dept"),
+        "cp":         find_col(cols, "Code postal", "CP"),
+        "localite":   find_col(cols, "Localité", "Localite", "Ville"),
+        "produit":    find_col(cols, "Produit"),
+        "chauffeur":  find_col(cols, "Chauffeur"),
+        "depart_trac":find_col(cols, "Départ. tracteur", "Depart tracteur", "Depart. tracteur", "Départ tracteur"),
+        "immat":      find_col(cols, "Immat. tracteur", "Immat tracteur", "Immatriculation", "Immat"),
+        "remorque":   find_col(cols, "Remorque"),
     }
 
     def col(key):
@@ -465,48 +514,47 @@ def load_activites(file_bytes):
         return df[c] if c and c in df.columns else pd.Series([None] * len(df))
 
     out = pd.DataFrame()
-    out["dossier"]   = col("dossier").fillna("").astype(str).str.strip()
-    out["_act_raw"]  = col("activite").fillna("").astype(str).str.strip()
-    out["type"]      = out["_act_raw"].apply(classify_activite)
+    out["dossier"]    = col("dossier").fillna("").astype(str).str.strip()
+    out["_act_raw"]   = col("activite").fillna("").astype(str).str.strip()
+    out["type"]       = out["_act_raw"].apply(classify_activite)
     out["date"], _date_order = smart_to_datetime(col("date"))
     he = col("heure").apply(parse_heure)
-    out["heure"]     = he.apply(lambda x: x[0])
-    out["_hval"]     = he.apply(lambda x: x[1])
-    out["type_tr"]   = col("type_tr").fillna("").astype(str).str.strip()
+    out["heure"]      = he.apply(lambda x: x[0])
+    out["_hval"]      = he.apply(lambda x: x[1])
+    out["type_tr"]    = col("type_tr").fillna("").astype(str).str.strip()
     n1 = col("nom1").fillna("").astype(str).str.strip()
     n2 = col("nom2").fillna("").astype(str).str.strip()
-    out["site"]      = (n1 + " " + n2).str.strip().replace(r"\s+", " ", regex=True)
-    out["localite"]  = col("localite").fillna("").astype(str).str.strip()
-    out["cp"]        = col("cp").fillna("").astype(str).str.strip()
-    out["dept"]      = col("dept").fillna("").astype(str).str.strip()
-    out["pays"]      = col("pays").fillna("").astype(str).str.strip().str.upper()
-    out["produit"]   = col("produit").fillna("").astype(str).str.strip()
-    out["chauffeur"] = col("chauffeur").fillna("").astype(str).str.strip()
-    out["depart_trac"] = col("depart_trac").fillna("").astype(str).str.strip()
-    out["immat"]     = col("immat").fillna("").astype(str).str.strip()
-    out["remorque"]  = col("remorque").fillna("").astype(str).str.strip()
+    out["site"]       = (n1 + " " + n2).str.strip().replace(r"\s+", " ", regex=True)
+    out["localite"]   = col("localite").fillna("").astype(str).str.strip()
+    out["cp"]         = col("cp").fillna("").astype(str).str.strip()
+    out["dept"]       = col("dept").fillna("").astype(str).str.strip()
+    out["pays"]       = col("pays").fillna("").astype(str).str.strip().str.upper()
+    out["produit"]    = col("produit").fillna("").astype(str).str.strip()
+    out["chauffeur"]  = col("chauffeur").fillna("").astype(str).str.strip()
+    out["depart_trac"]= col("depart_trac").fillna("").astype(str).str.strip()
+    out["immat"]      = col("immat").fillna("").astype(str).str.strip()
+    out["remorque"]   = col("remorque").fillna("").astype(str).str.strip()
 
-    # Département de secours = 2 premiers chiffres du CP (France)
     cp2 = out["cp"].str.extract(r"^(\d{2})", expand=False)
     out["dept"] = out["dept"].where(out["dept"].str.len() > 0, cp2).fillna("")
 
-    # Tractionnaire : "TRA" dans Départ. tracteur. Sinon → flotte CB.
     out["is_tra"] = out["depart_trac"].str.upper().str.contains("TRA", na=False)
 
-    # Clé temporelle triable
+    # Pays logistique (avec overrides communes frontalières)
+    out["pays_logi"] = out.apply(
+        lambda r: pays_logistique(r["localite"], r["pays"]), axis=1)
+
     out["_dt"] = out["date"] + pd.to_timedelta(
         out["_hval"].where(out["_hval"] < 30, 0), unit="h")
 
     out = out[out["dossier"] != ""].copy()
     out = out.sort_values(["date", "_hval"], na_position="last").reset_index(drop=True)
 
-    # Distinct values Activité pour debug
     act_distinct = (df[C["activite"]].dropna().astype(str).str.strip().value_counts()
                     if C["activite"] else pd.Series(dtype=int))
     return out, C, act_distinct, _date_order
 
 def build_dossier_legs(df):
-    """Pour chaque dossier : 1ère jambe chargement & dernière jambe déchargement."""
     legs = {}
     for dos, g in df.groupby("dossier"):
         ch = g[g["type"] == "C"].sort_values("_hval")
@@ -515,19 +563,17 @@ def build_dossier_legs(df):
         d0 = de.iloc[-1] if len(de) else None
         legs[dos] = {
             "c_loc": c0["localite"] if c0 is not None else "",
-            "c_date": c0["date"] if c0 is not None else pd.NaT,
-            "c_cp": c0["cp"] if c0 is not None else "",
-            "c_pays": c0["pays"] if c0 is not None else "",
-            "d_loc": d0["localite"] if d0 is not None else "",
-            "d_date": d0["date"] if d0 is not None else pd.NaT,
-            "d_cp": d0["cp"] if d0 is not None else "",
-            "d_pays": d0["pays"] if d0 is not None else "",
+            "c_date": c0["date"]    if c0 is not None else pd.NaT,
+            "c_cp":   c0["cp"]      if c0 is not None else "",
+            "c_pays": c0["pays"]    if c0 is not None else "",
+            "d_loc":  d0["localite"]if d0 is not None else "",
+            "d_date": d0["date"]    if d0 is not None else pd.NaT,
+            "d_cp":   d0["cp"]      if d0 is not None else "",
+            "d_pays": d0["pays"]    if d0 is not None else "",
         }
     return legs
 
 def build_trips(d):
-    """Un trip = un N° Dossier : jambe chargement (1ère) + jambe déchargement
-    (dernière), avec heures, lieux et ressources. Sert à la vue 'Par jour'."""
     trips = []
     for dos, g in d.groupby("dossier"):
         ch = g[g["type"] == "C"].sort_values("_hval")
@@ -540,31 +586,28 @@ def build_trips(d):
         trips.append({
             "dossier": dos,
             "has_c": c is not None, "has_d": dd is not None,
-            "c_date": c["date"]  if c is not None else pd.NaT,
-            "c_heure": c["heure"] if c is not None else "",
-            "c_loc": c["localite"] if c is not None else "",
-            "c_dept": c["dept"] if c is not None else "",
-            "c_pays": c["pays"] if c is not None else "",
-            "c_site": c["site"] if c is not None else "",
-            "d_date": dd["date"] if dd is not None else pd.NaT,
-            "d_heure": dd["heure"] if dd is not None else "",
-            "d_loc": dd["localite"] if dd is not None else "",
-            "d_dept": dd["dept"] if dd is not None else "",
-            "d_pays": dd["pays"] if dd is not None else "",
-            "d_site": dd["site"] if dd is not None else "",
+            "c_date": c["date"]   if c is not None else pd.NaT,
+            "c_heure":c["heure"]  if c is not None else "",
+            "c_loc":  c["localite"]if c is not None else "",
+            "c_dept": c["dept"]   if c is not None else "",
+            "c_pays": c["pays"]   if c is not None else "",
+            "c_site": c["site"]   if c is not None else "",
+            "d_date": dd["date"]  if dd is not None else pd.NaT,
+            "d_heure":dd["heure"] if dd is not None else "",
+            "d_loc":  dd["localite"]if dd is not None else "",
+            "d_dept": dd["dept"]  if dd is not None else "",
+            "d_pays": dd["pays"]  if dd is not None else "",
+            "d_site": dd["site"]  if dd is not None else "",
             "chauffeur": base["chauffeur"], "immat": base["immat"],
-            "remorque": base["remorque"], "depart_trac": base["depart_trac"],
+            "remorque": base["remorque"],   "depart_trac": base["depart_trac"],
             "is_tra": bool(g["is_tra"].any()),
             "produit": (c["produit"] if c is not None and c["produit"] else base["produit"]),
-            # date/heure de planning = chargement si présent, sinon déchargement
             "plan_date": (c["date"]  if c is not None else dd["date"]),
             "plan_hval": float(c["_hval"] if c is not None else dd["_hval"]),
         })
     return trips
 
 def html(s: str):
-    """Rend du HTML dans Streamlit sans que Markdown ne transforme les lignes
-    indentées (4+ espaces) en blocs de code — la cause du HTML affiché en brut."""
     st.markdown("\n".join(line.lstrip() for line in s.splitlines()), unsafe_allow_html=True)
 
 # ─── Header ──────────────────────────────────────────────────────────────────
@@ -593,7 +636,6 @@ if df.empty:
 
 legs = build_dossier_legs(df)
 
-# Debug : mapping colonnes + valeurs Activité
 with st.expander("🔧 Debug — colonnes détectées & valeurs Activité"):
     st.write("**Colonnes mappées :**", {k: v for k, v in COLS.items()})
     st.write("**Valeurs distinctes de « Activité » :**")
@@ -601,8 +643,7 @@ with st.expander("🔧 Debug — colonnes détectées & valeurs Activité"):
                  hide_index=True, use_container_width=True)
     n_unknown = int((df["type"] == "?").sum())
     if n_unknown:
-        st.warning(f"⚠️ {n_unknown} activité(s) non classées (ni chargement ni déchargement). "
-                   "Vérifie le mapping ci-dessus — ces lignes sont ignorées dans les colonnes Charg/Déch.")
+        st.warning(f"⚠️ {n_unknown} activité(s) non classées. Vérifie le mapping ci-dessus.")
     _dd = df["date"].dropna()
     if not _dd.empty:
         st.write(f"**Format de date détecté :** `{DATE_ORDER}` — "
@@ -615,34 +656,29 @@ st.markdown('<div class="sect">🎛️ Filtres planning <span class="hint">multi
 
 f1, f2, f3 = st.columns([1.1, 1.1, 1])
 with f1:
-    dimension = st.radio("Dimension", ["Chauffeur", "Tracteur (immat.)", "Remorque"],
-                         horizontal=True)
+    dimension = st.radio("Dimension", ["Chauffeur", "Tracteur (immat.)", "Remorque"], horizontal=True)
     dim_col = {"Chauffeur": "chauffeur", "Tracteur (immat.)": "immat", "Remorque": "remorque"}[dimension]
 with f2:
     flotte = st.radio("Périmètre", ["Tous", "Flotte CB", "Tractionnaires"], horizontal=True)
 with f3:
     vue = st.radio("Vue", ["Par jour", "Par ressource"], horizontal=True)
 
-# Périmètre flotte / tractionnaire
 df_scope = df.copy()
 if flotte == "Flotte CB":
     df_scope = df_scope[~df_scope["is_tra"]]
 elif flotte == "Tractionnaires":
     df_scope = df_scope[df_scope["is_tra"]]
 
-# Sélection précise de la dimension
 options = sorted([v for v in df_scope[dim_col].dropna().unique() if str(v).strip()])
 g1, g2 = st.columns([2.2, 1])
 with g1:
     sel = st.multiselect(f"{dimension} — laisser vide pour tout confondu", options)
 with g2:
-    # Plage de dates
     dts = df_scope["date"].dropna()
     if not dts.empty:
         dmin, dmax = dts.min().date(), dts.max().date()
         date_range = st.date_input("Période", value=(dmin, dmax),
-                                    min_value=dmin, max_value=dmax,
-                                    format="DD/MM/YYYY")
+                                    min_value=dmin, max_value=dmax, format="DD/MM/YYYY")
     else:
         date_range = None
 
@@ -651,17 +687,15 @@ if sel:
     dfx = dfx[dfx[dim_col].isin(sel)]
 
 def _range_bounds(dr):
-    """Gère les 3 formes renvoyées par st.date_input (range) :
-    date seule, tuple à 1 élément (1 date choisie), tuple à 2 (plage)."""
     if dr is None:
         return None, None
     if isinstance(dr, (list, tuple)):
         if len(dr) == 0:
             return None, None
         if len(dr) == 1:
-            return dr[0], dr[0]        # 1 date choisie → ce jour-là
+            return dr[0], dr[0]
         return dr[0], dr[1]
-    return dr, dr                       # date seule
+    return dr, dr
 
 _lo, _hi = _range_bounds(date_range)
 if _lo is not None:
@@ -673,7 +707,7 @@ if dfx.empty:
     avail = sorted(df_scope["date"].dropna().dt.date.unique())
     if avail:
         lst = ", ".join(d.strftime("%d/%m/%Y") for d in avail[:15]) + (" …" if len(avail) > 15 else "")
-        st.warning(f"Aucune activité sur cette sélection (filtres + période). Dates disponibles : {lst}")
+        st.warning(f"Aucune activité sur cette sélection. Dates disponibles : {lst}")
     else:
         st.warning("Aucune activité ne correspond à ces filtres.")
     st.stop()
@@ -702,7 +736,229 @@ st.markdown(
     '<span class="tag cb" style="padding:1px 6px">CB</span> = flotte CB</div>',
     unsafe_allow_html=True)
 
-# ─── Regroupements géographiques (même jour + même département) ───────────────
+# ════════════════════════════════════════════════════════════════════════════════
+# ─── CARTE (EN HAUT, AFFICHAGE DIRECT) ───────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════════
+st.markdown('<div class="sect">🗺️ Carte des activités '
+            '<span class="hint">taille &amp; chiffre = nb de dossiers · vert charg · bleu déch · arcs = liaisons</span></div>',
+            unsafe_allow_html=True)
+
+MAX_GEO = 120
+
+# ── Options carte ─────────────────────────────────────────────────────────────
+mc1, mc2, mc3, mc4 = st.columns([1.3, 1, 1, 1.5])
+with mc1:
+    dates_opt = sorted(dfx["date"].dropna().dt.date.unique())
+    date_lbls = ["Toutes les dates"] + [d.strftime("%d/%m/%Y") for d in dates_opt]
+    msel_date = st.selectbox("Date (carte)", date_lbls)
+with mc2:
+    show_mode = st.radio("Afficher", ["Les deux", "Chargements", "Déchargements"], horizontal=True)
+with mc3:
+    show_arcs = st.checkbox("Relier les points (arcs)", value=True)
+with mc4:
+    loc_opts = sorted({l for l in dfx["localite"] if str(l).strip()})
+    focus_choice = st.selectbox("🔎 Isoler un point", ["— tout afficher"] + loc_opts)
+
+dmap = dfx.copy()
+if msel_date != "Toutes les dates":
+    chosen = pd.to_datetime(msel_date, format="%d/%m/%Y").date()
+    dmap = dmap[dmap["date"].dt.date == chosen]
+
+if dmap.empty:
+    st.info("Aucune activité pour ces filtres carte.")
+else:
+    clicked_norm = None
+    try:
+        _state = st.session_state.get("planmap")
+        if _state and "selection" in _state:
+            _objs = _state["selection"]["objects"]
+            _pts  = _objs.get("pts") if isinstance(_objs, dict) else None
+            if _pts:
+                clicked_norm = _pts[0].get("loc_norm")
+    except Exception:
+        clicked_norm = None
+
+    focus_norm = clicked_norm or (normalize(focus_choice) if focus_choice != "— tout afficher" else None)
+
+    # ── Agrégat par lieu + type ───────────────────────────────────────────────
+    agg = (dmap.assign(loc_norm=dmap["localite"].apply(normalize))
+               .groupby(["loc_norm", "type"])
+               .agg(localite=("localite", "first"), cp=("cp", "first"),
+                    pays=("pays", "first"), pays_logi=("pays_logi", "first"),
+                    dept=("dept", "first"),
+                    camions=("dossier", "nunique"),
+                    dossiers=("dossier", lambda s: ", ".join(sorted(set(s))[:10])))
+               .reset_index())
+    agg = agg[agg["localite"].str.strip() != ""]
+    agg = agg.sort_values("camions", ascending=False).head(MAX_GEO)
+
+    coords_cache, points = {}, []
+    with st.spinner(f"📡 Géocodage de {len(agg)} lieux…"):
+        for _, row in agg.iterrows():
+            key = (row["loc_norm"], row["cp"], row["pays"])
+            if key not in coords_cache:
+                coords_cache[key] = geocode_cached(row["localite"], row["cp"], row["pays"])
+            c = coords_cache[key]
+            if c:
+                n = int(row["camions"])
+                points.append({
+                    "nom": row["localite"], "loc_norm": row["loc_norm"], "label": str(n),
+                    "camions": n, "typ": "Chargement" if row["type"] == "C" else "Déchargement",
+                    "pays": row["pays"], "pays_logi": row["pays_logi"],
+                    "dossiers": row["dossiers"],
+                    "lat": c[0], "lon": c[1],
+                    "radius": 900 + (n ** 0.5) * 1150,
+                    "color": [74, 191, 106, 215] if row["type"] == "C" else [74, 138, 191, 215],
+                    "type_code": row["type"],
+                })
+
+    # ── Arcs ─────────────────────────────────────────────────────────────────
+    arcs = []
+    for dos in dmap["dossier"].unique():
+        lg = legs.get(dos, {})
+        cn, dn = normalize(lg.get("c_loc", "")), normalize(lg.get("d_loc", ""))
+        ck = (cn, lg.get("c_cp", ""), lg.get("c_pays", ""))
+        dk = (dn, lg.get("d_cp", ""), lg.get("d_pays", ""))
+        cc = coords_cache.get(ck) or (geocode_cached(lg.get("c_loc",""), lg.get("c_cp",""), lg.get("c_pays","")) if lg.get("c_loc") else None)
+        dc = coords_cache.get(dk) or (geocode_cached(lg.get("d_loc",""), lg.get("d_cp",""), lg.get("d_pays","")) if lg.get("d_loc") else None)
+        if cc and dc:
+            arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0],
+                         "dos": dos, "cn": cn, "dn": dn, "w": 1.6})
+
+    # ── Application options (isolation > filtre type) ─────────────────────────
+    if focus_norm:
+        arcs_draw = [a for a in arcs if a["cn"] == focus_norm or a["dn"] == focus_norm]
+        related   = {focus_norm} | {a["cn"] for a in arcs_draw} | {a["dn"] for a in arcs_draw}
+        points    = [p for p in points if p["loc_norm"] in related]
+        for a in arcs_draw:
+            a["w"] = 3.0
+        for p in points:
+            if p["loc_norm"] == focus_norm:
+                p["radius"] *= 1.5
+                p["color"]   = p["color"][:3] + [255]
+        foc_name = next((p["nom"] for p in points if p["loc_norm"] == focus_norm), focus_choice)
+        st.info(f"🔎 Point isolé : **{foc_name}** — {len(arcs_draw)} liaison(s).")
+    else:
+        arcs_draw = arcs if show_arcs else []
+        if show_mode == "Chargements":
+            points = [p for p in points if p["type_code"] == "C"]
+        elif show_mode == "Déchargements":
+            points = [p for p in points if p["type_code"] == "D"]
+
+    # ── Panneau pays ──────────────────────────────────────────────────────────
+    # Comptage camions par pays logistique, avec détail des communes override
+    def build_pays_panel(points_list, show_mode_param):
+        """
+        Renvoie un dict pays_logi → {total, details: [(loc, n)]}
+        details = communes dont le pays_logi diffère du pays source (overrides frontaliers).
+        """
+        from collections import defaultdict
+        pays_total  = defaultdict(int)
+        pays_detail = defaultdict(list)   # pays → [(localite, n)]
+        
+        for p in points_list:
+            pl   = p.get("pays_logi", p.get("pays", "??"))
+            ps   = p.get("pays", "??")
+            n    = p["camions"]
+            pays_total[pl] += n
+            # Si override frontalier : pays_logi != pays source normalisé
+            ps_norm = pays_logistique("__no_override__", ps)  # juste normalisation
+            if pl != ps_norm:  # commune remappée → on l'indique en détail
+                pays_detail[pl].append((p["nom"], n))
+        
+        return pays_total, pays_detail
+
+    if points:
+        pays_total, pays_detail = build_pays_panel(points, show_mode)
+
+        # Rendu HTML du panneau
+        title_mode = {"Les deux": "Tous", "Chargements": "Charg.", "Déchargements": "Déch."}[show_mode]
+        color_cls  = "d" if show_mode == "Déchargements" else ""
+
+        rows_html = []
+        for pays_code in sorted(pays_total.keys(), key=lambda k: -pays_total[k]):
+            total = pays_total[pays_code]
+            flag  = PAYS_FLAGS.get(pays_code, "")
+            details = pays_detail.get(pays_code, [])
+            # Détail = liste "(+N Bazeilles)" pour communes remappées
+            detail_str = ""
+            if details:
+                parts = [f"+{n} {loc}" for loc, n in details[:3]]
+                detail_str = f'<span class="pp-detail">dont {", ".join(parts)}</span>'
+            rows_html.append(
+                f'<div class="pp-row">'
+                f'<span class="pp-flag">{flag}</span>'
+                f'<span class="pp-code">{pays_code}</span>'
+                f'<span class="pp-val {color_cls}">{total}</span>'
+                f'{detail_str}'
+                f'</div>')
+
+        panel_html = (
+            f'<div class="pays-panel">'
+            f'<div class="pp-title">🚛 Camions · {title_mode}</div>'
+            + "<hr class='pp-sep'>".join(rows_html) +
+            f'</div>')
+
+        # Affichage : panneau à gauche de la carte via columns
+        col_panel, col_map = st.columns([1, 5])
+        with col_panel:
+            st.markdown(panel_html, unsafe_allow_html=True)
+        with col_map:
+            _render_map = True
+    else:
+        _render_map = False
+        col_map = None
+        st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
+
+    if _render_map and col_map is not None and points:
+        with col_map:
+            try:
+                import pydeck as pdk
+                dfp = pd.DataFrame(points)
+                layers = [
+                    pdk.Layer("ScatterplotLayer", data=dfp, id="pts",
+                              get_position="[lon, lat]", get_radius="radius",
+                              radius_min_pixels=8, radius_max_pixels=48,
+                              get_fill_color="color", get_line_color=[255,255,255,110],
+                              stroked=True, line_width_min_pixels=1, pickable=True,
+                              auto_highlight=True),
+                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
+                              get_text="label", get_size=14, get_color=[10,14,18,255],
+                              get_anchor="middle", get_alignment_baseline="'center'", font_weight=800),
+                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
+                              get_text="nom", get_size=11, get_color=[200,210,230,210],
+                              get_anchor="middle", get_alignment_baseline="'bottom'",
+                              get_pixel_offset=[0,-16]),
+                ]
+                if arcs_draw:
+                    layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs_draw),
+                        get_source_position="[sl, sla]", get_target_position="[tl, tla]",
+                        get_source_color=[74,191,106,150], get_target_color=[74,138,191,170],
+                        get_width="w", width_min_pixels=1))
+                deck = pdk.Deck(
+                    layers=layers,
+                    initial_view_state=pdk.ViewState(
+                        latitude=dfp["lat"].mean(),
+                        longitude=dfp["lon"].mean(),
+                        zoom=5, pitch=25),
+                    tooltip={"html": "<b>{nom}</b><br>{typ} · <b>{camions}</b> dossier(s)<br>"
+                                     "<span style='color:#8a93ad'>Dossiers : {dossiers}</span>",
+                             "style": {"background":"#141821","color":"#cdd4ea",
+                                       "font-family":"Barlow Condensed, sans-serif","padding":"9px"}},
+                    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+                )
+                try:
+                    st.pydeck_chart(deck, use_container_width=True, height=680,
+                                    key="planmap", selection_mode="single-object", on_select="rerun")
+                except TypeError:
+                    st.pydeck_chart(deck, use_container_width=True, height=680)
+                    st.caption("💡 Clic-pour-isoler indisponible sur cette version de Streamlit.")
+                if len(agg) >= MAX_GEO and not focus_norm:
+                    st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
+            except ImportError:
+                st.map(pd.DataFrame(points).rename(columns={"lat":"latitude","lon":"longitude"}))
+
+# ─── Regroupements géographiques ─────────────────────────────────────────────
 st.markdown('<div class="sect">📍 Regroupements géographiques <span class="hint">≥2 activités même jour · même département</span></div>',
             unsafe_allow_html=True)
 
@@ -737,351 +993,156 @@ if clusters:
 else:
     st.caption("Aucune concentration ≥2 activités sur un même jour/département dans ce périmètre.")
 
-# ─── Helpers d'affichage des tags ressources ─────────────────────────────────
-def res_tags(row, show_dim=True):
-    t = []
-    t.append('<span class="tag tra">TRA · ' + (row["depart_trac"] or "?") + '</span>'
-             if row["is_tra"] else '<span class="tag cb">CB</span>')
-    if row["chauffeur"]:
-        t.append(f'<span class="tag">👤 {row["chauffeur"]}</span>')
-    if row["immat"]:
-        t.append(f'<span class="tag">🚚 {row["immat"]}</span>')
-    if row["remorque"]:
-        t.append(f'<span class="tag">📦 {row["remorque"]}</span>')
-    if row["produit"]:
-        t.append(f'<span class="tag prod">🧪 {row["produit"][:26]}</span>')
-    return "".join(t)
+# ─── Helpers tags ressources ──────────────────────────────────────────────────
+def _badge(t):
+    if t["is_tra"]:
+        dep = (t["depart_trac"] or "").strip()
+        extra = "" if (not dep or dep.upper() == "TRA") else f" · {dep}"
+        return f'<span class="tag tra">TRA{extra}</span>'
+    return '<span class="tag cb">CB</span>'
 
-# ─── Vue PAR JOUR ────────────────────────────────────────────────────────────
-if vue == "Par jour":
-    html('<div class="sect">📅 Planning par jour '
-         '<span class="hint">1 dossier = chargement → déchargement · trié par heure</span></div>')
+def _tags(t, with_badge=True):
+    tg = [_badge(t)] if with_badge else []
+    if t["chauffeur"]: tg.append(f'<span class="tag">👤 {t["chauffeur"]}</span>')
+    if t["immat"]:     tg.append(f'<span class="tag">🚚 {t["immat"]}</span>')
+    if t["remorque"]:  tg.append(f'<span class="tag">📦 {t["remorque"]}</span>')
+    if t["produit"]:   tg.append(f'<span class="tag prod">🧪 {t["produit"][:22]}</span>')
+    return "".join(tg)
 
-    lc1, lc2, _sp = st.columns([1.1, 1.5, 2])
-    with lc1:
-        layout = st.radio("Disposition", ["Lignes", "Cartes"], horizontal=True)
-    with lc2:
-        densite = st.select_slider("Densité", options=["Compact", "Normal", "Large"], value="Normal")
-    dens_cls = {"Compact": "dens-compact", "Normal": "dens-normal", "Large": "dens-large"}[densite]
+def _ddate(t):
+    diff = (pd.notna(t["d_date"]) and
+            (pd.isna(t["plan_date"]) or t["d_date"].date() != t["plan_date"].date()))
+    return f' · {t["d_date"].strftime("%d/%m")}' if diff else ""
 
-    # ── helpers de rendu (partagés Lignes / Cartes) ─────────────────────────
-    def _badge(t):
-        if t["is_tra"]:
-            dep = (t["depart_trac"] or "").strip()
-            extra = "" if (not dep or dep.upper() == "TRA") else f" · {dep}"
-            return f'<span class="tag tra">TRA{extra}</span>'
-        return '<span class="tag cb">CB</span>'
+# ════════════════════════════════════════════════════════════════════════════════
+# ─── VUE PAR JOUR (dans un expander) ─────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════════
+with st.expander(f"📅 Planning par jour — {vue}", expanded=False):
 
-    def _tags(t, with_badge=True):
-        tg = [_badge(t)] if with_badge else []
-        if t["chauffeur"]: tg.append(f'<span class="tag">👤 {t["chauffeur"]}</span>')
-        if t["immat"]:     tg.append(f'<span class="tag">🚚 {t["immat"]}</span>')
-        if t["remorque"]:  tg.append(f'<span class="tag">📦 {t["remorque"]}</span>')
-        if t["produit"]:   tg.append(f'<span class="tag prod">🧪 {t["produit"][:22]}</span>')
-        return "".join(tg)
+    if vue == "Par jour":
+        lc1, lc2, _sp = st.columns([1.1, 1.5, 2])
+        with lc1:
+            layout = st.radio("Disposition", ["Lignes", "Cartes"], horizontal=True, key="layout_pj")
+        with lc2:
+            densite = st.select_slider("Densité", options=["Compact", "Normal", "Large"],
+                                       value="Normal", key="dens_pj")
+        dens_cls = {"Compact": "dens-compact", "Normal": "dens-normal", "Large": "dens-large"}[densite]
 
-    def _ddate(t):
-        diff = (pd.notna(t["d_date"]) and
-                (pd.isna(t["plan_date"]) or t["d_date"].date() != t["plan_date"].date()))
-        return f' · {t["d_date"].strftime("%d/%m")}' if diff else ""
+        df_sel = df_scope[df_scope[dim_col].isin(sel)] if sel else df_scope
+        trips  = build_trips(df_sel)
+        _lo2, _hi2 = _range_bounds(date_range)
+        if _lo2 is not None:
+            d0t, d1t = pd.Timestamp(_lo2), pd.Timestamp(_hi2)
+            trips = [t for t in trips if pd.notna(t["plan_date"]) and d0t <= t["plan_date"] <= d1t]
 
-    df_sel = df_scope[df_scope[dim_col].isin(sel)] if sel else df_scope
-    trips = build_trips(df_sel)
-    _lo, _hi = _range_bounds(date_range)
-    if _lo is not None:
-        d0, d1 = pd.Timestamp(_lo), pd.Timestamp(_hi)
-        trips = [t for t in trips if pd.notna(t["plan_date"]) and d0 <= t["plan_date"] <= d1]
+        if not trips:
+            st.warning("Aucun dossier sur cette période.")
+        else:
+            from collections import defaultdict
+            by_day = defaultdict(list)
+            for t in trips:
+                by_day[t["plan_date"].date()].append(t)
 
-    if not trips:
-        st.warning("Aucun dossier sur cette période.")
+            for day in sorted(by_day.keys()):
+                day_trips = sorted(by_day[day], key=lambda t: t["plan_hval"])
+                n_full = sum(1 for t in day_trips if t["has_c"] and t["has_d"])
+                html(f'<div class="dayhead">{pd.Timestamp(day).strftime("%A %d %B %Y").capitalize()}'
+                     f'<span class="cnt">{len(day_trips)} dossiers · {n_full} avec charg.+déch.</span></div>')
+
+                if layout == "Cartes":
+                    parts = ['<div class="trips">']
+                    for t in day_trips:
+                        cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
+                        cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
+                        ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
+                        leg_c = (f'<div class="leg c"><span class="lh">{t["c_heure"] or "—"}</span>'
+                                 f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
+                                 f'<span class="ls">{t["c_site"] or "—"}</span></div>') if t["has_c"] \
+                                else '<div class="leg c off">— chargement hors période —</div>'
+                        leg_d = (f'<div class="leg d"><span class="lh">{t["d_heure"] or "—"}{_ddate(t)}</span>'
+                                 f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
+                                 f'<span class="ls">{t["d_site"] or "—"}</span></div>') if t["has_d"] \
+                                else '<div class="leg d off">— déchargement hors période —</div>'
+                        parts.append(
+                            f'<div class="trip"><div class="trip-h">'
+                            f'<span class="dos">N° {t["dossier"]}</span>'
+                            f'<span class="trip-tags">{_tags(t)}</span></div>'
+                            f'{leg_c}<div class="arrow">↓</div>{leg_d}</div>')
+                    parts.append('</div>')
+                    html("".join(parts))
+
+                else:  # Lignes
+                    parts = [f'<div class="rows {dens_cls}">']
+                    for t in day_trips:
+                        cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
+                        cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
+                        ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
+                        cell_c = (f'<div class="leg2 c"><span class="lh">{t["c_heure"] or "—"}</span>'
+                                  f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
+                                  f'<span class="ls">{t["c_site"] or ""}</span></div>') if t["has_c"] \
+                                 else '<div class="leg2 off">— chargement hors période —</div>'
+                        cell_d = (f'<div class="leg2 d"><span class="lh">{t["d_heure"] or "—"}{_ddate(t)}</span>'
+                                  f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
+                                  f'<span class="ls">{t["d_site"] or ""}</span></div>') if t["has_d"] \
+                                 else '<div class="leg2 off">— déchargement hors période —</div>'
+                        parts.append(
+                            f'<div class="row">'
+                            f'<div class="c1"><span class="dos">N° {t["dossier"]}</span>{_badge(t)}</div>'
+                            f'{cell_c}<div class="rarrow">→</div>{cell_d}'
+                            f'<div class="res">{_tags(t, with_badge=False)}</div></div>')
+                    parts.append('</div>')
+                    html("".join(parts))
+
+    # ── Vue PAR RESSOURCE (swimlane) ──────────────────────────────────────────
     else:
-        from collections import defaultdict
-        by_day = defaultdict(list)
-        for t in trips:
-            by_day[t["plan_date"].date()].append(t)
+        st.markdown(f'<div class="sect">🚚 Planning par {dimension.lower()} '
+                    f'<span class="hint">enchaînement chronologique des activités</span></div>',
+                    unsafe_allow_html=True)
 
-        for day in sorted(by_day.keys()):
-            day_trips = sorted(by_day[day], key=lambda t: t["plan_hval"])
-            n_full = sum(1 for t in day_trips if t["has_c"] and t["has_d"])
-            html(f'<div class="dayhead">{pd.Timestamp(day).strftime("%A %d %B %Y").capitalize()}'
-                 f'<span class="cnt">{len(day_trips)} dossiers · {n_full} avec charg.+déch.</span></div>')
-
-            if layout == "Cartes":
-                parts = ['<div class="trips">']
-                for t in day_trips:
-                    cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
-                    cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
-                    ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
-                    leg_c = (f'<div class="leg c"><span class="lh">{t["c_heure"] or "—"}</span>'
-                             f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
-                             f'<span class="ls">{t["c_site"] or "—"}</span></div>') if t["has_c"] \
-                            else '<div class="leg c off">— chargement hors période —</div>'
-                    leg_d = (f'<div class="leg d"><span class="lh">{t["d_heure"] or "—"}{_ddate(t)}</span>'
-                             f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
-                             f'<span class="ls">{t["d_site"] or "—"}</span></div>') if t["has_d"] \
-                            else '<div class="leg d off">— déchargement hors période —</div>'
-                    parts.append(
-                        f'<div class="trip"><div class="trip-h">'
-                        f'<span class="dos">N° {t["dossier"]}</span>'
-                        f'<span class="trip-tags">{_tags(t)}</span></div>'
-                        f'{leg_c}<div class="arrow">↓</div>{leg_d}</div>')
-                parts.append('</div>')
-                html("".join(parts))
-
-            else:  # Lignes — une ligne par dossier, lecture gauche → droite
-                parts = [f'<div class="rows {dens_cls}">']
-                for t in day_trips:
-                    cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
-                    cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
-                    ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
-                    cell_c = (f'<div class="leg2 c"><span class="lh">{t["c_heure"] or "—"}</span>'
-                              f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
-                              f'<span class="ls">{t["c_site"] or ""}</span></div>') if t["has_c"] \
-                             else '<div class="leg2 off">— chargement hors période —</div>'
-                    cell_d = (f'<div class="leg2 d"><span class="lh">{t["d_heure"] or "—"}{_ddate(t)}</span>'
-                              f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
-                              f'<span class="ls">{t["d_site"] or ""}</span></div>') if t["has_d"] \
-                             else '<div class="leg2 off">— déchargement hors période —</div>'
-                    parts.append(
-                        f'<div class="row">'
-                        f'<div class="c1"><span class="dos">N° {t["dossier"]}</span>{_badge(t)}</div>'
-                        f'{cell_c}<div class="rarrow">→</div>{cell_d}'
-                        f'<div class="res">{_tags(t, with_badge=False)}</div></div>')
-                parts.append('</div>')
-                html("".join(parts))
-
-# ─── Vue PAR RESSOURCE (swimlane) ────────────────────────────────────────────
-else:
-    st.markdown(f'<div class="sect">🚚 Planning par {dimension.lower()} '
-                f'<span class="hint">enchaînement chronologique des activités</span></div>',
-                unsafe_allow_html=True)
-
-    resources = [r for r in dfx[dim_col].dropna().unique() if str(r).strip()]
-    resources = sorted(resources, key=lambda r: -len(dfx[dfx[dim_col] == r]))
-    MAX_LANES = 40
-    for r in resources[:MAX_LANES]:
-        gr = dfx[dfx[dim_col] == r].sort_values(["date", "_hval"])
-        is_tra = bool(gr["is_tra"].any())
-        nb = len(gr)
-        meta_bits = []
-        if dim_col != "chauffeur":
-            chs = sorted(set(x for x in gr["chauffeur"] if x))
-            if chs:
-                meta_bits.append("👤 " + ", ".join(chs[:3]))
-        if dim_col != "remorque":
-            rms = sorted(set(x for x in gr["remorque"] if x))
-            if rms:
-                meta_bits.append("📦 " + ", ".join(rms[:3]))
-        tra_badge = '<span class="tag tra" style="font-size:.66rem">TRA</span>' if is_tra else ''
-        stops = ""
-        for _, row in gr.iterrows():
-            kl = "c" if row["type"] == "C" else ("d" if row["type"] == "D" else "")
-            dlabel = row["date"].strftime("%d/%m") if pd.notna(row["date"]) else "—"
-            stops += (f'<span class="stop {kl}"><span class="t">{dlabel} {row["heure"]}</span>'
-                      f'{row["localite"].upper() or "?"}</span>')
-        html(f"""
-        <div class="lane">
-          <div class="who">{tra_badge}{r}
-            <span class="meta">· {nb} activités{(" · " + " · ".join(meta_bits)) if meta_bits else ""}</span></div>
-          <div class="flow">{stops}</div>
-        </div>""")
-    if len(resources) > MAX_LANES:
-        st.caption(f"Affichage des {MAX_LANES} ressources les plus actives sur {len(resources)}. "
-                   "Affine via le multiselect pour le reste.")
-
-# ─── Carte ───────────────────────────────────────────────────────────────────
-st.markdown('<div class="sect">🗺️ Carte des activités '
-            '<span class="hint">taille &amp; chiffre = nb de camions prévus · vert charg · bleu déch · arcs = dossiers</span></div>',
-            unsafe_allow_html=True)
-st.caption("ℹ️ La carte hérite déjà du filtre du haut (périmètre, ressource, période). "
-           "Les filtres ci-dessous l'affinent en plus, sans toucher au reste de la page.")
-
-with st.expander("Afficher la carte (géocodage à la demande)", expanded=False):
-    MAX_GEO = 120
-
-    # ── Filtres propres à la carte (en plus du filtre du haut) ──────────────
-    mc1, mc2, mc3 = st.columns([1.2, 1, 1.5])
-    with mc1:
-        dates_opt = sorted(dfx["date"].dropna().dt.date.unique())
-        date_lbls = ["Toutes les dates"] + [d.strftime("%d/%m/%Y") for d in dates_opt]
-        msel_date = st.selectbox("Date (carte)", date_lbls)
-    with mc2:
-        mdim = st.selectbox("Filtrer par", ["— (tout)", "Chauffeur", "Tracteur (immat.)", "Remorque"])
-        mdim_col = {"Chauffeur": "chauffeur", "Tracteur (immat.)": "immat", "Remorque": "remorque"}.get(mdim)
-    with mc3:
-        if mdim_col:
-            mvals = sorted([v for v in dfx[mdim_col].dropna().unique() if str(v).strip()])
-            msel_vals = st.multiselect(f"{mdim} — vide = tout confondu", mvals)
-        else:
-            msel_vals = []
-
-    dmap = dfx.copy()
-    if msel_date != "Toutes les dates":
-        chosen = pd.to_datetime(msel_date, format="%d/%m/%Y").date()
-        dmap = dmap[dmap["date"].dt.date == chosen]
-    if mdim_col and msel_vals:
-        dmap = dmap[dmap[mdim_col].isin(msel_vals)]
-
-    if dmap.empty:
-        st.info("Aucune activité pour ces filtres carte.")
-    else:
-        # ── Contrôles d'affichage de la carte ───────────────────────────────
-        oc1, oc2, oc3 = st.columns([1.3, 1, 1.6])
-        with oc1:
-            show_mode = st.radio("Afficher", ["Les deux", "Chargements", "Déchargements"],
-                                 horizontal=True)
-        with oc2:
-            show_arcs = st.checkbox("Relier les points (arcs)", value=True)
-        with oc3:
-            loc_opts = sorted({l for l in dmap["localite"] if str(l).strip()})
-            focus_choice = st.selectbox("🔎 Isoler un point (n'afficher que ses liaisons)",
-                                        ["— tout afficher"] + loc_opts)
-
-        # Sélection par clic sur la carte (si la version de Streamlit le gère)
-        clicked_norm = None
-        try:
-            _state = st.session_state.get("planmap")
-            if _state and "selection" in _state:
-                _objs = _state["selection"]["objects"]
-                _pts = _objs.get("pts") if isinstance(_objs, dict) else None
-                if _pts:
-                    clicked_norm = _pts[0].get("loc_norm")
-        except Exception:
-            clicked_norm = None
-
-        focus_norm = clicked_norm or (normalize(focus_choice) if focus_choice != "— tout afficher" else None)
-
-        # ── Agrégat par lieu + type : nb de camions = nb de dossiers distincts ──
-        agg = (dmap.assign(loc_norm=dmap["localite"].apply(normalize))
-                   .groupby(["loc_norm", "type"])
-                   .agg(localite=("localite", "first"), cp=("cp", "first"),
-                        pays=("pays", "first"), dept=("dept", "first"),
-                        camions=("dossier", "nunique"),
-                        dossiers=("dossier", lambda s: ", ".join(sorted(set(s))[:10])))
-                   .reset_index())
-        agg = agg[agg["localite"].str.strip() != ""]
-        agg = agg.sort_values("camions", ascending=False).head(MAX_GEO)
-
-        coords_cache, points = {}, []
-        with st.spinner(f"📡 Géocodage de {len(agg)} lieux (PTV → OSM)…"):
-            for _, row in agg.iterrows():
-                key = (row["loc_norm"], row["cp"], row["pays"])
-                if key not in coords_cache:
-                    coords_cache[key] = geocode_cached(row["localite"], row["cp"], row["pays"])
-                c = coords_cache[key]
-                if c:
-                    n = int(row["camions"])
-                    points.append({
-                        "nom": row["localite"], "loc_norm": row["loc_norm"], "label": str(n),
-                        "camions": n, "typ": "Chargement" if row["type"] == "C" else "Déchargement",
-                        "pays": row["pays"], "dossiers": row["dossiers"],
-                        "lat": c[0], "lon": c[1],
-                        "radius": 900 + (n ** 0.5) * 1150,
-                        "color": [74, 191, 106, 215] if row["type"] == "C" else [74, 138, 191, 215],
-                    })
-
-        # ── Arcs charg → déch par dossier (avec lieux pour l'isolation) ─────────
-        arcs = []
-        for dos in dmap["dossier"].unique():
-            lg = legs.get(dos, {})
-            cn, dn = normalize(lg.get("c_loc", "")), normalize(lg.get("d_loc", ""))
-            ck, dk = (cn, lg.get("c_cp", ""), lg.get("c_pays", "")), (dn, lg.get("d_cp", ""), lg.get("d_pays", ""))
-            cc = coords_cache.get(ck) or (geocode_cached(lg.get("c_loc", ""), lg.get("c_cp", ""), lg.get("c_pays", "")) if lg.get("c_loc") else None)
-            dc = coords_cache.get(dk) or (geocode_cached(lg.get("d_loc", ""), lg.get("d_cp", ""), lg.get("d_pays", "")) if lg.get("d_loc") else None)
-            if cc and dc:
-                arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0],
-                             "dos": dos, "cn": cn, "dn": dn, "w": 1.6})
-
-        # ── Application des options (isolation > filtre type) ───────────────────
-        if focus_norm:
-            arcs_draw = [a for a in arcs if a["cn"] == focus_norm or a["dn"] == focus_norm]
-            related = {focus_norm} | {a["cn"] for a in arcs_draw} | {a["dn"] for a in arcs_draw}
-            points = [p for p in points if p["loc_norm"] in related]   # uniquement le point + ses bouts
-            for a in arcs_draw:
-                a["w"] = 3.0
-            for p in points:                                           # met le point isolé en avant
-                if p["loc_norm"] == focus_norm:
-                    p["radius"] *= 1.5
-                    p["color"] = p["color"][:3] + [255]
-            foc_name = next((p["nom"] for p in points if p["loc_norm"] == focus_norm), focus_choice)
-            st.info(f"🔎 Point isolé : **{foc_name}** — {len(arcs_draw)} liaison(s) affichée(s). "
-                    + ("(sélection par clic — recliquez le point pour désélectionner)"
-                       if clicked_norm else "Repassez sur « — tout afficher » pour réinitialiser."))
-        else:
-            arcs_draw = arcs if show_arcs else []
-            if show_mode == "Chargements":
-                points = [p for p in points if p["typ"] == "Chargement"]
-            elif show_mode == "Déchargements":
-                points = [p for p in points if p["typ"] == "Déchargement"]
-
-        n_charg_cam = int(dmap[dmap["type"] == "C"]["dossier"].nunique())
-        n_dech_cam  = int(dmap[dmap["type"] == "D"]["dossier"].nunique())
-        st.markdown(
-            f'<div class="legendline">Sur ce périmètre carte : '
-            f'<b class="c">{n_charg_cam}</b> camions au chargement · '
-            f'<b class="d">{n_dech_cam}</b> camions au déchargement.</div>',
-            unsafe_allow_html=True)
-
-        if not points:
-            st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
-        else:
-            try:
-                import pydeck as pdk
-                dfp = pd.DataFrame(points)
-                layers = [
-                    pdk.Layer("ScatterplotLayer", data=dfp, id="pts",
-                              get_position="[lon, lat]", get_radius="radius",
-                              radius_min_pixels=8, radius_max_pixels=48,
-                              get_fill_color="color", get_line_color=[255, 255, 255, 110],
-                              stroked=True, line_width_min_pixels=1, pickable=True,
-                              auto_highlight=True),
-                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
-                              get_text="label", get_size=14, get_color=[10, 14, 18, 255],
-                              get_anchor="middle", get_alignment_baseline="'center'", font_weight=800),
-                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
-                              get_text="nom", get_size=11, get_color=[200, 210, 230, 210],
-                              get_anchor="middle", get_alignment_baseline="'bottom'",
-                              get_pixel_offset=[0, -16]),
-                ]
-                if arcs_draw:
-                    layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs_draw),
-                        get_source_position="[sl, sla]", get_target_position="[tl, tla]",
-                        get_source_color=[74, 191, 106, 150], get_target_color=[74, 138, 191, 170],
-                        get_width="w", width_min_pixels=1))
-                deck = pdk.Deck(
-                    layers=layers,
-                    initial_view_state=pdk.ViewState(latitude=dfp["lat"].mean(),
-                                                     longitude=dfp["lon"].mean(), zoom=5, pitch=30),
-                    tooltip={"html": "<b>{nom}</b><br>{typ} · <b>{camions}</b> camion(s) prévu(s)<br>"
-                                     "<span style='color:#8a93ad'>Dossiers : {dossiers}</span>",
-                             "style": {"background": "#141821", "color": "#cdd4ea",
-                                       "font-family": "Barlow Condensed, sans-serif", "padding": "9px"}},
-                    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-                )
-                # Clic = isolation, si supporté par la version de Streamlit ; sinon repli simple
-                try:
-                    st.pydeck_chart(deck, use_container_width=True, height=560,
-                                    key="planmap", selection_mode="single-object", on_select="rerun")
-                except TypeError:
-                    st.pydeck_chart(deck, use_container_width=True, height=560)
-                    st.caption("💡 Clic-pour-isoler indisponible sur cette version de Streamlit — "
-                               "utilise le menu « Isoler un point » ci-dessus.")
-                if len(agg) >= MAX_GEO and not focus_norm:
-                    st.caption(f"Géocodage limité aux {MAX_GEO} lieux avec le plus de camions — affine les filtres pour le reste.")
-            except ImportError:
-                st.map(pd.DataFrame(points).rename(columns={"lat": "latitude", "lon": "longitude"}))
+        resources = [r for r in dfx[dim_col].dropna().unique() if str(r).strip()]
+        resources = sorted(resources, key=lambda r: -len(dfx[dfx[dim_col] == r]))
+        MAX_LANES = 40
+        for r in resources[:MAX_LANES]:
+            gr = dfx[dfx[dim_col] == r].sort_values(["date", "_hval"])
+            is_tra = bool(gr["is_tra"].any())
+            nb = len(gr)
+            meta_bits = []
+            if dim_col != "chauffeur":
+                chs = sorted(set(x for x in gr["chauffeur"] if x))
+                if chs:
+                    meta_bits.append("👤 " + ", ".join(chs[:3]))
+            if dim_col != "remorque":
+                rms = sorted(set(x for x in gr["remorque"] if x))
+                if rms:
+                    meta_bits.append("📦 " + ", ".join(rms[:3]))
+            tra_badge = '<span class="tag tra" style="font-size:.66rem">TRA</span>' if is_tra else ''
+            stops = ""
+            for _, row in gr.iterrows():
+                kl = "c" if row["type"] == "C" else ("d" if row["type"] == "D" else "")
+                dlabel = row["date"].strftime("%d/%m") if pd.notna(row["date"]) else "—"
+                stops += (f'<span class="stop {kl}"><span class="t">{dlabel} {row["heure"]}</span>'
+                          f'{row["localite"].upper() or "?"}</span>')
+            html(f"""
+            <div class="lane">
+              <div class="who">{tra_badge}{r}
+                <span class="meta">· {nb} activités{(" · " + " · ".join(meta_bits)) if meta_bits else ""}</span></div>
+              <div class="flow">{stops}</div>
+            </div>""")
+        if len(resources) > MAX_LANES:
+            st.caption(f"Affichage des {MAX_LANES} ressources les plus actives. "
+                       "Affine via le multiselect pour le reste.")
 
 # ─── Tableau & export ────────────────────────────────────────────────────────
 with st.expander("📋 Tableau détaillé + export"):
     show = dfx.copy()
-    show["Type"] = show["type"].map({"C": "Chargement", "D": "Déchargement", "?": "?"})
+    show["Type"]   = show["type"].map({"C":"Chargement","D":"Déchargement","?":"?"})
     show["Flotte"] = np.where(show["is_tra"], "Tractionnaire", "CB")
-    show["Date"] = show["date"].dt.strftime("%d/%m/%Y")
-    table = show[["Date", "heure", "Type", "dossier", "localite", "dept", "pays",
-                  "site", "produit", "chauffeur", "immat", "remorque", "Flotte", "depart_trac"]].rename(columns={
-        "heure": "Heure", "dossier": "N° Dossier", "localite": "Localité", "dept": "Dépt",
-        "pays": "Pays", "site": "Site", "produit": "Produit", "chauffeur": "Chauffeur",
-        "immat": "Immat. tracteur", "remorque": "Remorque", "depart_trac": "Départ. tracteur"})
+    show["Date"]   = show["date"].dt.strftime("%d/%m/%Y")
+    table = show[["Date","heure","Type","dossier","localite","dept","pays",
+                  "site","produit","chauffeur","immat","remorque","Flotte","depart_trac"]].rename(columns={
+        "heure":"Heure","dossier":"N° Dossier","localite":"Localité","dept":"Dépt",
+        "pays":"Pays","site":"Site","produit":"Produit","chauffeur":"Chauffeur",
+        "immat":"Immat. tracteur","remorque":"Remorque","depart_trac":"Départ. tracteur"})
     st.dataframe(table, hide_index=True, use_container_width=True)
 
     buf = io.BytesIO()
