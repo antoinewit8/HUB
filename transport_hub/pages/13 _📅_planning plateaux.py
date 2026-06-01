@@ -386,6 +386,26 @@ def geocode_cached(ville: str, cp: str, pays: str):
     return None
 
 # ─── Chargement / préparation des données ────────────────────────────────────
+def smart_to_datetime(s):
+    """Détecte automatiquement jour/mois vs mois/jour. Un fichier de planning
+    couvre quelques jours, pas 11 mois : on garde l'interprétation valide la
+    plus resserrée. Renvoie (series, libellé ordre)."""
+    s = s.fillna("").astype(str).str.strip()
+    a = pd.to_datetime(s, errors="coerce", dayfirst=True)   # jour/mois (EU)
+    b = pd.to_datetime(s, errors="coerce", dayfirst=False)  # mois/jour (US)
+
+    def span_days(x):
+        x = x.dropna()
+        return (x.max() - x.min()).days if len(x) > 1 else 0
+
+    na_a, na_b = int(a.isna().sum()), int(b.isna().sum())
+    if na_a != na_b:                       # une interprétation casse plus de lignes → écartée
+        return (a, "jour/mois") if na_a < na_b else (b, "mois/jour")
+    # même validité → la plus resserrée gagne (planning = fenêtre courte)
+    if span_days(a) == span_days(b):
+        return a, "jour/mois (défaut)"
+    return (a, "jour/mois") if span_days(a) < span_days(b) else (b, "mois/jour")
+
 @st.cache_data(show_spinner=False)
 def load_activites(file_bytes):
     df = pd.read_excel(io.BytesIO(file_bytes), dtype=str)
@@ -421,7 +441,7 @@ def load_activites(file_bytes):
     out["dossier"]   = col("dossier").fillna("").astype(str).str.strip()
     out["_act_raw"]  = col("activite").fillna("").astype(str).str.strip()
     out["type"]      = out["_act_raw"].apply(classify_activite)
-    out["date"]      = pd.to_datetime(col("date"), errors="coerce", dayfirst=True)
+    out["date"], _date_order = smart_to_datetime(col("date"))
     he = col("heure").apply(parse_heure)
     out["heure"]     = he.apply(lambda x: x[0])
     out["_hval"]     = he.apply(lambda x: x[1])
@@ -456,7 +476,7 @@ def load_activites(file_bytes):
     # Distinct values Activité pour debug
     act_distinct = (df[C["activite"]].dropna().astype(str).str.strip().value_counts()
                     if C["activite"] else pd.Series(dtype=int))
-    return out, C, act_distinct
+    return out, C, act_distinct, _date_order
 
 def build_dossier_legs(df):
     """Pour chaque dossier : 1ère jambe chargement & dernière jambe déchargement."""
@@ -539,7 +559,7 @@ if not up:
             "Chaque ligne = une activité (chargement ou déchargement) rattachée à un N° Dossier.")
     st.stop()
 
-df, COLS, ACT_DISTINCT = load_activites(up.read())
+df, COLS, ACT_DISTINCT, DATE_ORDER = load_activites(up.read())
 if df.empty:
     st.error("Aucune ligne exploitable (colonne « N° Dossier » introuvable ou vide).")
     st.stop()
@@ -556,6 +576,11 @@ with st.expander("🔧 Debug — colonnes détectées & valeurs Activité"):
     if n_unknown:
         st.warning(f"⚠️ {n_unknown} activité(s) non classées (ni chargement ni déchargement). "
                    "Vérifie le mapping ci-dessus — ces lignes sont ignorées dans les colonnes Charg/Déch.")
+    _dd = df["date"].dropna()
+    if not _dd.empty:
+        st.write(f"**Format de date détecté :** `{DATE_ORDER}` — "
+                 f"du {_dd.min().strftime('%d/%m/%Y')} au {_dd.max().strftime('%d/%m/%Y')} "
+                 f"({_dd.dt.date.nunique()} jours).")
 
 # ─── Filtres ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="sect">🎛️ Filtres planning <span class="hint">multiselect vide = tout confondu</span></div>',
