@@ -892,20 +892,20 @@ else:
             # CSS des boutons-pays injecté une seule fois
             st.markdown(f"""
 <style>
-div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.4rem;}}
+div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.5rem;}}
 .pp-btn-wrap button {{
   width:100%; text-align:left !important;
   background:#141821 !important; border:1px solid #222838 !important;
-  border-radius:7px !important; padding:1rem 1.1rem !important;
+  border-radius:8px !important; padding:1.4rem 1.3rem !important;
   cursor:pointer; transition:border-color .15s;
   font-family:'Barlow Condensed',sans-serif !important;
-  white-space:pre-wrap !important; line-height:2.2 !important;
-  color:#ffffff !important; font-size:1.5rem !important; font-weight:700 !important;
-  min-height:90px !important;
+  white-space:pre-wrap !important; line-height:1.6 !important;
+  color:#ffffff !important; font-size:2.2rem !important; font-weight:700 !important;
+  min-height:110px !important; letter-spacing:.3px !important;
 }}
 .pp-btn-wrap button p {{
-  color:#ffffff !important; font-size:1.5rem !important; font-weight:700 !important;
-  margin:0 !important; line-height:2.2 !important;
+  color:#ffffff !important; font-size:2.2rem !important; font-weight:700 !important;
+  margin:0 !important; line-height:1.6 !important; letter-spacing:.3px !important;
 }}
 .pp-btn-wrap button:hover {{ border-color:#3a4a6a !important; background:#1a2030 !important; }}
 .pp-btn-wrap.active button {{ border-color:#4abf6a !important; background:#1b2b1f !important; }}
@@ -927,7 +927,7 @@ div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.4rem;}}
                     detail_line = "\n+  " + "  ·  ".join(parts)
 
                 # Label multi-ligne du bouton : flag + code + chiffre + détail éventuel
-                btn_label = f"{flag}  {pays_code}    {total}{detail_line}"
+                btn_label = f"{flag}  {pays_code}     {total}{detail_line}"
 
                 active_cls = "active" if is_active else ""
                 st.markdown(f'<div class="pp-btn-wrap {active_cls}">', unsafe_allow_html=True)
