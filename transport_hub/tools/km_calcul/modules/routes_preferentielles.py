@@ -9,9 +9,10 @@ from modules.villes_jalons import detecter_villes_jalons
 # ==========================================
 # CONFIG
 # ==========================================
-BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
-JSON_PATH  = os.path.join(BASE_DIR, "..", "routes_preferentielles.json")
-CACHE_PATH = os.path.join(BASE_DIR, "..", "cache_geocodage.json")
+BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
+JSON_PATH     = os.path.join(BASE_DIR, "..", "routes_preferentielles.json")
+JSON_APPRISES = os.path.join(BASE_DIR, "..", "routes_apprises.json")
+CACHE_PATH    = os.path.join(BASE_DIR, "..", "cache_geocodage.json")
 
 PTV_API_KEY = os.environ.get("PTV_API_KEY", "")
 PTV_GEO_URL = "https://api.myptv.com/geocoding/v1/locations/by-text"
@@ -43,24 +44,38 @@ _geocache: dict = charger_cache()
 # ==========================================
 _routes_cache: list | None = None
 
+def _lire_json(path: str) -> list:
+    """Lit un fichier JSON de routes, retourne [] si absent ou corrompu."""
+    path = os.path.abspath(path)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"⚠️ Erreur lecture {os.path.basename(path)} : {e}")
+        return []
+
 def charger_routes() -> list:
+    """
+    Fusionne routes_preferentielles.json + routes_apprises.json.
+    Les routes apprises sont placées en tête (priorité sur les manuelles).
+    """
     global _routes_cache
     if _routes_cache is not None:
         return _routes_cache
 
-    path = os.path.abspath(JSON_PATH)
-    if not os.path.exists(path):
-        print(f"⚠️ routes_preferentielles.json introuvable : {path}")
-        _routes_cache = []
-        return []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            _routes_cache = json.load(f)
-            return _routes_cache
-    except json.JSONDecodeError as e:
-        print(f"⚠️ Erreur lecture JSON : {e}")
-        _routes_cache = []
-        return []
+    manuelles = _lire_json(JSON_PATH)
+    apprises  = _lire_json(JSON_APPRISES)
+
+    if apprises:
+        print(f"   📚 {len(apprises)} routes apprises chargées (+ {len(manuelles)} manuelles)")
+    else:
+        print(f"   📋 {len(manuelles)} routes manuelles chargées (pas encore de routes apprises)")
+
+    # Routes apprises en tête → matchées en priorité
+    _routes_cache = apprises + manuelles
+    return _routes_cache
 
 # ==========================================
 # NORMALISATION

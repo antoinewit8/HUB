@@ -138,7 +138,26 @@ else:
                     )
 
                     if resp.status_code == 200:
-                        st.session_state["calc"]    = resp.json()
+                        calc_data = resp.json()
+                        # Créer la route en Firebase pour obtenir un route_id permanent
+                        try:
+                            create_resp = requests.post(
+                                f"{MAP_SERVER_URL}/api/create_route",
+                                json={
+                                    "origin":      format_location(origine),
+                                    "dest":        format_location(destination),
+                                    "distance_km": calc_data.get("distance_km", 0),
+                                    "duration_h":  calc_data.get("duration_h", 0),
+                                    "polyline":    calc_data.get("polyline", []),
+                                    "prix_peage":  calc_data.get("prix_peage", 0.0),
+                                },
+                                timeout=15
+                            )
+                            if create_resp.status_code == 200:
+                                calc_data["route_id"] = create_resp.json().get("id", "manual")
+                        except Exception:
+                            calc_data["route_id"] = "manual"
+                        st.session_state["calc"]    = calc_data
                         st.session_state["origine"] = format_location(origine)
                         st.session_state["dest"]    = format_location(destination)
                         st.rerun()

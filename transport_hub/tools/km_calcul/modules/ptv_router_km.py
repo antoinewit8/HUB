@@ -153,16 +153,16 @@ def geocode_address(address):
         cp          = match_ville_cp.group(2).strip()
         pays_str    = match_ville_cp.group(3).strip()
         country_iso = PAYS_TO_ISO.get(pays_str.lower())
-
-        # CP + pays disponibles → by-postal-code en priorité (précis, pas de dérive)
+    
+        # Recherche avec ville + CP pour ancrer le département
+        result = _geocode_by_text(f"{ville}, {cp}, {pays_str}")
+        if result:
+            return result
+        # Fallback : CP seul (géocodage postal)
         if country_iso:
             result = geocode_by_postal_code(cp, country_iso)
             if result:
                 return result
-        # Fallback by-text seulement si le CP échoue
-        result = _geocode_by_text(f"{ville}, {pays_str}")
-        if result:
-            return result
         return _geocode_by_text(address)
 
     if match_cp_only:
@@ -225,26 +225,36 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
             if isinstance(wp_address, (list, tuple)) and len(wp_address) == 2:
                 try:
                     lat, lon = float(wp_address[0]), float(wp_address[1])
-                    waypoints_coords.append((lat, lon))
+                    waypoints_coords.append((lat, lon, None))
                     print(f"      📌 Waypoint direct : ({lat:.4f}, {lon:.4f})")
                     continue
                 except (ValueError, TypeError):
                     pass
             
             if isinstance(wp_address, str) and "," in wp_address:
-                parts = wp_address.split(",")
+                # Support du format "lat, lon;r=RADIUS" pour les jalons automatiques
+                radius_override = None
+                wp_clean = wp_address
+                if ";r=" in wp_address:
+                    wp_clean, radius_str = wp_address.split(";r=", 1)
+                    try:
+                        radius_override = int(radius_str.strip())
+                    except ValueError:
+                        pass
+                parts = wp_clean.split(",")
                 if len(parts) == 2:
                     try:
                         lat, lon = float(parts[0].strip()), float(parts[1].strip())
-                        waypoints_coords.append((lat, lon))
-                        print(f"      📌 Waypoint GPS : ({lat:.4f}, {lon:.4f})")
+                        waypoints_coords.append((lat, lon, radius_override))
+                        r_str = f", radius={radius_override}m" if radius_override else ""
+                        print(f"      📌 Waypoint GPS : ({lat:.4f}, {lon:.4f}){r_str}")
                         continue
                     except ValueError:
                         pass
             
             coords = geocode_address(wp_address)
             if coords:
-                waypoints_coords.append(coords)
+                waypoints_coords.append((coords[0], coords[1], None))
                 print(f"      📌 Waypoint géocodé : {wp_address} → {coords}")
             else:
                 print(f"      ⚠️  Waypoint ignoré : {wp_address}")
@@ -267,14 +277,25 @@ def calculate_km_route(lat_start, lon_start, lat_end, lon_end, waypoints=None, c
         query_params.append(("options[avoid]", ",".join(set(extra_avoids))))
 
     # 3. Rassemblement de tous les points (Départ + Intermédiaires + Arrivée)
-    all_points = [(lat_start, lon_start)] + waypoints_coords + [(lat_end, lon_end)]
-    print(f"      🗺️  {len(all_points)} points au total ({len(waypoints_coords)} intermédiaires)")
+    # Normaliser waypoints_coords en tuples (lat, lon, radius_or_None)
+    wp_normalized = []
+    for wp in waypoints_coords:
+        if len(wp) == 3:
+            wp_normalized.append(wp)
+        else:
+            wp_normalized.append((wp[0], wp[1], None))
 
-    # 4. Ajout des points avec "radius=5000" pour les étapes intermédiaires
-    for i, (lat, lon) in enumerate(all_points):
+    all_points = [(lat_start, lon_start, None)] + wp_normalized + [(lat_end, lon_end, None)]
+    print(f"      🗺️  {len(all_points)} points au total ({len(wp_normalized)} intermédiaires)")
+
+    # 4. Ajout des waypoints avec radius adapté
+    for i, point in enumerate(all_points):
+        lat, lon = point[0], point[1]
+        radius   = point[2] if len(point) > 2 else None
         if 0 < i < len(all_points) - 1:
-            # Étape intermédiaire : on laisse 5km de tolérance
-            query_params.append(("waypoints", f"{lat},{lon};radius=5000"))
+            # Jalon intermédiaire : radius explicite si fourni, sinon 500m par défaut
+            r = radius if radius else 500
+            query_params.append(("waypoints", f"{lat},{lon};radius={r}"))
         else:
             # Vrai Départ / Vraie Arrivée : précision stricte
             query_params.append(("waypoints", f"{lat},{lon}"))

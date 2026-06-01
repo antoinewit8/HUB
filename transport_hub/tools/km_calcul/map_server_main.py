@@ -10,7 +10,8 @@ from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
-import uvicorn, uuid, json, os, httpx
+import uvicorn, uuid, json, os, httpx, base64
+from datetime import date
 from dotenv import load_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -36,6 +37,13 @@ os.makedirs("data", exist_ok=True)
 PTV_API_KEY    = os.environ.get("PTV_API_KEY", "")
 MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "http://localhost:8000")
 FIREBASE_URL   = os.environ.get("FIREBASE_URL", "").rstrip("/")
+
+# ── GitHub API ────────────────────────────────────────────────────────────────
+GITHUB_TOKEN  = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO   = os.environ.get("GITHUB_REPO", "antoinewit8/hub")
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+# Chemin dans le repo GitHub (même dossier que routes_preferentielles.json)
+LEARNED_FILE  = "transport_hub/tools/km_calcul/routes_apprises.json"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -154,6 +162,12 @@ class RecalcDragRequest(BaseModel):
     avoid_highways: bool = False
     super_pref:     bool = False
     route_id:       Optional[str] = None
+
+class SaveReferenceRequest(BaseModel):
+    origin:    str
+    dest:      str
+    waypoints: List[WaypointItem]   # waypoints intermédiaires uniquement
+    km:        float
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -333,8 +347,8 @@ async def create_route(route: RouteCreate):
     routes = {route_id: route_data}
     save_routes(routes)
 
-        url = f"{MAP_SERVER_URL}/carte?id={route_id}"
-        return {"url": url, "id": route_id}
+    url = f"{MAP_SERVER_URL}/carte?id={route_id}"
+    return {"url": url, "id": route_id}
 
 
 # ── Afficher la carte ────────────────────────────────────────────────────────
@@ -494,6 +508,140 @@ async def geocode(q: str):
         {"display_name": item.get("display_name", ""), "lat": float(item["lat"]), "lon": float(item["lon"])}
         for item in results
     ]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  LANCEMENT
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GITHUB API — lecture / écriture de routes_apprises.json
+# ══════════════════════════════════════════════════════════════════════════════
+
+GITHUB_API = "https://api.github.com"
+
+def _github_headers() -> dict:
+    return {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+async def _github_read_learned() -> tuple:
+    """
+    Lit routes_apprises.json depuis GitHub.
+    Retourne (liste_routes, sha_actuel). sha=None si le fichier n'existe pas.
+    """
+    url = f"{GITHUB_API}/repos/{GITHUB_REPO}/contents/{LEARNED_FILE}"
+    async with httpx.AsyncClient() as client:
+        r = await client.get(url, headers=_github_headers(),
+                             params={"ref": GITHUB_BRANCH}, timeout=15)
+    if r.status_code == 404:
+        return [], None
+    if r.status_code != 200:
+        raise HTTPException(500, f"GitHub read error {r.status_code}: {r.text}")
+    data = r.json()
+    sha  = data["sha"]
+    content = base64.b64decode(data["content"]).decode("utf-8")
+    try:
+        routes = json.loads(content)
+    except json.JSONDecodeError:
+        routes = []
+    return routes, sha
+
+
+async def _github_write_learned(routes: list, sha, commit_msg: str):
+    """Écrit routes_apprises.json dans GitHub (create ou update)."""
+    if not GITHUB_TOKEN:
+        raise HTTPException(500, "GITHUB_TOKEN non configuré sur Render")
+
+    url     = f"{GITHUB_API}/repos/{GITHUB_REPO}/contents/{LEARNED_FILE}"
+    content = base64.b64encode(
+        json.dumps(routes, ensure_ascii=False, indent=2).encode("utf-8")
+    ).decode("utf-8")
+
+    body: dict = {
+        "message": commit_msg,
+        "content": content,
+        "branch":  GITHUB_BRANCH,
+    }
+    if sha:
+        body["sha"] = sha
+
+    async with httpx.AsyncClient() as client:
+        r = await client.put(url, headers=_github_headers(), json=body, timeout=20)
+    if r.status_code not in (200, 201):
+        raise HTTPException(500, f"GitHub write error {r.status_code}: {r.text}")
+    return r.json()
+
+
+@app.post("/api/save_reference")
+async def save_reference(data: SaveReferenceRequest):
+    """
+    Enregistre un itinéraire modifié manuellement dans routes_apprises.json sur GitHub.
+    """
+    try:
+        routes, sha = await _github_read_learned()
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(500, f"Erreur lecture GitHub : {e}")
+
+    o_norm = data.origin.strip().lower()
+    d_norm = data.dest.strip().lower()
+
+    existing_idx = None
+    for i, r in enumerate(routes):
+        if (r.get("origine", "").strip().lower() == o_norm
+                and r.get("destination", "").strip().lower() == d_norm):
+            existing_idx = i
+            break
+
+    wp_strings = [f"{wp.lat:.6f}, {wp.lng:.6f}" for wp in data.waypoints]
+    today = date.today().isoformat()
+
+    if existing_idx is not None:
+        old = routes[existing_idx]
+        new_confiance = old.get("confiance", 1) + 1
+        routes[existing_idx] = {
+            "origine":      data.origin.strip(),
+            "destination":  data.dest.strip(),
+            "waypoints":    wp_strings,
+            "km_reference": round(data.km, 1),
+            "source":       "carte_manuelle",
+            "date":         today,
+            "confiance":    new_confiance,
+        }
+        action = f"update ({new_confiance}x validé)"
+    else:
+        routes.append({
+            "origine":      data.origin.strip(),
+            "destination":  data.dest.strip(),
+            "waypoints":    wp_strings,
+            "km_reference": round(data.km, 1),
+            "source":       "carte_manuelle",
+            "date":         today,
+            "confiance":    1,
+        })
+        action = "ajout"
+
+    commit_msg = f"feat(routes): {action} {data.origin} → {data.dest} ({round(data.km)}km)"
+    try:
+        await _github_write_learned(routes, sha, commit_msg)
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(500, f"Erreur écriture GitHub : {e}")
+
+    return {
+        "status":        "ok",
+        "action":        action,
+        "origin":        data.origin,
+        "dest":          data.dest,
+        "waypoints":     len(wp_strings),
+        "km":            round(data.km, 1),
+        "total_learned": len(routes),
+    }
 
 
 # ══════════════════════════════════════════════════════════════════════════════

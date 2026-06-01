@@ -1,0 +1,36 @@
+[
+  {
+    "origine": "TARASCON, 13150, France",
+    "destination": "BAD FALLINGBOSTEL, 29683, Germany",
+    "waypoints": [
+      "49.133280, 6.176332"
+    ],
+    "km_reference": 1333.2,
+    "source": "carte_manuelle",
+    "date": "2026-05-11",
+    "confiance": 1
+  },
+  {
+    "origine": "TARASCON, 13150, France",
+    "destination": "HENNEF, 53773, Germany",
+    "waypoints": [
+      "47.808837, 5.234377"
+    ],
+    "km_reference": 1021.3,
+    "source": "carte_manuelle",
+    "date": "2026-05-11",
+    "confiance": 1
+  },
+  {
+    "origine": "TARASCON, 13150, France",
+    "destination": "PLOUVIEN, 29860, France",
+    "waypoints": [
+      "43.826280, 4.503496",
+      "44.341265, 2.559977"
+    ],
+    "km_reference": 1140.4,
+    "source": "carte_manuelle",
+    "date": "2026-05-11",
+    "confiance": 1
+  }
+]
