@@ -595,12 +595,33 @@ with g2:
 dfx = df_scope.copy()
 if sel:
     dfx = dfx[dfx[dim_col].isin(sel)]
-if date_range and isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-    d0, d1 = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1]) + pd.Timedelta(days=1)
+
+def _range_bounds(dr):
+    """Gère les 3 formes renvoyées par st.date_input (range) :
+    date seule, tuple à 1 élément (1 date choisie), tuple à 2 (plage)."""
+    if dr is None:
+        return None, None
+    if isinstance(dr, (list, tuple)):
+        if len(dr) == 0:
+            return None, None
+        if len(dr) == 1:
+            return dr[0], dr[0]        # 1 date choisie → ce jour-là
+        return dr[0], dr[1]
+    return dr, dr                       # date seule
+
+_lo, _hi = _range_bounds(date_range)
+if _lo is not None:
+    d0 = pd.Timestamp(_lo)
+    d1 = pd.Timestamp(_hi) + pd.Timedelta(days=1)
     dfx = dfx[(dfx["date"] >= d0) & (dfx["date"] < d1)]
 
 if dfx.empty:
-    st.warning("Aucune activité ne correspond à ces filtres.")
+    avail = sorted(df_scope["date"].dropna().dt.date.unique())
+    if avail:
+        lst = ", ".join(d.strftime("%d/%m/%Y") for d in avail[:15]) + (" …" if len(avail) > 15 else "")
+        st.warning(f"Aucune activité sur cette sélection (filtres + période). Dates disponibles : {lst}")
+    else:
+        st.warning("Aucune activité ne correspond à ces filtres.")
     st.stop()
 
 # ─── KPIs ────────────────────────────────────────────────────────────────────
@@ -687,8 +708,9 @@ if vue == "Par jour":
     # sur la date de planning (chargement, sinon déchargement).
     df_sel = df_scope[df_scope[dim_col].isin(sel)] if sel else df_scope
     trips = build_trips(df_sel)
-    if date_range and isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-        d0, d1 = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
+    _lo, _hi = _range_bounds(date_range)
+    if _lo is not None:
+        d0, d1 = pd.Timestamp(_lo), pd.Timestamp(_hi)
         trips = [t for t in trips if pd.notna(t["plan_date"]) and d0 <= t["plan_date"] <= d1]
 
     if not trips:
