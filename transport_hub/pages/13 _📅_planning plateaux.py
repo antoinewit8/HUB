@@ -896,15 +896,16 @@ div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.4rem;}}
 .pp-btn-wrap button {{
   width:100%; text-align:left !important;
   background:#141821 !important; border:1px solid #222838 !important;
-  border-radius:7px !important; padding:.6rem .8rem !important;
+  border-radius:7px !important; padding:1rem 1.1rem !important;
   cursor:pointer; transition:border-color .15s;
   font-family:'Barlow Condensed',sans-serif !important;
-  white-space:pre-wrap !important; line-height:1.5 !important;
-  color:#ffffff !important; font-size:1rem !important; font-weight:600 !important;
+  white-space:pre-wrap !important; line-height:2.2 !important;
+  color:#ffffff !important; font-size:1.5rem !important; font-weight:700 !important;
+  min-height:90px !important;
 }}
 .pp-btn-wrap button p {{
-  color:#ffffff !important; font-size:1rem !important; font-weight:600 !important;
-  margin:0 !important;
+  color:#ffffff !important; font-size:1.5rem !important; font-weight:700 !important;
+  margin:0 !important; line-height:2.2 !important;
 }}
 .pp-btn-wrap button:hover {{ border-color:#3a4a6a !important; background:#1a2030 !important; }}
 .pp-btn-wrap.active button {{ border-color:#4abf6a !important; background:#1b2b1f !important; }}
