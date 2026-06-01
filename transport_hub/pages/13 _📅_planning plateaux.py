@@ -5,7 +5,7 @@ Objectif : permettre à un nouveau planeur de lire le planning d'un coup d'œil.
 Le fichier source est un export *au niveau activité* : chaque ligne est UNE
 activité (chargement ou déchargement) rattachée à un N° Dossier. La page
 reconstruit les dossiers (jambe chargement → jambe déchargement) et propose :
- 
+
   • Filtrage par dimension : Chauffeur / Tracteur (immat.) / Remorque
     → sélection précise OU "tout confondu" (multiselect vide).
   • Tractionnaires : détectés par "TRA" dans "Départ. tracteur".
@@ -15,13 +15,13 @@ reconstruit les dossiers (jambe chargement → jambe déchargement) et propose :
     jour dans le même département → alertes (réflexe planning).
   • Deux vues : "Par jour" (worklist charg | déch) et "Par ressource" (swimlane).
   • Carte : points charg (vert) / déch (bleu) + arcs charg→déch par dossier.
- 
+
 Colonnes source attendues (ordre indicatif, résolution robuste par nom) :
   N° Dossier | Activité | Date | Heure | Type de transport | Nom 1 | Nom 2 |
   Adresse | Numéro | Code pays | Département | Code postal | Localité |
   Produit | Chauffeur | Départ. tracteur | Immat. tracteur | Remorque
 """
- 
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -35,7 +35,7 @@ import importlib.util as _ilu
 import types as _types
 import urllib.request as _ureq
 import urllib.parse as _uparse
- 
+
 # ─── Import PTV (même mécanisme que la page Optimisateur) ─────────────────────
 def _load_ptv(project_root: str):
     if "modules" not in sys.modules:
@@ -67,10 +67,10 @@ def _load_ptv(project_root: str):
     sys.modules["modules.ptv_router_km"] = mod
     spec.loader.exec_module(mod)
     return mod
- 
+
 _HERE  = os.path.dirname(os.path.abspath(__file__))
 _ROOTS = [_HERE, os.path.dirname(_HERE)]
- 
+
 PTV_AVAILABLE = False
 _ptv_mod = None
 for _root in _ROOTS:
@@ -82,7 +82,7 @@ for _root in _ROOTS:
                 break
         except Exception:
             pass
- 
+
 if PTV_AVAILABLE and _ptv_mod:
     geocode_by_postal_code = _ptv_mod.geocode_by_postal_code
     _geocode_by_text       = _ptv_mod._geocode_by_text
@@ -91,10 +91,10 @@ if PTV_AVAILABLE and _ptv_mod:
 else:
     PAYS_TO_ISO = {}
     GPS_FIXES   = {}
- 
+
 # ─── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Planning Plateaux", page_icon="🗂️", layout="wide")
- 
+
 # ─── Style ───────────────────────────────────────────────────────────────────
 # Direction : dispatch board industriel/utilitaire. Pas de bordure latérale,
 # pas de dégradé de texte, pas de glow. Bordures pleines, numéros de tête,
@@ -102,7 +102,7 @@ st.set_page_config(page_title="Planning Plateaux", page_icon="🗂️", layout="
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@300;400;500;600&display=swap');
- 
+
 :root{
   --bg:#0e1016; --panel:#141821; --panel2:#11151d;
   --line:#222838; --line2:#1a2030;
@@ -116,7 +116,7 @@ st.markdown("""
 [data-testid="stSidebar"]{ background:#090b11; }
 *{ font-family:'Barlow', sans-serif; }
 .block-container{ padding-top:1.4rem; }
- 
+
 .hero{
   background:var(--panel); border:1px solid var(--line);
   border-radius:8px; padding:1.4rem 1.8rem; margin-bottom:1.2rem;
@@ -135,13 +135,13 @@ st.markdown("""
 }
 .badge.ptv{ background:var(--charg-d); border:1px solid var(--charg-l); color:var(--charg); }
 .badge.ptv.off{ background:var(--alert-d); border:1px solid var(--alert-l); color:var(--alert); }
- 
+
 .kgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:.7rem; margin-bottom:1.2rem; }
 .kpi{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.8rem 1rem; }
 .kpi .v{ font-family:'Barlow Condensed',sans-serif; font-size:1.85rem; font-weight:700; color:var(--txt); line-height:1; }
 .kpi .l{ font-size:.66rem; color:var(--faint); text-transform:uppercase; letter-spacing:1.4px; margin-top:5px; }
 .kpi.tra .v{ color:var(--tra); }
- 
+
 .sect{
   font-family:'Barlow Condensed',sans-serif; font-size:.72rem; color:var(--faint);
   text-transform:uppercase; letter-spacing:2.6px; margin:1.6rem 0 .7rem;
@@ -149,7 +149,7 @@ st.markdown("""
   display:flex; justify-content:space-between; align-items:baseline;
 }
 .sect .hint{ color:var(--faint); letter-spacing:1px; font-size:.66rem; }
- 
+
 /* Jour : en-tête + colonnes */
 .dayhead{
   font-family:'Barlow Condensed',sans-serif; color:var(--txt);
@@ -163,7 +163,7 @@ st.markdown("""
   letter-spacing:2px; text-transform:uppercase; margin:.2rem 0 .55rem;
 }
 .coltag.c{ color:var(--charg); } .coltag.d{ color:var(--dech); }
- 
+
 .card{
   background:var(--panel); border:1px solid var(--line); border-radius:6px;
   padding:.7rem .85rem; margin-bottom:.55rem; display:grid;
@@ -184,7 +184,7 @@ st.markdown("""
 .card .site{ font-size:.78rem; color:var(--muted); margin-top:1px; }
 .card .leg{ font-size:.73rem; color:var(--faint); margin-top:3px; }
 .card .leg b{ color:var(--muted); font-weight:600; }
- 
+
 .tags{ display:flex; flex-wrap:wrap; gap:5px; margin-top:.5rem; }
 .tag{
   font-family:'Barlow Condensed',sans-serif; font-size:.7rem; font-weight:600;
@@ -194,7 +194,7 @@ st.markdown("""
 .tag.tra{ color:var(--tra); border-color:var(--tra-l); background:var(--tra-d); }
 .tag.cb{ color:var(--charg); border-color:var(--charg-l); background:var(--charg-d); }
 .tag.prod{ color:var(--txt); }
- 
+
 /* Swimlane par ressource */
 .lane{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.65rem .85rem; margin-bottom:.55rem; }
 .lane .who{
@@ -210,7 +210,21 @@ st.markdown("""
 .stop.c{ color:var(--charg); border-color:var(--charg-l); background:var(--charg-d); }
 .stop.d{ color:var(--dech); border-color:var(--dech-l); background:var(--dech-d); }
 .stop .t{ opacity:.7; font-weight:500; margin-right:5px; }
- 
+
+/* Vue Par jour : une carte par dossier (charg → déch lié) */
+.trips{ display:grid; grid-template-columns:repeat(auto-fill,minmax(345px,1fr)); gap:.6rem; margin-bottom:.5rem; }
+.trip{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.6rem .8rem .7rem; }
+.trip-h{ display:flex; justify-content:space-between; align-items:center; gap:.5rem; margin-bottom:.4rem; flex-wrap:wrap; }
+.trip-h .dos{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:.8rem; letter-spacing:1.4px; color:var(--muted); }
+.trip-tags{ display:flex; flex-wrap:wrap; gap:4px; }
+.leg{ display:grid; grid-template-columns:4.2rem 1fr; gap:.55rem; align-items:baseline; }
+.leg .lh{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.05rem; line-height:1.1; white-space:nowrap; }
+.leg.c .lh{ color:var(--charg); } .leg.d .lh{ color:var(--dech); }
+.leg .ll{ grid-column:2; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:1rem; color:var(--txt); text-transform:uppercase; letter-spacing:.3px; line-height:1.1; }
+.leg .ls{ grid-column:2; font-size:.74rem; color:var(--muted); margin-bottom:.1rem; }
+.leg.off{ display:block; grid-template-columns:none; color:var(--faint); font-size:.74rem; font-style:italic; padding:.15rem 0; }
+.arrow{ color:var(--faint); font-size:.95rem; line-height:.5; margin:.15rem 0 .25rem 1.4rem; }
+
 /* Regroupements */
 .cluster{
   background:var(--alert-d); border:1px solid var(--alert-l); border-radius:6px;
@@ -224,7 +238,7 @@ st.markdown("""
 .legendline b.c{ color:var(--charg); } .legendline b.d{ color:var(--dech); } .legendline b.x{ color:var(--alert); }
 </style>
 """, unsafe_allow_html=True)
- 
+
 # ─── Utilitaires ─────────────────────────────────────────────────────────────
 def normalize(text) -> str:
     if text is None or (isinstance(text, float) and np.isnan(text)):
@@ -234,12 +248,12 @@ def normalize(text) -> str:
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
     text = re.sub(r"['\-–/]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
- 
+
 def _norm_col(c) -> str:
     c = unicodedata.normalize("NFD", str(c))
     c = "".join(ch for ch in c if unicodedata.category(ch) != "Mn")
     return re.sub(r"[^a-z0-9]", "", c.lower())
- 
+
 def find_col(cols, *candidates):
     """Résolution robuste : match exact normalisé, puis containment."""
     nmap = {}
@@ -257,7 +271,7 @@ def find_col(cols, *candidates):
             if nc in k or k in nc:
                 return v
     return None
- 
+
 def classify_activite(v) -> str:
     """Renvoie 'C' (chargement), 'D' (déchargement) ou '?'."""
     n = normalize(v)
@@ -268,7 +282,7 @@ def classify_activite(v) -> str:
     if "CHARG" in n or "ENLEV" in n or "LOAD" in n or n.startswith("C") or n.startswith("E"):
         return "C"
     return "?"
- 
+
 def parse_heure(v):
     """Renvoie (affichage 'HH:MM', valeur triable en heures décimales)."""
     if v is None:
@@ -286,7 +300,7 @@ def parse_heure(v):
     except Exception:
         pass
     return s[:5], 99.0
- 
+
 PAYS_MAP_DISPLAY = {
     "F":"France","FR":"France","B":"Belgium","BE":"Belgium","NL":"Netherlands",
     "D":"Germany","DE":"Germany","L":"Luxembourg","LU":"Luxembourg","E":"Spain","ES":"Spain",
@@ -304,7 +318,7 @@ DEPT_NOM = {  # quelques départements fréquents pour lisibilité (non exhausti
     "57":"Moselle","67":"Bas-Rhin","69":"Rhône","13":"Bouches-du-Rh.","33":"Gironde","31":"Hte-Garonne",
     "44":"Loire-Atl.","35":"Ille-et-V.","49":"Maine-et-L.","53":"Mayenne","72":"Sarthe","85":"Vendée",
 }
- 
+
 # ─── Géocodage (PTV prioritaire, fallback OSM) ───────────────────────────────
 def _photon(query: str):
     url = f"https://photon.komoot.io/api/?q={_uparse.quote(query)}&limit=1&lang=fr"
@@ -319,7 +333,7 @@ def _photon(query: str):
     except Exception:
         pass
     return None
- 
+
 def _nominatim(query: str):
     url = f"https://nominatim.openstreetmap.org/search?q={_uparse.quote(query)}&format=json&limit=1"
     try:
@@ -331,7 +345,7 @@ def _nominatim(query: str):
     except Exception:
         pass
     return None
- 
+
 @st.cache_data(show_spinner=False, ttl=86400)
 def geocode_cached(ville: str, cp: str, pays: str):
     ville = (ville or "").strip()
@@ -341,7 +355,7 @@ def geocode_cached(ville: str, cp: str, pays: str):
     ville_exp = re.sub(r'\bSTE\b', 'SAINTE', ville_exp, flags=re.IGNORECASE)
     pays_u = (pays or "").upper()
     pays_label = PAYS_MAP_DISPLAY.get(pays_u, pays) if pays else ""
- 
+
     if PTV_AVAILABLE:
         fix_key = ville.strip().lower()
         if fix_key in GPS_FIXES:
@@ -370,14 +384,14 @@ def geocode_cached(ville: str, cp: str, pays: str):
                 if r:
                     return r
     return None
- 
+
 # ─── Chargement / préparation des données ────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_activites(file_bytes):
     df = pd.read_excel(io.BytesIO(file_bytes), dtype=str)
     df.columns = df.columns.str.strip()
     cols = list(df.columns)
- 
+
     C = {
         "dossier": find_col(cols, "N° Dossier", "No Dossier", "Dossier", "N Dossier"),
         "activite": find_col(cols, "Activité", "Activite", "Activ"),
@@ -398,11 +412,11 @@ def load_activites(file_bytes):
         "immat": find_col(cols, "Immat. tracteur", "Immat tracteur", "Immatriculation", "Immat"),
         "remorque": find_col(cols, "Remorque"),
     }
- 
+
     def col(key):
         c = C[key]
         return df[c] if c and c in df.columns else pd.Series([None] * len(df))
- 
+
     out = pd.DataFrame()
     out["dossier"]   = col("dossier").fillna("").astype(str).str.strip()
     out["_act_raw"]  = col("activite").fillna("").astype(str).str.strip()
@@ -424,26 +438,26 @@ def load_activites(file_bytes):
     out["depart_trac"] = col("depart_trac").fillna("").astype(str).str.strip()
     out["immat"]     = col("immat").fillna("").astype(str).str.strip()
     out["remorque"]  = col("remorque").fillna("").astype(str).str.strip()
- 
+
     # Département de secours = 2 premiers chiffres du CP (France)
     cp2 = out["cp"].str.extract(r"^(\d{2})", expand=False)
     out["dept"] = out["dept"].where(out["dept"].str.len() > 0, cp2).fillna("")
- 
+
     # Tractionnaire : "TRA" dans Départ. tracteur. Sinon → flotte CB.
     out["is_tra"] = out["depart_trac"].str.upper().str.contains("TRA", na=False)
- 
+
     # Clé temporelle triable
     out["_dt"] = out["date"] + pd.to_timedelta(
         out["_hval"].where(out["_hval"] < 30, 0), unit="h")
- 
+
     out = out[out["dossier"] != ""].copy()
     out = out.sort_values(["date", "_hval"], na_position="last").reset_index(drop=True)
- 
+
     # Distinct values Activité pour debug
     act_distinct = (df[C["activite"]].dropna().astype(str).str.strip().value_counts()
                     if C["activite"] else pd.Series(dtype=int))
     return out, C, act_distinct
- 
+
 def build_dossier_legs(df):
     """Pour chaque dossier : 1ère jambe chargement & dernière jambe déchargement."""
     legs = {}
@@ -463,7 +477,49 @@ def build_dossier_legs(df):
             "d_pays": d0["pays"] if d0 is not None else "",
         }
     return legs
- 
+
+def build_trips(d):
+    """Un trip = un N° Dossier : jambe chargement (1ère) + jambe déchargement
+    (dernière), avec heures, lieux et ressources. Sert à la vue 'Par jour'."""
+    trips = []
+    for dos, g in d.groupby("dossier"):
+        ch = g[g["type"] == "C"].sort_values("_hval")
+        de = g[g["type"] == "D"].sort_values("_hval")
+        c  = ch.iloc[0]  if len(ch) else None
+        dd = de.iloc[-1] if len(de) else None
+        base = c if c is not None else dd
+        if base is None:
+            continue
+        trips.append({
+            "dossier": dos,
+            "has_c": c is not None, "has_d": dd is not None,
+            "c_date": c["date"]  if c is not None else pd.NaT,
+            "c_heure": c["heure"] if c is not None else "",
+            "c_loc": c["localite"] if c is not None else "",
+            "c_dept": c["dept"] if c is not None else "",
+            "c_pays": c["pays"] if c is not None else "",
+            "c_site": c["site"] if c is not None else "",
+            "d_date": dd["date"] if dd is not None else pd.NaT,
+            "d_heure": dd["heure"] if dd is not None else "",
+            "d_loc": dd["localite"] if dd is not None else "",
+            "d_dept": dd["dept"] if dd is not None else "",
+            "d_pays": dd["pays"] if dd is not None else "",
+            "d_site": dd["site"] if dd is not None else "",
+            "chauffeur": base["chauffeur"], "immat": base["immat"],
+            "remorque": base["remorque"], "depart_trac": base["depart_trac"],
+            "is_tra": bool(g["is_tra"].any()),
+            "produit": (c["produit"] if c is not None and c["produit"] else base["produit"]),
+            # date/heure de planning = chargement si présent, sinon déchargement
+            "plan_date": (c["date"]  if c is not None else dd["date"]),
+            "plan_hval": float(c["_hval"] if c is not None else dd["_hval"]),
+        })
+    return trips
+
+def html(s: str):
+    """Rend du HTML dans Streamlit sans que Markdown ne transforme les lignes
+    indentées (4+ espaces) en blocs de code — la cause du HTML affiché en brut."""
+    st.markdown("\n".join(line.lstrip() for line in s.splitlines()), unsafe_allow_html=True)
+
 # ─── Header ──────────────────────────────────────────────────────────────────
 ptv_badge = ('<span class="badge ptv">PTV routing actif</span>' if PTV_AVAILABLE
              else '<span class="badge ptv off">PTV indisponible — géocodage OSM</span>')
@@ -476,20 +532,20 @@ st.markdown(f"""
   {ptv_badge}
 </div>
 """, unsafe_allow_html=True)
- 
+
 up = st.file_uploader("📋 Fichier des activités (chargements / déchargements)", type=["xlsx", "xls"])
 if not up:
     st.info("👆 Chargez l'export des activités pour démarrer. "
             "Chaque ligne = une activité (chargement ou déchargement) rattachée à un N° Dossier.")
     st.stop()
- 
+
 df, COLS, ACT_DISTINCT = load_activites(up.read())
 if df.empty:
     st.error("Aucune ligne exploitable (colonne « N° Dossier » introuvable ou vide).")
     st.stop()
- 
+
 legs = build_dossier_legs(df)
- 
+
 # Debug : mapping colonnes + valeurs Activité
 with st.expander("🔧 Debug — colonnes détectées & valeurs Activité"):
     st.write("**Colonnes mappées :**", {k: v for k, v in COLS.items()})
@@ -500,11 +556,11 @@ with st.expander("🔧 Debug — colonnes détectées & valeurs Activité"):
     if n_unknown:
         st.warning(f"⚠️ {n_unknown} activité(s) non classées (ni chargement ni déchargement). "
                    "Vérifie le mapping ci-dessus — ces lignes sont ignorées dans les colonnes Charg/Déch.")
- 
+
 # ─── Filtres ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="sect">🎛️ Filtres planning <span class="hint">multiselect vide = tout confondu</span></div>',
             unsafe_allow_html=True)
- 
+
 f1, f2, f3 = st.columns([1.1, 1.1, 1])
 with f1:
     dimension = st.radio("Dimension", ["Chauffeur", "Tracteur (immat.)", "Remorque"],
@@ -514,14 +570,14 @@ with f2:
     flotte = st.radio("Périmètre", ["Tous", "Flotte CB", "Tractionnaires"], horizontal=True)
 with f3:
     vue = st.radio("Vue", ["Par jour", "Par ressource"], horizontal=True)
- 
+
 # Périmètre flotte / tractionnaire
 df_scope = df.copy()
 if flotte == "Flotte CB":
     df_scope = df_scope[~df_scope["is_tra"]]
 elif flotte == "Tractionnaires":
     df_scope = df_scope[df_scope["is_tra"]]
- 
+
 # Sélection précise de la dimension
 options = sorted([v for v in df_scope[dim_col].dropna().unique() if str(v).strip()])
 g1, g2 = st.columns([2.2, 1])
@@ -535,18 +591,18 @@ with g2:
         date_range = st.date_input("Période", value=(dmin, dmax), min_value=dmin, max_value=dmax)
     else:
         date_range = None
- 
+
 dfx = df_scope.copy()
 if sel:
     dfx = dfx[dfx[dim_col].isin(sel)]
 if date_range and isinstance(date_range, (list, tuple)) and len(date_range) == 2:
     d0, d1 = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1]) + pd.Timedelta(days=1)
     dfx = dfx[(dfx["date"] >= d0) & (dfx["date"] < d1)]
- 
+
 if dfx.empty:
     st.warning("Aucune activité ne correspond à ces filtres.")
     st.stop()
- 
+
 # ─── KPIs ────────────────────────────────────────────────────────────────────
 n_charg = int((dfx["type"] == "C").sum())
 n_dech  = int((dfx["type"] == "D").sum())
@@ -563,18 +619,18 @@ kpis = [
 cards = "".join(f'<div class="kpi"><div class="v">{v}</div><div class="l">{l}</div></div>' for v, l in kpis)
 cards += f'<div class="kpi tra"><div class="v">{pct_tra:.0f}%</div><div class="l">Tractionnaires</div></div>'
 st.markdown(f'<div class="kgrid">{cards}</div>', unsafe_allow_html=True)
- 
+
 st.markdown(
     '<div class="legendline">Légende : <b class="c">●</b> chargement &nbsp; '
     '<b class="d">●</b> déchargement &nbsp; <b class="x">●</b> regroupement géo &nbsp;·&nbsp; '
     'badge <span class="tag tra" style="padding:1px 6px">TRA</span> = tractionnaire, '
     '<span class="tag cb" style="padding:1px 6px">CB</span> = flotte CB</div>',
     unsafe_allow_html=True)
- 
+
 # ─── Regroupements géographiques (même jour + même département) ───────────────
 st.markdown('<div class="sect">📍 Regroupements géographiques <span class="hint">≥2 activités même jour · même département</span></div>',
             unsafe_allow_html=True)
- 
+
 clusters = []
 for (d, dept, typ), g in dfx[dfx["dept"].str.len() > 0].groupby(
         [dfx["date"].dt.date, "dept", "type"]):
@@ -586,7 +642,7 @@ for (d, dept, typ), g in dfx[dfx["dept"].str.len() > 0].groupby(
         "lieux": ", ".join(sorted(set(x for x in g["localite"] if x))[:6]),
     })
 clusters.sort(key=lambda c: (-c["n"], c["date"]))
- 
+
 if clusters:
     cc = st.columns(2)
     for i, cl in enumerate(clusters[:12]):
@@ -596,16 +652,16 @@ if clusters:
         dnom = DEPT_NOM.get(cl["dept"], "")
         dlbl = f"Dépt {cl['dept']}" + (f" · {dnom}" if dnom else "")
         with cc[i % 2]:
-            st.markdown(f"""
+            html(f"""
             <div class="cluster {cls}">
               <div class="ch">{flag} {cl['n']} {kind} — {dlbl}</div>
               <div class="cs">{cl['date'].strftime('%d/%m/%Y')} · {cl['lieux']}</div>
-            </div>""", unsafe_allow_html=True)
+            </div>""")
     if len(clusters) > 12:
         st.caption(f"… et {len(clusters) - 12} autre(s) regroupement(s).")
 else:
     st.caption("Aucune concentration ≥2 activités sur un même jour/département dans ce périmètre.")
- 
+
 # ─── Helpers d'affichage des tags ressources ─────────────────────────────────
 def res_tags(row, show_dim=True):
     t = []
@@ -620,59 +676,79 @@ def res_tags(row, show_dim=True):
     if row["produit"]:
         t.append(f'<span class="tag prod">🧪 {row["produit"][:26]}</span>')
     return "".join(t)
- 
+
 # ─── Vue PAR JOUR ────────────────────────────────────────────────────────────
 if vue == "Par jour":
-    st.markdown('<div class="sect">📅 Planning par jour <span class="hint">chargements à gauche · déchargements à droite</span></div>',
-                unsafe_allow_html=True)
- 
-    for day in sorted(dfx["date"].dropna().dt.date.unique()):
-        gday = dfx[dfx["date"].dt.date == day]
-        nc = int((gday["type"] == "C").sum()); nd = int((gday["type"] == "D").sum())
-        st.markdown(
-            f'<div class="dayhead">{pd.Timestamp(day).strftime("%A %d %B %Y").capitalize()}'
-            f'<span class="cnt">{nc} charg · {nd} déch · {gday["dossier"].nunique()} dossiers</span></div>',
-            unsafe_allow_html=True)
- 
-        colC, colD = st.columns(2)
-        for typ, container, klass, tag in [("C", colC, "c", "Chargements"),
-                                           ("D", colD, "d", "Déchargements")]:
-            gt = gday[gday["type"] == typ].sort_values("_hval")
-            with container:
-                st.markdown(f'<div class="coltag {klass}">▸ {tag} ({len(gt)})</div>',
-                            unsafe_allow_html=True)
-                if gt.empty:
-                    st.markdown('<div style="color:#3a4258;font-size:.78rem;font-style:italic">— rien ce jour —</div>',
-                                unsafe_allow_html=True)
-                for _, row in gt.iterrows():
-                    leg = legs.get(row["dossier"], {})
-                    if typ == "C":
-                        other_loc, other_dt = leg.get("d_loc", ""), leg.get("d_date")
-                        leg_txt = (f'<div class="leg">→ <b>décharge</b> {other_loc.upper()}'
-                                   + (f' · {other_dt.strftime("%d/%m")}' if pd.notna(other_dt) else "") + '</div>') if other_loc else ""
-                    else:
-                        other_loc, other_dt = leg.get("c_loc", ""), leg.get("c_date")
-                        leg_txt = (f'<div class="leg">← <b>chargé</b> {other_loc.upper()}'
-                                   + (f' · {other_dt.strftime("%d/%m")}' if pd.notna(other_dt) else "") + '</div>') if other_loc else ""
-                    flag = PAYS_FLAGS.get(row["pays"], "")
-                    dept_txt = f' · {row["dept"]}' if row["dept"] else ""
-                    st.markdown(f"""
-                    <div class="card {klass}">
-                      <div class="hour">{row['heure'] or '—'}<span class="dno">{row['dossier']}</span></div>
-                      <div>
-                        <div class="loc">{flag} {row['localite'] or '?'}{dept_txt}</div>
-                        <div class="site">{row['site'] or '—'}</div>
-                        {leg_txt}
-                        <div class="tags">{res_tags(row)}</div>
-                      </div>
-                    </div>""", unsafe_allow_html=True)
- 
+    html('<div class="sect">📅 Planning par jour '
+         '<span class="hint">1 carte = 1 dossier · chargement → déchargement · trié par heure</span></div>')
+
+    # Trips sur périmètre + sélection ressource (sans filtre date) pour garder
+    # les deux jambes même si l'une tombe hors période. Filtrage date ensuite,
+    # sur la date de planning (chargement, sinon déchargement).
+    df_sel = df_scope[df_scope[dim_col].isin(sel)] if sel else df_scope
+    trips = build_trips(df_sel)
+    if date_range and isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        d0, d1 = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
+        trips = [t for t in trips if pd.notna(t["plan_date"]) and d0 <= t["plan_date"] <= d1]
+
+    if not trips:
+        st.warning("Aucun dossier sur cette période.")
+    else:
+        from collections import defaultdict
+        by_day = defaultdict(list)
+        for t in trips:
+            by_day[t["plan_date"].date()].append(t)
+
+        for day in sorted(by_day.keys()):
+            day_trips = sorted(by_day[day], key=lambda t: t["plan_hval"])
+            n_full = sum(1 for t in day_trips if t["has_c"] and t["has_d"])
+            html(f'<div class="dayhead">{pd.Timestamp(day).strftime("%A %d %B %Y").capitalize()}'
+                 f'<span class="cnt">{len(day_trips)} dossiers · {n_full} avec charg.+déch.</span></div>')
+
+            cards = ['<div class="trips">']
+            for t in day_trips:
+                badge = (f'<span class="tag tra">TRA · {t["depart_trac"] or "?"}</span>'
+                         if t["is_tra"] else '<span class="tag cb">CB</span>')
+                tg = [badge]
+                if t["chauffeur"]: tg.append(f'<span class="tag">👤 {t["chauffeur"]}</span>')
+                if t["immat"]:     tg.append(f'<span class="tag">🚚 {t["immat"]}</span>')
+                if t["remorque"]:  tg.append(f'<span class="tag">📦 {t["remorque"]}</span>')
+                if t["produit"]:   tg.append(f'<span class="tag prod">🧪 {t["produit"][:24]}</span>')
+                tags = "".join(tg)
+
+                if t["has_c"]:
+                    cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
+                    cflag = PAYS_FLAGS.get(t["c_pays"], "")
+                    leg_c = (f'<div class="leg c"><span class="lh">{t["c_heure"] or "—"}</span>'
+                             f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
+                             f'<span class="ls">{t["c_site"] or "—"}</span></div>')
+                else:
+                    leg_c = '<div class="leg c off">— chargement hors période —</div>'
+
+                if t["has_d"]:
+                    ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
+                    dflag = PAYS_FLAGS.get(t["d_pays"], "")
+                    ddate = f' · {t["d_date"].strftime("%d/%m")}' if pd.notna(t["d_date"]) else ""
+                    leg_d = (f'<div class="leg d"><span class="lh">{t["d_heure"] or "—"}{ddate}</span>'
+                             f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
+                             f'<span class="ls">{t["d_site"] or "—"}</span></div>')
+                else:
+                    leg_d = '<div class="leg d off">— déchargement hors période —</div>'
+
+                cards.append(
+                    f'<div class="trip"><div class="trip-h">'
+                    f'<span class="dos">N° {t["dossier"]}</span>'
+                    f'<span class="trip-tags">{tags}</span></div>'
+                    f'{leg_c}<div class="arrow">↓</div>{leg_d}</div>')
+            cards.append('</div>')
+            html("".join(cards))
+
 # ─── Vue PAR RESSOURCE (swimlane) ────────────────────────────────────────────
 else:
     st.markdown(f'<div class="sect">🚚 Planning par {dimension.lower()} '
                 f'<span class="hint">enchaînement chronologique des activités</span></div>',
                 unsafe_allow_html=True)
- 
+
     resources = [r for r in dfx[dim_col].dropna().unique() if str(r).strip()]
     resources = sorted(resources, key=lambda r: -len(dfx[dfx[dim_col] == r]))
     MAX_LANES = 40
@@ -696,27 +772,27 @@ else:
             dlabel = row["date"].strftime("%d/%m") if pd.notna(row["date"]) else "—"
             stops += (f'<span class="stop {kl}"><span class="t">{dlabel} {row["heure"]}</span>'
                       f'{row["localite"].upper() or "?"}</span>')
-        st.markdown(f"""
+        html(f"""
         <div class="lane">
           <div class="who">{tra_badge}{r}
             <span class="meta">· {nb} activités{(" · " + " · ".join(meta_bits)) if meta_bits else ""}</span></div>
           <div class="flow">{stops}</div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
     if len(resources) > MAX_LANES:
         st.caption(f"Affichage des {MAX_LANES} ressources les plus actives sur {len(resources)}. "
                    "Affine via le multiselect pour le reste.")
- 
+
 # ─── Carte ───────────────────────────────────────────────────────────────────
 st.markdown('<div class="sect">🗺️ Carte des activités <span class="hint">vert = chargement · bleu = déchargement · arcs = dossiers</span></div>',
             unsafe_allow_html=True)
- 
+
 with st.expander("Afficher la carte (géocodage à la demande)", expanded=False):
     MAX_GEO = 120
     distinct = (dfx[["localite", "cp", "pays", "type"]]
                 .assign(loc_norm=dfx["localite"].apply(normalize))
                 .drop_duplicates(subset=["loc_norm", "type"]))
     distinct = distinct[distinct["localite"].str.strip() != ""].head(MAX_GEO)
- 
+
     coords_cache = {}
     points = []
     with st.spinner(f"📡 Géocodage de {len(distinct)} lieux (PTV → OSM)…"):
@@ -731,7 +807,7 @@ with st.expander("Afficher la carte (géocodage à la demande)", expanded=False)
                     "lat": c[0], "lon": c[1],
                     "color": [74, 191, 106, 210] if row["type"] == "C" else [74, 138, 191, 210],
                 })
- 
+
     # Arcs par dossier (charg → déch) sur le périmètre filtré
     arcs = []
     for dos in dfx["dossier"].unique():
@@ -742,7 +818,7 @@ with st.expander("Afficher la carte (géocodage à la demande)", expanded=False)
         dc = coords_cache.get(dk) or (geocode_cached(*[lg.get("d_loc", ""), lg.get("d_cp", ""), lg.get("d_pays", "")]) if lg.get("d_loc") else None)
         if cc and dc:
             arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0]})
- 
+
     if not points:
         st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
     else:
@@ -777,7 +853,7 @@ with st.expander("Afficher la carte (géocodage à la demande)", expanded=False)
                 st.caption(f"Géocodage limité aux {MAX_GEO} premiers lieux — affine le périmètre pour la suite.")
         except ImportError:
             st.map(pd.DataFrame(points).rename(columns={"lat": "latitude", "lon": "longitude"}))
- 
+
 # ─── Tableau & export ────────────────────────────────────────────────────────
 with st.expander("📋 Tableau détaillé + export"):
     show = dfx.copy()
@@ -790,7 +866,7 @@ with st.expander("📋 Tableau détaillé + export"):
         "pays": "Pays", "site": "Site", "produit": "Produit", "chauffeur": "Chauffeur",
         "immat": "Immat. tracteur", "remorque": "Remorque", "depart_trac": "Départ. tracteur"})
     st.dataframe(table, hide_index=True, use_container_width=True)
- 
+
     buf = io.BytesIO()
     table.to_excel(buf, index=False, engine="openpyxl")
     st.download_button("📥 Exporter Excel", data=buf.getvalue(),
