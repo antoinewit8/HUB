@@ -869,44 +869,102 @@ else:
     if points:
         pays_total, pays_detail = build_pays_panel(points, show_mode)
 
-        # Rendu HTML du panneau
         title_mode = {"Les deux": "Tous", "Chargements": "Charg.", "Déchargements": "Déch."}[show_mode]
-        color_cls  = "d" if show_mode == "Déchargements" else ""
 
-        rows_html = []
-        for pays_code in sorted(pays_total.keys(), key=lambda k: -pays_total[k]):
-            total   = pays_total[pays_code]
-            flag    = PAYS_FLAGS.get(pays_code, "🏳️")
-            details = pays_detail.get(pays_code, [])
-            # Classe couleur selon mode
-            val_cls = "d" if show_mode == "Déchargements" else ("both" if show_mode == "Les deux" else "")
-            # Détail communes frontalières remappées
-            detail_html = ""
-            if details:
-                parts = [f'+{n}&nbsp;{loc}' for loc, n in details[:4]]
-                detail_html = f'<div class="pp-detail"><span>dont</span> {" · ".join(parts)}</div>'
-            rows_html.append(
-                f'<div class="pp-card">'
-                f'<div class="pp-card-top">'
-                f'<span class="pp-flag">{flag}</span>'
-                f'<span class="pp-code">{pays_code}</span>'
-                f'<span class="pp-val {val_cls}">{total}</span>'
-                f'</div>'
-                f'{detail_html}'
-                f'</div>')
+        # ── Données par pays pour le détail dossiers ─────────────────────────
+        # pays_logi → {dossiers: set, camions: [(localite, date, heure, chauffeur, immat, dos, type)]}
+        from collections import defaultdict
+        pays_rows = defaultdict(list)  # pays_logi → liste de lignes dfx
+        for _, row in dmap.iterrows():
+            pl = row.get("pays_logi", row.get("pays", "??"))
+            pays_rows[pl].append(row)
 
-        panel_html = (
-            f'<div class="pays-panel">'
-            f'<div class="pp-title">🚛 Camions&nbsp;·&nbsp;{title_mode}</div>'
-            + "".join(rows_html) +
-            f'</div>')
+        # ── Initialise session_state pour le pays sélectionné ─────────────
+        if "pp_selected_pays" not in st.session_state:
+            st.session_state["pp_selected_pays"] = None
 
-        # Affichage : panneau à gauche de la carte via columns
+        # ── Panneau gauche + carte ─────────────────────────────────────────
         col_panel, col_map = st.columns([1, 5])
+
         with col_panel:
-            st.markdown(panel_html, unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="pays-panel"><div class="pp-title">🚛 Camions&nbsp;·&nbsp;{title_mode}</div></div>',
+                unsafe_allow_html=True)
+
+            pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
+            for pays_code in pays_order:
+                total   = pays_total[pays_code]
+                flag    = PAYS_FLAGS.get(pays_code, "🏳️")
+                details = pays_detail.get(pays_code, [])
+                val_cls = "d" if show_mode == "Déchargements" else ("both" if show_mode == "Les deux" else "")
+
+                # Ligne de détail communes frontalières
+                detail_html = ""
+                if details:
+                    parts = [f'+{n}&nbsp;{loc}' for loc, n in details[:4]]
+                    detail_html = (f'<div class="pp-detail"><span>dont</span> '
+                                   f'{" · ".join(parts)}</div>')
+
+                # État actif ?
+                is_active = st.session_state["pp_selected_pays"] == pays_code
+                active_style = "border-color:#4abf6a;" if is_active else ""
+
+                st.markdown(
+                    f'<div class="pp-card" style="{active_style}">'
+                    f'<div class="pp-card-top">'
+                    f'<span class="pp-flag">{flag}</span>'
+                    f'<span class="pp-code">{pays_code}</span>'
+                    f'<span class="pp-val {val_cls}">{total}</span>'
+                    f'</div>{detail_html}</div>',
+                    unsafe_allow_html=True)
+
+                btn_label = "✕ Fermer" if is_active else f"Détail {pays_code}"
+                if st.button(btn_label, key=f"pp_btn_{pays_code}",
+                             use_container_width=True):
+                    st.session_state["pp_selected_pays"] = (
+                        None if is_active else pays_code)
+                    st.rerun()
+
         with col_map:
             _render_map = True
+
+        # ── Détail pays (sous la carte, pleine largeur) ────────────────────
+        sel_pays = st.session_state.get("pp_selected_pays")
+        if sel_pays and sel_pays in pays_rows:
+            flag_s = PAYS_FLAGS.get(sel_pays, "🏳️")
+            rows_sel = pays_rows[sel_pays]
+
+            # Construit un DataFrame lisible
+            detail_records = []
+            for row in rows_sel:
+                dos = row["dossier"]
+                lg  = legs.get(dos, {})
+                detail_records.append({
+                    "N° Dossier":  dos,
+                    "Type":        "Chargement" if row["type"] == "C" else (
+                                   "Déchargement" if row["type"] == "D" else "?"),
+                    "Date":        row["date"].strftime("%d/%m/%Y") if pd.notna(row["date"]) else "—",
+                    "Heure":       row["heure"] or "—",
+                    "Localité":    row["localite"] or "—",
+                    "Chauffeur":   row["chauffeur"] or "—",
+                    "Tracteur":    row["immat"] or "—",
+                    "Remorque":    row["remorque"] or "—",
+                    "Flotte":      "TRA" if row["is_tra"] else "CB",
+                    "Charg. →":    lg.get("c_loc", "—"),
+                    "→ Déch.":     lg.get("d_loc", "—"),
+                })
+
+            df_detail = pd.DataFrame(detail_records).sort_values(
+                ["Date", "Heure", "N° Dossier"])
+
+            n_dos = df_detail["N° Dossier"].nunique()
+            st.markdown(
+                f'<div class="sect">{flag_s} Détail {sel_pays} '
+                f'<span class="hint">{n_dos} dossiers · {len(df_detail)} activités</span></div>',
+                unsafe_allow_html=True)
+            st.dataframe(df_detail, hide_index=True, use_container_width=True,
+                         height=min(420, 38 + len(df_detail) * 36))
+
     else:
         _render_map = False
         col_map = None
