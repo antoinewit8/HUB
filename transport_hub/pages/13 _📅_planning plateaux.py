@@ -783,76 +783,133 @@ else:
                    "Affine via le multiselect pour le reste.")
 
 # ─── Carte ───────────────────────────────────────────────────────────────────
-st.markdown('<div class="sect">🗺️ Carte des activités <span class="hint">vert = chargement · bleu = déchargement · arcs = dossiers</span></div>',
+st.markdown('<div class="sect">🗺️ Carte des activités '
+            '<span class="hint">taille &amp; chiffre = nb de camions prévus · vert charg · bleu déch · arcs = dossiers</span></div>',
             unsafe_allow_html=True)
+st.caption("ℹ️ La carte hérite déjà du filtre du haut (périmètre, ressource, période). "
+           "Les filtres ci-dessous l'affinent en plus, sans toucher au reste de la page.")
 
 with st.expander("Afficher la carte (géocodage à la demande)", expanded=False):
     MAX_GEO = 120
-    distinct = (dfx[["localite", "cp", "pays", "type"]]
-                .assign(loc_norm=dfx["localite"].apply(normalize))
-                .drop_duplicates(subset=["loc_norm", "type"]))
-    distinct = distinct[distinct["localite"].str.strip() != ""].head(MAX_GEO)
 
-    coords_cache = {}
-    points = []
-    with st.spinner(f"📡 Géocodage de {len(distinct)} lieux (PTV → OSM)…"):
-        for _, row in distinct.iterrows():
-            key = (normalize(row["localite"]), row["cp"], row["pays"])
-            if key not in coords_cache:
-                coords_cache[key] = geocode_cached(row["localite"], row["cp"], row["pays"])
-            c = coords_cache[key]
-            if c:
-                points.append({
-                    "nom": row["localite"], "type": row["type"], "pays": row["pays"],
-                    "lat": c[0], "lon": c[1],
-                    "color": [74, 191, 106, 210] if row["type"] == "C" else [74, 138, 191, 210],
-                })
+    # ── Filtres propres à la carte (en plus du filtre du haut) ──────────────
+    mc1, mc2, mc3 = st.columns([1.2, 1, 1.5])
+    with mc1:
+        dates_opt = sorted(dfx["date"].dropna().dt.date.unique())
+        date_lbls = ["Toutes les dates"] + [d.strftime("%d/%m/%Y") for d in dates_opt]
+        msel_date = st.selectbox("Date (carte)", date_lbls)
+    with mc2:
+        mdim = st.selectbox("Filtrer par", ["— (tout)", "Chauffeur", "Tracteur (immat.)", "Remorque"])
+        mdim_col = {"Chauffeur": "chauffeur", "Tracteur (immat.)": "immat", "Remorque": "remorque"}.get(mdim)
+    with mc3:
+        if mdim_col:
+            mvals = sorted([v for v in dfx[mdim_col].dropna().unique() if str(v).strip()])
+            msel_vals = st.multiselect(f"{mdim} — vide = tout confondu", mvals)
+        else:
+            msel_vals = []
 
-    # Arcs par dossier (charg → déch) sur le périmètre filtré
-    arcs = []
-    for dos in dfx["dossier"].unique():
-        lg = legs.get(dos, {})
-        ck = (normalize(lg.get("c_loc", "")), lg.get("c_cp", ""), lg.get("c_pays", ""))
-        dk = (normalize(lg.get("d_loc", "")), lg.get("d_cp", ""), lg.get("d_pays", ""))
-        cc = coords_cache.get(ck) or (geocode_cached(*[lg.get("c_loc", ""), lg.get("c_cp", ""), lg.get("c_pays", "")]) if lg.get("c_loc") else None)
-        dc = coords_cache.get(dk) or (geocode_cached(*[lg.get("d_loc", ""), lg.get("d_cp", ""), lg.get("d_pays", "")]) if lg.get("d_loc") else None)
-        if cc and dc:
-            arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0]})
+    dmap = dfx.copy()
+    if msel_date != "Toutes les dates":
+        chosen = pd.to_datetime(msel_date, format="%d/%m/%Y").date()
+        dmap = dmap[dmap["date"].dt.date == chosen]
+    if mdim_col and msel_vals:
+        dmap = dmap[dmap[mdim_col].isin(msel_vals)]
 
-    if not points:
-        st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
+    if dmap.empty:
+        st.info("Aucune activité pour ces filtres carte.")
     else:
-        try:
-            import pydeck as pdk
-            dfp = pd.DataFrame(points)
-            layers = [
-                pdk.Layer("ScatterplotLayer", data=dfp,
-                          get_position="[lon, lat]", get_radius=1400, get_fill_color="color",
-                          get_line_color=[255, 255, 255, 70], stroked=True,
-                          line_width_min_pixels=1, pickable=True, auto_highlight=True),
-                pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]", get_text="nom",
-                          get_size=11, get_color=[200, 210, 230, 200], get_anchor="middle",
-                          get_alignment_baseline="'bottom'", get_pixel_offset=[0, -13]),
-            ]
-            if arcs:
-                layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs),
-                    get_source_position="[sl, sla]", get_target_position="[tl, tla]",
-                    get_source_color=[74, 191, 106, 130], get_target_color=[74, 138, 191, 150],
-                    get_width=1.6))
-            deck = pdk.Deck(
-                layers=layers,
-                initial_view_state=pdk.ViewState(latitude=dfp["lat"].mean(),
-                                                 longitude=dfp["lon"].mean(), zoom=5, pitch=30),
-                tooltip={"html": "<b>{nom}</b><br>{type} · {pays}",
-                         "style": {"background": "#141821", "color": "#cdd4ea",
-                                   "font-family": "Barlow Condensed, sans-serif", "padding": "8px"}},
-                map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-            )
-            st.pydeck_chart(deck, use_container_width=True, height=560)
-            if len(distinct) >= MAX_GEO:
-                st.caption(f"Géocodage limité aux {MAX_GEO} premiers lieux — affine le périmètre pour la suite.")
-        except ImportError:
-            st.map(pd.DataFrame(points).rename(columns={"lat": "latitude", "lon": "longitude"}))
+        # ── Agrégat par lieu + type : nb de camions = nb de dossiers distincts ──
+        agg = (dmap.assign(loc_norm=dmap["localite"].apply(normalize))
+                   .groupby(["loc_norm", "type"])
+                   .agg(localite=("localite", "first"), cp=("cp", "first"),
+                        pays=("pays", "first"), dept=("dept", "first"),
+                        camions=("dossier", "nunique"),
+                        dossiers=("dossier", lambda s: ", ".join(sorted(set(s))[:10])))
+                   .reset_index())
+        agg = agg[agg["localite"].str.strip() != ""]
+        agg = agg.sort_values("camions", ascending=False).head(MAX_GEO)
+
+        coords_cache, points = {}, []
+        with st.spinner(f"📡 Géocodage de {len(agg)} lieux (PTV → OSM)…"):
+            for _, row in agg.iterrows():
+                key = (row["loc_norm"], row["cp"], row["pays"])
+                if key not in coords_cache:
+                    coords_cache[key] = geocode_cached(row["localite"], row["cp"], row["pays"])
+                c = coords_cache[key]
+                if c:
+                    n = int(row["camions"])
+                    points.append({
+                        "nom": row["localite"], "label": str(n), "camions": n,
+                        "typ": "Chargement" if row["type"] == "C" else "Déchargement",
+                        "pays": row["pays"], "dossiers": row["dossiers"],
+                        "lat": c[0], "lon": c[1],
+                        "radius": 900 + (n ** 0.5) * 1150,      # surface ∝ nb camions
+                        "color": [74, 191, 106, 215] if row["type"] == "C" else [74, 138, 191, 215],
+                    })
+
+        # ── Arcs charg → déch par dossier (sur le périmètre carte) ──────────────
+        arcs = []
+        for dos in dmap["dossier"].unique():
+            lg = legs.get(dos, {})
+            ck = (normalize(lg.get("c_loc", "")), lg.get("c_cp", ""), lg.get("c_pays", ""))
+            dk = (normalize(lg.get("d_loc", "")), lg.get("d_cp", ""), lg.get("d_pays", ""))
+            cc = coords_cache.get(ck) or (geocode_cached(lg.get("c_loc", ""), lg.get("c_cp", ""), lg.get("c_pays", "")) if lg.get("c_loc") else None)
+            dc = coords_cache.get(dk) or (geocode_cached(lg.get("d_loc", ""), lg.get("d_cp", ""), lg.get("d_pays", "")) if lg.get("d_loc") else None)
+            if cc and dc:
+                arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0]})
+
+        n_charg_cam = int(dmap[dmap["type"] == "C"]["dossier"].nunique())
+        n_dech_cam  = int(dmap[dmap["type"] == "D"]["dossier"].nunique())
+        st.markdown(
+            f'<div class="legendline">Sur ce périmètre carte : '
+            f'<b class="c">{n_charg_cam}</b> camions au chargement · '
+            f'<b class="d">{n_dech_cam}</b> camions au déchargement.</div>',
+            unsafe_allow_html=True)
+
+        if not points:
+            st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
+        else:
+            try:
+                import pydeck as pdk
+                dfp = pd.DataFrame(points)
+                layers = [
+                    pdk.Layer("ScatterplotLayer", data=dfp,
+                              get_position="[lon, lat]", get_radius="radius",
+                              radius_min_pixels=8, radius_max_pixels=46,
+                              get_fill_color="color", get_line_color=[255, 255, 255, 90],
+                              stroked=True, line_width_min_pixels=1, pickable=True,
+                              auto_highlight=True),
+                    # Chiffre = nb de camions, centré sur le point
+                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
+                              get_text="label", get_size=14, get_color=[10, 14, 18, 255],
+                              get_anchor="middle", get_alignment_baseline="'center'",
+                              font_weight=800),
+                    # Nom du lieu, au-dessus
+                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
+                              get_text="nom", get_size=11, get_color=[200, 210, 230, 210],
+                              get_anchor="middle", get_alignment_baseline="'bottom'",
+                              get_pixel_offset=[0, -16]),
+                ]
+                if arcs:
+                    layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs),
+                        get_source_position="[sl, sla]", get_target_position="[tl, tla]",
+                        get_source_color=[74, 191, 106, 120], get_target_color=[74, 138, 191, 150],
+                        get_width=1.6))
+                deck = pdk.Deck(
+                    layers=layers,
+                    initial_view_state=pdk.ViewState(latitude=dfp["lat"].mean(),
+                                                     longitude=dfp["lon"].mean(), zoom=5, pitch=30),
+                    tooltip={"html": "<b>{nom}</b><br>{typ} · <b>{camions}</b> camion(s) prévu(s)<br>"
+                                     "<span style='color:#8a93ad'>Dossiers : {dossiers}</span>",
+                             "style": {"background": "#141821", "color": "#cdd4ea",
+                                       "font-family": "Barlow Condensed, sans-serif", "padding": "9px"}},
+                    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+                )
+                st.pydeck_chart(deck, use_container_width=True, height=560)
+                if len(agg) >= MAX_GEO:
+                    st.caption(f"Géocodage limité aux {MAX_GEO} lieux avec le plus de camions — affine les filtres pour le reste.")
+            except ImportError:
+                st.map(pd.DataFrame(points).rename(columns={"lat": "latitude", "lon": "longitude"}))
 
 # ─── Tableau & export ────────────────────────────────────────────────────────
 with st.expander("📋 Tableau détaillé + export"):
