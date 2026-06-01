@@ -887,43 +887,53 @@ else:
         col_panel, col_map = st.columns([1, 5])
 
         with col_panel:
-            st.markdown(
-                f'<div class="pays-panel"><div class="pp-title">🚛 Camions&nbsp;·&nbsp;{title_mode}</div></div>',
-                unsafe_allow_html=True)
+            val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
+
+            # CSS des boutons-pays injecté une seule fois
+            st.markdown(f"""
+<style>
+div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.4rem;}}
+.pp-btn-wrap button {{
+  width:100%; text-align:left !important;
+  background:#141821 !important; border:1px solid #222838 !important;
+  border-radius:7px !important; padding:.6rem .8rem !important;
+  cursor:pointer; transition:border-color .15s;
+  font-family:'Barlow Condensed',sans-serif !important;
+  white-space:pre-wrap !important; line-height:1.5 !important;
+  color:#ffffff !important; font-size:1rem !important; font-weight:600 !important;
+}}
+.pp-btn-wrap button p {{
+  color:#ffffff !important; font-size:1rem !important; font-weight:600 !important;
+  margin:0 !important;
+}}
+.pp-btn-wrap button:hover {{ border-color:#3a4a6a !important; background:#1a2030 !important; }}
+.pp-btn-wrap.active button {{ border-color:#4abf6a !important; background:#1b2b1f !important; }}
+</style>""", unsafe_allow_html=True)
+
+            st.markdown(f'<div style="font-size:.58rem;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:#3a4258;margin-bottom:.4rem;font-family:\'Barlow Condensed\',sans-serif;">🚛 Camions · {title_mode}</div>', unsafe_allow_html=True)
 
             pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
             for pays_code in pays_order:
                 total   = pays_total[pays_code]
                 flag    = PAYS_FLAGS.get(pays_code, "🏳️")
                 details = pays_detail.get(pays_code, [])
-                val_cls = "d" if show_mode == "Déchargements" else ("both" if show_mode == "Les deux" else "")
+                is_active = st.session_state["pp_selected_pays"] == pays_code
 
                 # Ligne de détail communes frontalières
-                detail_html = ""
+                detail_line = ""
                 if details:
-                    parts = [f'+{n}&nbsp;{loc}' for loc, n in details[:4]]
-                    detail_html = (f'<div class="pp-detail"><span>dont</span> '
-                                   f'{" · ".join(parts)}</div>')
+                    parts = [f"+{n} {loc}" for loc, n in details[:4]]
+                    detail_line = "\n+  " + "  ·  ".join(parts)
 
-                # État actif ?
-                is_active = st.session_state["pp_selected_pays"] == pays_code
-                active_style = "border-color:#4abf6a;" if is_active else ""
+                # Label multi-ligne du bouton : flag + code + chiffre + détail éventuel
+                btn_label = f"{flag}  {pays_code}    {total}{detail_line}"
 
-                st.markdown(
-                    f'<div class="pp-card" style="{active_style}">'
-                    f'<div class="pp-card-top">'
-                    f'<span class="pp-flag">{flag}</span>'
-                    f'<span class="pp-code">{pays_code}</span>'
-                    f'<span class="pp-val {val_cls}">{total}</span>'
-                    f'</div>{detail_html}</div>',
-                    unsafe_allow_html=True)
-
-                btn_label = "✕ Fermer" if is_active else f"Détail {pays_code}"
-                if st.button(btn_label, key=f"pp_btn_{pays_code}",
-                             use_container_width=True):
-                    st.session_state["pp_selected_pays"] = (
-                        None if is_active else pays_code)
+                active_cls = "active" if is_active else ""
+                st.markdown(f'<div class="pp-btn-wrap {active_cls}">', unsafe_allow_html=True)
+                if st.button(btn_label, key=f"pp_btn_{pays_code}", use_container_width=True):
+                    st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
                     st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
         with col_map:
             _render_map = True
