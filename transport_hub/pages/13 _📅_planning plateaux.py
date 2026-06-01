@@ -225,6 +225,33 @@ st.markdown("""
 .leg.off{ display:block; grid-template-columns:none; font-size:.72rem; font-style:italic; color:var(--faint); padding:.12rem 0; }
 .arrow{ color:var(--faint); font-size:.78rem; line-height:1; margin:.1rem 0 .15rem .15rem; }
 
+/* Vue Par jour — disposition Lignes (lecture gauche → droite) */
+.rows{ border:1px solid var(--line); border-radius:7px; overflow:hidden; margin-bottom:.5rem; }
+.row{ display:grid; grid-template-columns:108px minmax(0,1.5fr) 16px minmax(0,1.5fr) minmax(0,1.4fr);
+      gap:.45rem .75rem; align-items:center; padding:.42rem .75rem; border-bottom:1px solid var(--line2); }
+.row:last-child{ border-bottom:none; }
+.row:nth-child(odd){ background:var(--panel2); }
+.row .c1{ display:flex; flex-direction:column; gap:3px; align-items:flex-start; }
+.row .c1 .dos{ font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:.7rem; letter-spacing:1px; color:var(--faint); }
+.leg2{ display:grid; grid-template-columns:auto auto minmax(0,1fr); gap:.4rem; align-items:baseline; min-width:0; }
+.leg2 .lh{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:.9rem; white-space:nowrap; letter-spacing:.3px; }
+.leg2.c .lh{ color:var(--charg); } .leg2.d .lh{ color:var(--dech); }
+.leg2 .ll{ font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:.9rem; color:var(--txt); text-transform:uppercase; letter-spacing:.2px; white-space:nowrap; }
+.leg2 .ls{ font-size:.72rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.leg2.off{ display:block; grid-template-columns:none; color:var(--faint); font-size:.74rem; font-style:italic; }
+.rarrow{ color:var(--faint); font-size:.85rem; text-align:center; }
+.row .res{ display:flex; flex-wrap:wrap; gap:3px; }
+.dens-compact .row{ padding:.28rem .65rem; }
+.dens-compact .leg2 .lh, .dens-compact .leg2 .ll{ font-size:.82rem; }
+.dens-compact .leg2 .ls{ font-size:.68rem; }
+.dens-large .row{ padding:.62rem .85rem; gap:.5rem .9rem; }
+.dens-large .leg2 .lh, .dens-large .leg2 .ll{ font-size:1.02rem; }
+.dens-large .leg2 .ls{ font-size:.78rem; }
+@media(max-width:820px){
+  .row{ grid-template-columns:1fr; gap:.18rem; }
+  .rarrow{ display:none; }
+}
+
 /* Regroupements */
 .cluster{
   background:var(--alert-d); border:1px solid var(--alert-l); border-radius:6px;
@@ -728,11 +755,36 @@ def res_tags(row, show_dim=True):
 # ─── Vue PAR JOUR ────────────────────────────────────────────────────────────
 if vue == "Par jour":
     html('<div class="sect">📅 Planning par jour '
-         '<span class="hint">1 carte = 1 dossier · chargement → déchargement · trié par heure</span></div>')
+         '<span class="hint">1 dossier = chargement → déchargement · trié par heure</span></div>')
 
-    # Trips sur périmètre + sélection ressource (sans filtre date) pour garder
-    # les deux jambes même si l'une tombe hors période. Filtrage date ensuite,
-    # sur la date de planning (chargement, sinon déchargement).
+    lc1, lc2, _sp = st.columns([1.1, 1.5, 2])
+    with lc1:
+        layout = st.radio("Disposition", ["Lignes", "Cartes"], horizontal=True)
+    with lc2:
+        densite = st.select_slider("Densité", options=["Compact", "Normal", "Large"], value="Normal")
+    dens_cls = {"Compact": "dens-compact", "Normal": "dens-normal", "Large": "dens-large"}[densite]
+
+    # ── helpers de rendu (partagés Lignes / Cartes) ─────────────────────────
+    def _badge(t):
+        if t["is_tra"]:
+            dep = (t["depart_trac"] or "").strip()
+            extra = "" if (not dep or dep.upper() == "TRA") else f" · {dep}"
+            return f'<span class="tag tra">TRA{extra}</span>'
+        return '<span class="tag cb">CB</span>'
+
+    def _tags(t, with_badge=True):
+        tg = [_badge(t)] if with_badge else []
+        if t["chauffeur"]: tg.append(f'<span class="tag">👤 {t["chauffeur"]}</span>')
+        if t["immat"]:     tg.append(f'<span class="tag">🚚 {t["immat"]}</span>')
+        if t["remorque"]:  tg.append(f'<span class="tag">📦 {t["remorque"]}</span>')
+        if t["produit"]:   tg.append(f'<span class="tag prod">🧪 {t["produit"][:22]}</span>')
+        return "".join(tg)
+
+    def _ddate(t):
+        diff = (pd.notna(t["d_date"]) and
+                (pd.isna(t["plan_date"]) or t["d_date"].date() != t["plan_date"].date()))
+        return f' · {t["d_date"].strftime("%d/%m")}' if diff else ""
+
     df_sel = df_scope[df_scope[dim_col].isin(sel)] if sel else df_scope
     trips = build_trips(df_sel)
     _lo, _hi = _range_bounds(date_range)
@@ -754,50 +806,49 @@ if vue == "Par jour":
             html(f'<div class="dayhead">{pd.Timestamp(day).strftime("%A %d %B %Y").capitalize()}'
                  f'<span class="cnt">{len(day_trips)} dossiers · {n_full} avec charg.+déch.</span></div>')
 
-            cards = ['<div class="trips">']
-            for t in day_trips:
-                if t["is_tra"]:
-                    dep = (t["depart_trac"] or "").strip()
-                    extra = "" if (not dep or dep.upper() == "TRA") else f" · {dep}"
-                    badge = f'<span class="tag tra">TRA{extra}</span>'
-                else:
-                    badge = '<span class="tag cb">CB</span>'
-                tg = [badge]
-                if t["chauffeur"]: tg.append(f'<span class="tag">👤 {t["chauffeur"]}</span>')
-                if t["immat"]:     tg.append(f'<span class="tag">🚚 {t["immat"]}</span>')
-                if t["remorque"]:  tg.append(f'<span class="tag">📦 {t["remorque"]}</span>')
-                if t["produit"]:   tg.append(f'<span class="tag prod">🧪 {t["produit"][:22]}</span>')
-                tags = "".join(tg)
-
-                if t["has_c"]:
+            if layout == "Cartes":
+                parts = ['<div class="trips">']
+                for t in day_trips:
+                    cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
                     cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
-                    cflag = PAYS_FLAGS.get(t["c_pays"], "")
+                    ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
                     leg_c = (f'<div class="leg c"><span class="lh">{t["c_heure"] or "—"}</span>'
                              f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
-                             f'<span class="ls">{t["c_site"] or "—"}</span></div>')
-                else:
-                    leg_c = '<div class="leg c off">— chargement hors période —</div>'
-
-                if t["has_d"]:
-                    ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
-                    dflag = PAYS_FLAGS.get(t["d_pays"], "")
-                    # date seulement si le déchargement n'est pas le jour de chargement
-                    diff_day = (pd.notna(t["d_date"]) and
-                                (pd.isna(t["plan_date"]) or t["d_date"].date() != t["plan_date"].date()))
-                    ddate = f' · {t["d_date"].strftime("%d/%m")}' if diff_day else ""
-                    leg_d = (f'<div class="leg d"><span class="lh">{t["d_heure"] or "—"}{ddate}</span>'
+                             f'<span class="ls">{t["c_site"] or "—"}</span></div>') if t["has_c"] \
+                            else '<div class="leg c off">— chargement hors période —</div>'
+                    leg_d = (f'<div class="leg d"><span class="lh">{t["d_heure"] or "—"}{_ddate(t)}</span>'
                              f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
-                             f'<span class="ls">{t["d_site"] or "—"}</span></div>')
-                else:
-                    leg_d = '<div class="leg d off">— déchargement hors période —</div>'
+                             f'<span class="ls">{t["d_site"] or "—"}</span></div>') if t["has_d"] \
+                            else '<div class="leg d off">— déchargement hors période —</div>'
+                    parts.append(
+                        f'<div class="trip"><div class="trip-h">'
+                        f'<span class="dos">N° {t["dossier"]}</span>'
+                        f'<span class="trip-tags">{_tags(t)}</span></div>'
+                        f'{leg_c}<div class="arrow">↓</div>{leg_d}</div>')
+                parts.append('</div>')
+                html("".join(parts))
 
-                cards.append(
-                    f'<div class="trip"><div class="trip-h">'
-                    f'<span class="dos">N° {t["dossier"]}</span>'
-                    f'<span class="trip-tags">{tags}</span></div>'
-                    f'{leg_c}<div class="arrow">↓</div>{leg_d}</div>')
-            cards.append('</div>')
-            html("".join(cards))
+            else:  # Lignes — une ligne par dossier, lecture gauche → droite
+                parts = [f'<div class="rows {dens_cls}">']
+                for t in day_trips:
+                    cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
+                    cdept = f' · {t["c_dept"]}' if t["c_dept"] else ""
+                    ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
+                    cell_c = (f'<div class="leg2 c"><span class="lh">{t["c_heure"] or "—"}</span>'
+                              f'<span class="ll">{cflag} {(t["c_loc"] or "?").upper()}{cdept}</span>'
+                              f'<span class="ls">{t["c_site"] or ""}</span></div>') if t["has_c"] \
+                             else '<div class="leg2 off">— chargement hors période —</div>'
+                    cell_d = (f'<div class="leg2 d"><span class="lh">{t["d_heure"] or "—"}{_ddate(t)}</span>'
+                              f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
+                              f'<span class="ls">{t["d_site"] or ""}</span></div>') if t["has_d"] \
+                             else '<div class="leg2 off">— déchargement hors période —</div>'
+                    parts.append(
+                        f'<div class="row">'
+                        f'<div class="c1"><span class="dos">N° {t["dossier"]}</span>{_badge(t)}</div>'
+                        f'{cell_c}<div class="rarrow">→</div>{cell_d}'
+                        f'<div class="res">{_tags(t, with_badge=False)}</div></div>')
+                parts.append('</div>')
+                html("".join(parts))
 
 # ─── Vue PAR RESSOURCE (swimlane) ────────────────────────────────────────────
 else:
