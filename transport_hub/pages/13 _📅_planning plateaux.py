@@ -187,8 +187,8 @@ st.markdown("""
 
 .tags{ display:flex; flex-wrap:wrap; gap:5px; margin-top:.5rem; }
 .tag{
-  font-family:'Barlow Condensed',sans-serif; font-size:.7rem; font-weight:600;
-  letter-spacing:.4px; padding:2px 8px; border-radius:3px; border:1px solid var(--line);
+  font-family:'Barlow Condensed',sans-serif; font-size:.68rem; font-weight:600;
+  letter-spacing:.3px; padding:1px 6px; border-radius:3px; border:1px solid var(--line);
   color:var(--muted); background:var(--panel2);
 }
 .tag.tra{ color:var(--tra); border-color:var(--tra-l); background:var(--tra-d); }
@@ -212,18 +212,18 @@ st.markdown("""
 .stop .t{ opacity:.7; font-weight:500; margin-right:5px; }
 
 /* Vue Par jour : une carte par dossier (charg → déch lié) */
-.trips{ display:grid; grid-template-columns:repeat(auto-fill,minmax(345px,1fr)); gap:.6rem; margin-bottom:.5rem; }
-.trip{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.6rem .8rem .7rem; }
-.trip-h{ display:flex; justify-content:space-between; align-items:center; gap:.5rem; margin-bottom:.4rem; flex-wrap:wrap; }
-.trip-h .dos{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:.8rem; letter-spacing:1.4px; color:var(--muted); }
-.trip-tags{ display:flex; flex-wrap:wrap; gap:4px; }
-.leg{ display:grid; grid-template-columns:4.2rem 1fr; gap:.55rem; align-items:baseline; }
-.leg .lh{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1.05rem; line-height:1.1; white-space:nowrap; }
+.trips{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:.5rem; margin-bottom:.5rem; }
+.trip{ background:var(--panel2); border:1px solid var(--line2); border-radius:7px; padding:.5rem .65rem .55rem; }
+.trip-h{ display:flex; justify-content:space-between; align-items:center; gap:.4rem; margin-bottom:.3rem; flex-wrap:wrap; }
+.trip-h .dos{ font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:.72rem; letter-spacing:1.2px; color:var(--faint); }
+.trip-tags{ display:flex; flex-wrap:wrap; gap:3px; }
+.leg{ display:flex; flex-wrap:wrap; align-items:baseline; gap:.3rem .45rem; padding:.06rem 0; }
+.leg .lh{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:.86rem; line-height:1.15; white-space:nowrap; letter-spacing:.3px; }
 .leg.c .lh{ color:var(--charg); } .leg.d .lh{ color:var(--dech); }
-.leg .ll{ grid-column:2; font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:1rem; color:var(--txt); text-transform:uppercase; letter-spacing:.3px; line-height:1.1; }
-.leg .ls{ grid-column:2; font-size:.74rem; color:var(--muted); margin-bottom:.1rem; }
-.leg.off{ display:block; grid-template-columns:none; color:var(--faint); font-size:.74rem; font-style:italic; padding:.15rem 0; }
-.arrow{ color:var(--faint); font-size:.95rem; line-height:.5; margin:.15rem 0 .25rem 1.4rem; }
+.leg .ll{ font-family:'Barlow Condensed',sans-serif; font-weight:600; font-size:.92rem; color:var(--txt); text-transform:uppercase; letter-spacing:.2px; line-height:1.15; }
+.leg .ls{ flex-basis:100%; font-size:.7rem; color:var(--muted); line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.leg.off{ font-size:.7rem; font-style:italic; color:var(--faint); padding:.08rem 0; }
+.arrow{ color:var(--faint); font-size:.74rem; line-height:1; margin:.02rem 0 .06rem .2rem; }
 
 /* Regroupements */
 .cluster{
@@ -613,7 +613,9 @@ with g2:
     dts = df_scope["date"].dropna()
     if not dts.empty:
         dmin, dmax = dts.min().date(), dts.max().date()
-        date_range = st.date_input("Période", value=(dmin, dmax), min_value=dmin, max_value=dmax)
+        date_range = st.date_input("Période", value=(dmin, dmax),
+                                    min_value=dmin, max_value=dmax,
+                                    format="DD/MM/YYYY")
     else:
         date_range = None
 
@@ -754,13 +756,17 @@ if vue == "Par jour":
 
             cards = ['<div class="trips">']
             for t in day_trips:
-                badge = (f'<span class="tag tra">TRA · {t["depart_trac"] or "?"}</span>'
-                         if t["is_tra"] else '<span class="tag cb">CB</span>')
+                if t["is_tra"]:
+                    dep = (t["depart_trac"] or "").strip()
+                    extra = "" if (not dep or dep.upper() == "TRA") else f" · {dep}"
+                    badge = f'<span class="tag tra">TRA{extra}</span>'
+                else:
+                    badge = '<span class="tag cb">CB</span>'
                 tg = [badge]
                 if t["chauffeur"]: tg.append(f'<span class="tag">👤 {t["chauffeur"]}</span>')
                 if t["immat"]:     tg.append(f'<span class="tag">🚚 {t["immat"]}</span>')
                 if t["remorque"]:  tg.append(f'<span class="tag">📦 {t["remorque"]}</span>')
-                if t["produit"]:   tg.append(f'<span class="tag prod">🧪 {t["produit"][:24]}</span>')
+                if t["produit"]:   tg.append(f'<span class="tag prod">🧪 {t["produit"][:22]}</span>')
                 tags = "".join(tg)
 
                 if t["has_c"]:
@@ -775,7 +781,10 @@ if vue == "Par jour":
                 if t["has_d"]:
                     ddept = f' · {t["d_dept"]}' if t["d_dept"] else ""
                     dflag = PAYS_FLAGS.get(t["d_pays"], "")
-                    ddate = f' · {t["d_date"].strftime("%d/%m")}' if pd.notna(t["d_date"]) else ""
+                    # date seulement si le déchargement n'est pas le jour de chargement
+                    diff_day = (pd.notna(t["d_date"]) and
+                                (pd.isna(t["plan_date"]) or t["d_date"].date() != t["plan_date"].date()))
+                    ddate = f' · {t["d_date"].strftime("%d/%m")}' if diff_day else ""
                     leg_d = (f'<div class="leg d"><span class="lh">{t["d_heure"] or "—"}{ddate}</span>'
                              f'<span class="ll">{dflag} {(t["d_loc"] or "?").upper()}{ddept}</span>'
                              f'<span class="ls">{t["d_site"] or "—"}</span></div>')
