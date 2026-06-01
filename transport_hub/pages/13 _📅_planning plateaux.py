@@ -148,23 +148,40 @@ st.markdown("""
 }
 .sect .hint{ color:var(--faint); letter-spacing:1px; font-size:.66rem; }
 
-/* Panneau pays superposé sur la carte */
+/* Panneau pays — cartes empilées, grandes et lisibles */
 .pays-panel{
-  background:rgba(14,16,22,0.88); border:1px solid #222838;
-  border-radius:7px; padding:.7rem .95rem; min-width:170px; max-width:260px;
+  display:flex; flex-direction:column; gap:.45rem;
   font-family:'Barlow Condensed',sans-serif;
 }
 .pays-panel .pp-title{
-  font-size:.62rem; font-weight:700; letter-spacing:2px; text-transform:uppercase;
-  color:#3a4258; margin-bottom:.5rem;
+  font-size:.58rem; font-weight:700; letter-spacing:2.5px; text-transform:uppercase;
+  color:#3a4258; margin-bottom:.1rem; padding-left:.1rem;
 }
-.pp-row{ display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; margin:.18rem 0; }
-.pp-flag{ font-size:.95rem; }
-.pp-code{ font-weight:700; font-size:.92rem; color:#cdd4ea; min-width:24px; }
-.pp-val{ font-weight:700; font-size:1.05rem; color:#4abf6a; }
+.pp-card{
+  background:#141821; border:1px solid #222838; border-radius:7px;
+  padding:.55rem .75rem .5rem;
+  display:flex; flex-direction:column; gap:0;
+}
+.pp-card-top{
+  display:flex; align-items:baseline; gap:.45rem;
+}
+.pp-flag{ font-size:1.3rem; line-height:1; }
+.pp-code{
+  font-family:'Barlow Condensed',sans-serif; font-weight:700;
+  font-size:1.35rem; letter-spacing:.5px; color:#cdd4ea; line-height:1;
+}
+.pp-val{
+  font-family:'Barlow Condensed',sans-serif; font-weight:700;
+  font-size:2.1rem; color:#4abf6a; line-height:1; margin-left:auto;
+}
 .pp-val.d{ color:#4a8abf; }
-.pp-detail{ font-size:.7rem; color:#5b6480; margin-left:.3rem; font-weight:500; }
-.pp-sep{ border:none; border-top:1px solid #222838; margin:.4rem 0; }
+.pp-val.both{ color:#cdd4ea; }
+.pp-detail{
+  font-size:.68rem; color:#3a4258; font-weight:600; letter-spacing:.2px;
+  margin-top:.22rem; padding-top:.22rem; border-top:1px solid #1a2030;
+  line-height:1.4;
+}
+.pp-detail span{ color:#5b6480; }
 
 /* Jour : en-tête + colonnes */
 .dayhead{
@@ -877,26 +894,30 @@ else:
 
         rows_html = []
         for pays_code in sorted(pays_total.keys(), key=lambda k: -pays_total[k]):
-            total = pays_total[pays_code]
-            flag  = PAYS_FLAGS.get(pays_code, "")
+            total   = pays_total[pays_code]
+            flag    = PAYS_FLAGS.get(pays_code, "🏳️")
             details = pays_detail.get(pays_code, [])
-            # Détail = liste "(+N Bazeilles)" pour communes remappées
-            detail_str = ""
+            # Classe couleur selon mode
+            val_cls = "d" if show_mode == "Déchargements" else ("both" if show_mode == "Les deux" else "")
+            # Détail communes frontalières remappées
+            detail_html = ""
             if details:
-                parts = [f"+{n} {loc}" for loc, n in details[:3]]
-                detail_str = f'<span class="pp-detail">dont {", ".join(parts)}</span>'
+                parts = [f'+{n}&nbsp;{loc}' for loc, n in details[:4]]
+                detail_html = f'<div class="pp-detail"><span>dont</span> {" · ".join(parts)}</div>'
             rows_html.append(
-                f'<div class="pp-row">'
+                f'<div class="pp-card">'
+                f'<div class="pp-card-top">'
                 f'<span class="pp-flag">{flag}</span>'
                 f'<span class="pp-code">{pays_code}</span>'
-                f'<span class="pp-val {color_cls}">{total}</span>'
-                f'{detail_str}'
+                f'<span class="pp-val {val_cls}">{total}</span>'
+                f'</div>'
+                f'{detail_html}'
                 f'</div>')
 
         panel_html = (
             f'<div class="pays-panel">'
-            f'<div class="pp-title">🚛 Camions · {title_mode}</div>'
-            + "<hr class='pp-sep'>".join(rows_html) +
+            f'<div class="pp-title">🚛 Camions&nbsp;·&nbsp;{title_mode}</div>'
+            + "".join(rows_html) +
             f'</div>')
 
         # Affichage : panneau à gauche de la carte via columns
