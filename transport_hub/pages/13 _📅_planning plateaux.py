@@ -724,9 +724,10 @@ div[data-testid="stVerticalBlock"] > div[data-testid="element-container"]:has(bu
                                    "font-family":"Barlow Condensed, sans-serif","padding":"9px"}},
                 map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
             )
+            map_key = f"planmap_{sel_pays or 'all'}"
             try:
                 st.pydeck_chart(deck, use_container_width=True, height=680,
-                                key="planmap", selection_mode="single-object", on_select="rerun")
+                                key=map_key, selection_mode="single-object", on_select="rerun")
             except TypeError:
                 st.pydeck_chart(deck, use_container_width=True, height=680)
             if len(agg) >= MAX_GEO and not focus_norm:
