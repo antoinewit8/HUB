@@ -675,7 +675,7 @@ div[data-testid="stVerticalBlock"] > div[data-testid="element-container"]:has(bu
                 st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
         except ImportError:
             st.map(pd.DataFrame(points).rename(columns={"lat":"latitude","lon":"longitude"}))
-
+            
     # ── Détail pays pleine largeur ─────────────────────────────────────────
     # ── Filtre carte selon pays sélectionné ───────────────────────────────
     sel_pays = st.session_state.get("pp_selected_pays")
