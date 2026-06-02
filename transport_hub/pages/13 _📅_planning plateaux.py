@@ -884,7 +884,7 @@ else:
         if "pp_selected_pays" not in st.session_state:
             st.session_state["pp_selected_pays"] = None
 
-        col_panel, col_map = st.columns([1, 5])
+        col_panel, col_map = st.columns([1, 6])
         col_map_ref = col_map  # ← référence gardée hors du with
 
         with col_panel:
@@ -892,22 +892,20 @@ else:
 
             st.markdown(f"""
 <style>
-.pp-btn-wrap {{
-    margin-bottom: .5rem;
-    position: relative;
+/* ── Cache le conteneur vide du bouton Streamlit invisible ── */
+.pp-btn-wrap [data-testid="stBaseButton-secondary"] + div,
+.pp-btn-wrap > div:last-child:not(:first-child) {{
+    display: none !important;
 }}
-.pp-btn-wrap [data-testid="stBaseButton-secondary"] {{
+/* Cache aussi le div wrapper que Streamlit ajoute autour du bouton */
+.pp-btn-wrap > [data-testid="element-container"] {{
     position: absolute !important;
     inset: 0 !important;
-    width: 100% !important;
-    height: 100% !important;
-    opacity: 0 !important;
-    cursor: pointer !important;
-    z-index: 2 !important;
-    padding: 0 !important;
     margin: 0 !important;
-    border: none !important;
-    background: transparent !important;
+    padding: 0 !important;
+}}
+.pp-btn-wrap > [data-testid="element-container"] > div {{
+    height: 100% !important;
 }}
 .pp-card-btn {{
     background: #141821;
