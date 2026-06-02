@@ -66,5 +66,16 @@
     "source": "carte_manuelle",
     "date": "2026-06-02",
     "confiance": 1
+  },
+  {
+    "origine": "Hermes, 60700, France",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "48.303707, 2.202690"
+    ],
+    "km_reference": 230.9,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
   }
 ]
