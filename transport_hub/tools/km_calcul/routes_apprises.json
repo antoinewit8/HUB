@@ -32,5 +32,16 @@
     "source": "carte_manuelle",
     "date": "2026-05-11",
     "confiance": 1
+  },
+  {
+    "origine": "Gent, 9000, Belgium",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "48.250387, 2.217489"
+    ],
+    "km_reference": 461.6,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
   }
 ]
