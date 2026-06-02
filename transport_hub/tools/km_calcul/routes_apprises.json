@@ -154,5 +154,16 @@
     "source": "carte_manuelle",
     "date": "2026-06-02",
     "confiance": 1
+  },
+  {
+    "origine": "Madrid, 28050, Spain",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "45.828019, 0.193914"
+    ],
+    "km_reference": 1151.8,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
   }
 ]
