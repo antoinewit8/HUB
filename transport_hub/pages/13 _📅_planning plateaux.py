@@ -889,27 +889,27 @@ else:
         with col_panel:
             val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
 
-            # CSS des boutons-pays injecté une seule fois
             st.markdown(f"""
-<style>
-div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.5rem;}}
-.pp-btn-wrap button {{
-  width:100%; text-align:left !important;
-  background:#141821 !important; border:1px solid #222838 !important;
-  border-radius:8px !important; padding:1.4rem 1.3rem !important;
-  cursor:pointer; transition:border-color .15s;
-  font-family:'Barlow Condensed',sans-serif !important;
-  white-space:pre-wrap !important; line-height:1.6 !important;
-  color:#ffffff !important; font-size:2.2rem !important; font-weight:700 !important;
-  min-height:110px !important; letter-spacing:.3px !important;
-}}
-.pp-btn-wrap button p {{
-  color:#ffffff !important; font-size:2.2rem !important; font-weight:700 !important;
-  margin:0 !important; line-height:1.6 !important; letter-spacing:.3px !important;
-}}
-.pp-btn-wrap button:hover {{ border-color:#3a4a6a !important; background:#1a2030 !important; }}
-.pp-btn-wrap.active button {{ border-color:#4abf6a !important; background:#1b2b1f !important; }}
-</style>""", unsafe_allow_html=True)
+            <style>
+            div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.5rem;}}
+            .pp-btn-wrap button {{
+              width:100%; text-align:left !important;
+              background:#141821 !important; border:1px solid #222838 !important;
+              border-radius:10px !important;
+              padding:1rem 1.2rem !important;
+              cursor:pointer; transition:border-color .15s;
+              font-family:'Barlow Condensed',sans-serif !important;
+              white-space:normal !important; line-height:1.3 !important;
+              min-height:80px !important; height:auto !important;
+            }}
+            .pp-btn-wrap button p {{
+              color:#cdd4ea !important;
+              font-family:'Barlow Condensed',sans-serif !important;
+              margin:0 !important; line-height:1.3 !important;
+            }}
+            .pp-btn-wrap button:hover {{ border-color:#3a4a6a !important; background:#1a2030 !important; }}
+            .pp-btn-wrap.active button {{ border-color:#4abf6a !important; background:#1b2b1f !important; }}
+            </style>""", unsafe_allow_html=True)
 
             st.markdown(f'<div style="font-size:.58rem;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:#3a4258;margin-bottom:.4rem;font-family:\'Barlow Condensed\',sans-serif;">🚛 Camions · {title_mode}</div>', unsafe_allow_html=True)
 
