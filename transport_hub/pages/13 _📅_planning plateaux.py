@@ -869,45 +869,31 @@ else:
     # ── Initialisation avant le bloc conditionnel ──────────────────────────
     _render_map = False
     col_map_ref = None
-
     if points:
         pays_total, pays_detail = build_pays_panel(points, show_mode)
-
         title_mode = {"Les deux": "Tous", "Chargements": "Charg.", "Déchargements": "Déch."}[show_mode]
-
         from collections import defaultdict
         pays_rows = defaultdict(list)
         for _, row in dmap.iterrows():
             pl = row.get("pays_logi", row.get("pays", "??"))
             pays_rows[pl].append(row)
 
+        # ── Initialise + sync query params ────────────────────────────────
         if "pp_selected_pays" not in st.session_state:
+            st.session_state["pp_selected_pays"] = None
+        _qp_pays = st.query_params.get("pays", "")
+        if _qp_pays and _qp_pays != st.session_state.get("pp_selected_pays"):
+            st.session_state["pp_selected_pays"] = _qp_pays
+        elif not _qp_pays and st.session_state.get("pp_selected_pays"):
             st.session_state["pp_selected_pays"] = None
 
         col_panel, col_map = st.columns([1, 6])
         col_map_ref = col_map  # ← référence gardée hors du with
-
         with col_panel:
             val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
 
             st.markdown(f"""
 <style>
-/* ── Cache le conteneur vide du bouton Streamlit invisible ── */
-.pp-btn-wrap [data-testid="stBaseButton-secondary"] + div,
-.pp-btn-wrap > div:last-child:not(:first-child) {{
-    display: none !important;
-}}
-/* Cache aussi le div wrapper que Streamlit ajoute autour du bouton */
-.pp-btn-wrap > [data-testid="element-container"] {{
-    position: absolute !important;
-    inset: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}}
-.pp-btn-wrap div[data-testid="stVerticalBlock"] > div:has(> [data-testid="element-container"]) {{
-    height: 0 !important;
-    overflow: hidden !important;
-}}
 .pp-card-btn {{
     background: #141821;
     border: 1.5px solid #222838;
@@ -920,17 +906,10 @@ else:
     flex-direction: column;
     gap: .15rem;
     min-height: 88px;
-    position: relative;
-    z-index: 1;
 }}
 .pp-card-btn:hover {{
     border-color: #3a4a6a;
     background: #1a2030;
-}}
-.pp-btn-wrap.active .pp-card-btn {{
-    border-color: {val_color};
-    background: #1a2b1f;
-    box-shadow: 0 0 0 1px {val_color}33;
 }}
 .pp-row-top {{
     display: flex;
@@ -974,6 +953,12 @@ else:
                 unsafe_allow_html=True)
 
             pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
+            
+            # Lire le pays actif depuis query params (plus fiable que bouton invisible)
+            _qp = st.query_params.get("pays", None)
+            if _qp and st.session_state.get("pp_selected_pays") != _qp:
+                st.session_state["pp_selected_pays"] = _qp
+
             for pays_code in pays_order:
                 total     = pays_total[pays_code]
                 flag      = PAYS_FLAGS.get(pays_code, "🏳️")
@@ -986,16 +971,20 @@ else:
                     detail_html = '<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
 
                 active_cls = "active" if is_active else ""
+                
+                # Lien cliquable pur HTML — pas de bouton Streamlit
+                toggle_pays = "" if is_active else pays_code
                 st.markdown(f"""
-<div class="pp-btn-wrap {active_cls}">
-  <div class="pp-card-btn">
+<a href="?pays={toggle_pays}" target="_self" style="text-decoration:none;display:block;margin-bottom:.5rem;">
+  <div class="pp-card-btn {active_cls}" style="{'border-color:' + val_color + ';background:#1a2b1f;box-shadow:0 0 0 1px ' + val_color + '33;' if is_active else ''}">
     <div class="pp-row-top">
       <span class="pp-flag">{flag}</span>
       <span class="pp-code">{pays_code}</span>
       <span class="pp-num">{total}</span>
     </div>
     {detail_html}
-  </div>""", unsafe_allow_html=True)
+  </div>
+</a>""", unsafe_allow_html=True)
 
                 if st.button("\u200b", key=f"pp_btn_{pays_code}", use_container_width=True):
                     st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
