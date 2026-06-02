@@ -993,14 +993,8 @@ else:
             cards_html += '</div>'
             st.markdown(cards_html, unsafe_allow_html=True)
 
-                if st.button("\u200b", key=f"pp_btn_{pays_code}", use_container_width=True):
-                    st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
-                    st.rerun()
-
-                st.markdown('</div>', unsafe_allow_html=True)
-
         with col_map:
-            _render_map = True  # ← assigné ici, dans le bon contexte
+            _render_map = True
 
         # ── Détail pays (sous la carte, pleine largeur) ────────────────────
         sel_pays = st.session_state.get("pp_selected_pays")
