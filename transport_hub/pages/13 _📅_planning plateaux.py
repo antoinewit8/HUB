@@ -598,18 +598,33 @@ def render_pays_carte(points, arcs_draw, agg, pays_total, pays_detail,
 
             # Carte HTML visible
             st.markdown(f"""
-<div class="pp-wrap">
-  <div class="pp-card-btn" style="{active_style}">
-    <div class="pp-row-top">
-      <span class="pp-flag">{flag}</span>
-      <span class="pp-code">{pays_code}</span>
-      <span style="font-family:'Barlow Condensed',sans-serif;font-size:2.4rem;font-weight:800;color:{val_color};line-height:1;margin-left:auto;">{total}</span>
-    </div>
-    {detail_html}
-  </div>""", unsafe_allow_html=True)
+<div class="pp-card-btn" style="{active_style};margin-bottom:0;">
+  <div class="pp-row-top">
+    <span class="pp-flag">{flag}</span>
+    <span class="pp-code">{pays_code}</span>
+    <span style="font-family:'Barlow Condensed',sans-serif;font-size:2.4rem;font-weight:800;color:{val_color};line-height:1;margin-left:auto;">{total}</span>
+  </div>
+  {detail_html}
+</div>""", unsafe_allow_html=True)
 
-            # Bouton invisible par-dessus
-            if st.button("\u200b", key=f"pp_btn_{pays_code}", use_container_width=True):
+            # Bouton Streamlit dans la case vide — stylisé comme "Détails"
+            btn_label = "✕ Fermer" if is_active else "📋 Détails"
+            btn_type  = "primary" if is_active else "secondary"
+            st.markdown("""
+<style>
+/* Bouton détails — compact, discret */
+div[data-testid="stVerticalBlock"] > div[data-testid="element-container"]:has(button[kind="secondary"]) {
+    margin-top: 0 !important;
+    padding: 2px 0 6px 0 !important;
+}
+div[data-testid="stVerticalBlock"] > div[data-testid="element-container"]:has(button[kind="primary"]) {
+    margin-top: 0 !important;
+    padding: 2px 0 6px 0 !important;
+}
+</style>""", unsafe_allow_html=True)
+
+            if st.button(btn_label, key=f"pp_btn_{pays_code}",
+                         use_container_width=True, type=btn_type):
                 st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
                 st.rerun(scope="fragment")
 
