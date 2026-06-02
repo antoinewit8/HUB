@@ -897,6 +897,10 @@ else:
 .pp-btn-wrap > div:last-child:not(:first-child) {{
     display: none !important;
 }}
+.pp-btn-wrap div[data-testid="stVerticalBlock"] > div:has(> [data-testid="element-container"]) {{
+    height: 0 !important;
+    overflow: hidden !important;
+}}
 /* Cache aussi le div wrapper que Streamlit ajoute autour du bouton */
 .pp-btn-wrap > [data-testid="element-container"] {{
     position: absolute !important;
