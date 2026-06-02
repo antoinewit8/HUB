@@ -54,5 +54,17 @@
     "source": "carte_manuelle",
     "date": "2026-06-02",
     "confiance": 1
+  },
+  {
+    "origine": "Beneden-Leeuwen, 6588, Netherlands",
+    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
+    "waypoints": [
+      "49.747158, 2.788181",
+      "48.336365, 2.189705"
+    ],
+    "km_reference": 640.0,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
   }
 ]
