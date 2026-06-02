@@ -889,55 +889,132 @@ else:
         with col_panel:
             val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
 
-            # CSS des boutons-pays injecté une seule fois
             st.markdown(f"""
 <style>
-div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.5rem;}}
-.pp-btn-wrap button {{
-  width:100%; text-align:left !important;
-  background:#141821 !important; border:1px solid #222838 !important;
-  border-radius:8px !important; padding:1.4rem 1.3rem !important;
-  cursor:pointer; transition:border-color .15s;
-  font-family:'Barlow Condensed',sans-serif !important;
-  white-space:pre-wrap !important; line-height:1.6 !important;
-  color:#ffffff !important; font-size:2.2rem !important; font-weight:700 !important;
-  min-height:110px !important; letter-spacing:.3px !important;
+/* ── Wrapper bouton-pays ───────────────────────────────────────── */
+.pp-btn-wrap {{
+    margin-bottom: .5rem;
+    position: relative;
 }}
-.pp-btn-wrap button p {{
-  color:#ffffff !important; font-size:2.2rem !important; font-weight:700 !important;
-  margin:0 !important; line-height:1.6 !important; letter-spacing:.3px !important;
+
+/* ── Bouton Streamlit : on le rend invisible mais cliquable ─────── */
+.pp-btn-wrap [data-testid="stBaseButton-secondary"] {{
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    opacity: 0 !important;
+    cursor: pointer !important;
+    z-index: 2 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    border: none !important;
+    background: transparent !important;
 }}
-.pp-btn-wrap button:hover {{ border-color:#3a4a6a !important; background:#1a2030 !important; }}
-.pp-btn-wrap.active button {{ border-color:#4abf6a !important; background:#1b2b1f !important; }}
+
+/* ── Carte visuelle cliquable en dessous ─────────────────────────── */
+.pp-card-btn {{
+    background: #141821;
+    border: 1.5px solid #222838;
+    border-radius: 10px;
+    padding: 1rem 1.1rem .85rem;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+    font-family: 'Barlow Condensed', sans-serif;
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+    min-height: 88px;
+    position: relative;
+    z-index: 1;
+}}
+.pp-card-btn:hover {{
+    border-color: #3a4a6a;
+    background: #1a2030;
+}}
+.pp-btn-wrap.active .pp-card-btn {{
+    border-color: {val_color};
+    background: #1a2b1f;
+    box-shadow: 0 0 0 1px {val_color}33;
+}}
+
+/* ── Ligne du haut : flag + code + chiffre ───────────────────────── */
+.pp-row-top {{
+    display: flex;
+    align-items: baseline;
+    gap: .5rem;
+}}
+.pp-flag {{ font-size: 1.6rem; line-height: 1; }}
+.pp-code {{
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #cdd4ea;
+    letter-spacing: .5px;
+    line-height: 1;
+}}
+.pp-num {{
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 2.4rem;
+    font-weight: 800;
+    color: {val_color};
+    line-height: 1;
+    margin-left: auto;
+}}
+/* ── Ligne du bas : détail communes frontalières ──────────────────── */
+.pp-detail-line {{
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: .75rem;
+    font-weight: 600;
+    color: #4a5470;
+    letter-spacing: .2px;
+    line-height: 1.4;
+    margin-top: .3rem;
+    border-top: 1px solid #1a2030;
+    padding-top: .3rem;
+}}
 </style>""", unsafe_allow_html=True)
 
-            st.markdown(f'<div style="font-size:.58rem;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:#3a4258;margin-bottom:.4rem;font-family:\'Barlow Condensed\',sans-serif;">🚛 Camions · {title_mode}</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div style="font-size:.58rem;font-weight:700;letter-spacing:2.5px;'
+                f'text-transform:uppercase;color:#3a4258;margin-bottom:.5rem;'
+                f'font-family:\'Barlow Condensed\',sans-serif;">🚛 Camions · {title_mode}</div>',
+                unsafe_allow_html=True)
 
             pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
             for pays_code in pays_order:
-                total   = pays_total[pays_code]
-                flag    = PAYS_FLAGS.get(pays_code, "🏳️")
-                details = pays_detail.get(pays_code, [])
+                total    = pays_total[pays_code]
+                flag     = PAYS_FLAGS.get(pays_code, "🏳️")
+                details  = pays_detail.get(pays_code, [])
                 is_active = st.session_state["pp_selected_pays"] == pays_code
 
                 # Ligne de détail communes frontalières
-                detail_line = ""
+                detail_html = ""
                 if details:
                     parts = [f"+{n} {loc}" for loc, n in details[:4]]
-                    detail_line = "\n+  " + "  ·  ".join(parts)
-
-                # Label multi-ligne du bouton : flag + code + chiffre + détail éventuel
-                btn_label = f"{flag}  {pays_code}     {total}{detail_line}"
+                    detail_html = (
+                        f'<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
+                    )
 
                 active_cls = "active" if is_active else ""
-                st.markdown(f'<div class="pp-btn-wrap {active_cls}">', unsafe_allow_html=True)
-                if st.button(btn_label, key=f"pp_btn_{pays_code}", use_container_width=True):
+                # Carte visuelle HTML
+                st.markdown(f"""
+<div class="pp-btn-wrap {active_cls}">
+  <div class="pp-card-btn">
+    <div class="pp-row-top">
+      <span class="pp-flag">{flag}</span>
+      <span class="pp-code">{pays_code}</span>
+      <span class="pp-num">{total}</span>
+    </div>
+    {detail_html}
+  </div>""", unsafe_allow_html=True)
+
+                # Bouton Streamlit invisible par-dessus (garde toute la logique click)
+                if st.button("​", key=f"pp_btn_{pays_code}", use_container_width=True):  # espace zéro-largeur
                     st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
                     st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
 
-        with col_map:
-            _render_map = True
+                st.markdown('</div>', unsafe_allow_html=True)
 
         # ── Détail pays (sous la carte, pleine largeur) ────────────────────
         sel_pays = st.session_state.get("pp_selected_pays")
