@@ -959,8 +959,8 @@ else:
             if _qp and st.session_state.get("pp_selected_pays") != _qp:
                 st.session_state["pp_selected_pays"] = _qp
 
-            # ── Toutes les cartes en un seul st.markdown ──────────────────
-            cards_html = '<div style="display:flex;flex-direction:column;gap:.5rem;">'
+            # ── Toutes les cartes + tous les détails pré-rendus, toggle CSS ──
+            cards_html = '<div id="pp-panel">'
             for pays_code in pays_order:
                 total     = pays_total[pays_code]
                 flag      = PAYS_FLAGS.get(pays_code, "🏳️")
@@ -972,25 +972,50 @@ else:
                     parts = [f"+{n} {loc}" for loc, n in details[:4]]
                     detail_html = '<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
 
-                active_style = (
-                    f"border-color:{val_color};background:#1a2b1f;"
-                    f"box-shadow:0 0 0 1px {val_color}33;"
-                ) if is_active else ""
-
-                toggle_pays = "" if is_active else pays_code
+                active_cls = "active" if is_active else ""
                 cards_html += f"""
-<a href="?pays={toggle_pays}" target="_self" style="text-decoration:none;display:block;">
-  <div class="pp-card-btn" style="{active_style}">
-    <div class="pp-row-top">
-      <span class="pp-flag">{flag}</span>
-      <span class="pp-code">{pays_code}</span>
-      <span class="pp-num">{total}</span>
-    </div>
-    {detail_html}
+<div class="pp-card-btn {active_cls}" onclick="togglePays('{pays_code}')"
+     id="pp-card-{pays_code}" style="margin-bottom:.5rem;{'border-color:' + val_color + ';background:#1a2b1f;box-shadow:0 0 0 1px ' + val_color + '33;' if is_active else ''}">
+  <div class="pp-row-top">
+    <span class="pp-flag">{flag}</span>
+    <span class="pp-code">{pays_code}</span>
+    <span class="pp-num">{total}</span>
   </div>
-</a>"""
+  {detail_html}
+</div>"""
 
-            cards_html += '</div>'
+            cards_html += f"""</div>
+<script>
+var _activePays = "{st.session_state.get('pp_selected_pays', '') or ''}";
+function togglePays(code) {{
+    // Reset toutes les cartes
+    document.querySelectorAll('.pp-card-btn').forEach(function(el) {{
+        el.style.borderColor = '';
+        el.style.background = '#141821';
+        el.style.boxShadow = '';
+    }});
+    if (_activePays === code) {{
+        _activePays = '';
+    }} else {{
+        _activePays = code;
+        var card = document.getElementById('pp-card-' + code);
+        if (card) {{
+            card.style.borderColor = '{val_color}';
+            card.style.background = '#1a2b1f';
+            card.style.boxShadow = '0 0 0 1px {val_color}33';
+        }}
+    }}
+    // Envoie le pays sélectionné à Streamlit via query param sans recharger
+    var url = new URL(window.location);
+    if (_activePays) {{
+        url.searchParams.set('pays', _activePays);
+    }} else {{
+        url.searchParams.delete('pays');
+    }}
+    window.history.pushState({{}}, '', url);
+}}
+</script>"""
+
             st.markdown(cards_html, unsafe_allow_html=True)
 
         with col_map:
