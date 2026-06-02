@@ -889,31 +889,63 @@ else:
         with col_panel:
             val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
 
-            # 1. TON NOUVEAU BLOC CSS (avec white-space: pre-line ajouté)
+            # 1. CSS MIS À JOUR : Boutons beaucoup plus épais (padding augmenté)
+            # Et retrait du "color: #cdd4ea !important" pour autoriser les couleurs Streamlit
             st.markdown(f"""
             <style>
-            div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.5rem;}}
+            div[data-testid="stVerticalBlock"] .pp-btn-wrap {{margin-bottom:.6rem;}}
             .pp-btn-wrap button {{
               width:100%; text-align:left !important;
               background:#141821 !important; border:1px solid #222838 !important;
               border-radius:10px !important;
-              padding:1rem 1.2rem !important;
-              cursor:pointer; transition:border-color .15s;
-              font-family:'Barlow Condensed',sans-serif !important;
-              white-space:pre-line !important; line-height:1.5 !important;
-              min-height:auto !important; height:auto !important;
+              padding:1.6rem 1.4rem !important; /* ← Marges intérieures augmentées ici pour l'épaisseur */
+              cursor:pointer; transition:all .15s;
+              white-space:pre-line !important; 
             }}
             .pp-btn-wrap button p {{
-              color:#cdd4ea !important;
               font-family:'Barlow Condensed',sans-serif !important;
-              font-size:1.1rem !important; font-weight:600 !important;
+              font-size:1.15rem !important; font-weight:500 !important;
               margin:0 !important; line-height:1.5 !important;
             }}
-            .pp-btn-wrap button:hover {{ border-color:#3a4a6a !important; background:#1a2030 !important; }}
+            .pp-btn-wrap button:hover {{ border-color:#3a4a6a !important; background:#1a2030 !important; transform:translateY(-1px); }}
             .pp-btn-wrap.active button {{ border-color:#4abf6a !important; background:#1b2b1f !important; }}
             </style>""", unsafe_allow_html=True)
 
-            st.markdown(f'<div style="font-size:.58rem;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:#3a4258;margin-bottom:.4rem;font-family:\'Barlow Condensed\',sans-serif;">🚛 Camions · {title_mode}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div style="font-size:.58rem;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;color:#3a4258;margin-bottom:.6rem;font-family:\'Barlow Condensed\',sans-serif;">🚛 Camions · {title_mode}</div>', unsafe_allow_html=True)
+
+            pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
+            for i, pays_code in enumerate(pays_order):
+                total   = pays_total[pays_code]
+                flag    = PAYS_FLAGS.get(pays_code, "🏳️")
+                details = pays_detail.get(pays_code, [])
+                is_active = st.session_state.get("pp_selected_pays") == pays_code
+
+                # Détail des villes frontalières
+                detail_txt = ""
+                if details:
+                    parts_d = [f"+{n} {loc}" for loc, n in details[:4]]
+                    detail_txt = "\n" + "  ·  ".join(parts_d)
+                
+                # 2. COULEURS ET GRAS : Utilisation de la syntaxe Streamlit Markdown
+                if show_mode == "Chargements":
+                    nb_str = f":green[**{total} camion{'s' if total > 1 else ''}**]"
+                elif show_mode == "Déchargements":
+                    nb_str = f":blue[**{total} camion{'s' if total > 1 else ''}**]"
+                else:
+                    nb_str = f"**{total} camion{'s' if total > 1 else ''}**"
+
+                btn_label = f"{flag}  {pays_code}  —  {nb_str}{detail_txt}"
+
+                active_cls = "active" if is_active else ""
+                st.markdown(f'<div class="pp-btn-wrap {active_cls}">', unsafe_allow_html=True)
+                
+                # 3. FIX DUPLIQUÉ : Une clé unique à 100% basée sur le pays, le mode et l'index
+                unique_key = f"pp_btn_final_{pays_code}_{show_mode}_{i}"
+                
+                if st.button(btn_label, key=unique_key, use_container_width=True):
+                    st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
             pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
             for pays_code in pays_order:
