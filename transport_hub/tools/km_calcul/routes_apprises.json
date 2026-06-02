@@ -88,5 +88,16 @@
     "source": "carte_manuelle",
     "date": "2026-06-02",
     "confiance": 1
+  },
+  {
+    "origine": "Algemesi, 46680, Spain",
+    "destination": "Hermes, 60370, France",
+    "waypoints": [
+      "44.751641, 3.289563"
+    ],
+    "km_reference": 1504.0,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
   }
 ]
