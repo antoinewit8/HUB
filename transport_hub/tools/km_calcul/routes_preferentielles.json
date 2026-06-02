@@ -108,5 +108,10 @@
     "origine": "Reims",
     "destination": "Saint-Grégoire",
     "waypoints": ["48.745859, 1.374366", "48.453912, 0.111357"]
+  },
+  {
+  "origine": "VilleDepart, CP, France",
+  "destination": "VilleArrivee, CP, Italy",
+  "waypoints": ["45.9200, 6.8950;r=1000", "45.9161, 7.0556;r=1000"]
   }
 ]
