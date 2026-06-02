@@ -1,28 +1,6 @@
 """
 Page Streamlit : Planning Plateaux — Vue planeur
-==================================================
-Objectif : permettre à un nouveau planeur de lire le planning d'un coup d'œil.
-Le fichier source est un export *au niveau activité* : chaque ligne est UNE
-activité (chargement ou déchargement) rattachée à un N° Dossier. La page
-reconstruit les dossiers (jambe chargement → jambe déchargement) et propose :
-
-  • Filtrage par dimension : Chauffeur / Tracteur (immat.) / Remorque
-    → sélection précise OU "tout confondu" (multiselect vide).
-  • Tractionnaires : détectés par "TRA" dans "Départ. tracteur".
-    Le reste = flotte CB. Filtre Tous / Flotte CB / Tractionnaires,
-    badge TRA toujours visible (y compris en tout confondu).
-  • Regroupements géographiques : ≥2 chargements OU ≥2 déchargements le même
-    jour dans le même département → alertes (réflexe planning).
-  • Deux vues : "Par jour" (worklist charg | déch) et "Par ressource" (swimlane).
-  • Carte EN HAUT : affichée directement, avec panneau pays en surimpression.
-    Communes frontalières remappées vers le pays logistique (ex: Bazeilles → BE).
-
-Colonnes source attendues (ordre indicatif, résolution robuste par nom) :
-  N° Dossier | Activité | Date | Heure | Type de transport | Nom 1 | Nom 2 |
-  Adresse | Numéro | Code pays | Département | Code postal | Localité |
-  Produit | Chauffeur | Départ. tracteur | Immat. tracteur | Remorque
 """
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -37,7 +15,6 @@ import types as _types
 import urllib.request as _ureq
 import urllib.parse as _uparse
 
-# ─── Import PTV (même mécanisme que la page Optimisateur) ─────────────────────
 def _load_ptv(project_root: str):
     if "modules" not in sys.modules:
         pkg = _types.ModuleType("modules")
@@ -71,7 +48,6 @@ def _load_ptv(project_root: str):
 
 _HERE  = os.path.dirname(os.path.abspath(__file__))
 _ROOTS = [_HERE, os.path.dirname(_HERE)]
-
 PTV_AVAILABLE = False
 _ptv_mod = None
 for _root in _ROOTS:
@@ -93,14 +69,11 @@ else:
     PAYS_TO_ISO = {}
     GPS_FIXES   = {}
 
-# ─── Page config ─────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Planning Plateaux", page_icon="🗂️", layout="wide")
 
-# ─── Style ───────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Barlow:wght@300;400;500;600&display=swap');
-
 :root{
   --bg:#0e1016; --panel:#141821; --panel2:#11151d;
   --line:#222838; --line2:#1a2030;
@@ -114,7 +87,6 @@ st.markdown("""
 [data-testid="stSidebar"]{ background:#090b11; }
 *{ font-family:'Barlow', sans-serif; }
 .block-container{ padding-top:1.4rem; }
-
 .hero{
   background:var(--panel); border:1px solid var(--line);
   border-radius:8px; padding:1.4rem 1.8rem; margin-bottom:1.2rem;
@@ -133,13 +105,11 @@ st.markdown("""
 }
 .badge.ptv{ background:var(--charg-d); border:1px solid var(--charg-l); color:var(--charg); }
 .badge.ptv.off{ background:var(--alert-d); border:1px solid var(--alert-l); color:var(--alert); }
-
 .kgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:.7rem; margin-bottom:1.2rem; }
 .kpi{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.8rem 1rem; }
 .kpi .v{ font-family:'Barlow Condensed',sans-serif; font-size:1.85rem; font-weight:700; color:var(--txt); line-height:1; }
 .kpi .l{ font-size:.66rem; color:var(--faint); text-transform:uppercase; letter-spacing:1.4px; margin-top:5px; }
 .kpi.tra .v{ color:var(--tra); }
-
 .sect{
   font-family:'Barlow Condensed',sans-serif; font-size:.72rem; color:var(--faint);
   text-transform:uppercase; letter-spacing:2.6px; margin:1.6rem 0 .7rem;
@@ -147,43 +117,6 @@ st.markdown("""
   display:flex; justify-content:space-between; align-items:baseline;
 }
 .sect .hint{ color:var(--faint); letter-spacing:1px; font-size:.66rem; }
-
-/* Panneau pays — cartes empilées, grandes et lisibles */
-.pays-panel{
-  display:flex; flex-direction:column; gap:.45rem;
-  font-family:'Barlow Condensed',sans-serif;
-}
-.pays-panel .pp-title{
-  font-size:.58rem; font-weight:700; letter-spacing:2.5px; text-transform:uppercase;
-  color:#3a4258; margin-bottom:.1rem; padding-left:.1rem;
-}
-.pp-card{
-  background:#141821; border:1px solid #222838; border-radius:7px;
-  padding:.55rem .75rem .5rem;
-  display:flex; flex-direction:column; gap:0;
-}
-.pp-card-top{
-  display:flex; align-items:baseline; gap:.45rem;
-}
-.pp-flag{ font-size:1.3rem; line-height:1; }
-.pp-code{
-  font-family:'Barlow Condensed',sans-serif; font-weight:700;
-  font-size:1.35rem; letter-spacing:.5px; color:#cdd4ea; line-height:1;
-}
-.pp-val{
-  font-family:'Barlow Condensed',sans-serif; font-weight:700;
-  font-size:2.1rem; color:#4abf6a; line-height:1; margin-left:auto;
-}
-.pp-val.d{ color:#4a8abf; }
-.pp-val.both{ color:#cdd4ea; }
-.pp-detail{
-  font-size:.68rem; color:#3a4258; font-weight:600; letter-spacing:.2px;
-  margin-top:.22rem; padding-top:.22rem; border-top:1px solid #1a2030;
-  line-height:1.4;
-}
-.pp-detail span{ color:#5b6480; }
-
-/* Jour : en-tête + colonnes */
 .dayhead{
   font-family:'Barlow Condensed',sans-serif; color:var(--txt);
   font-size:1.3rem; font-weight:700; text-transform:uppercase; letter-spacing:.5px;
@@ -191,63 +124,32 @@ st.markdown("""
   display:flex; align-items:baseline; gap:.7rem;
 }
 .dayhead .cnt{ font-size:.72rem; color:var(--muted); letter-spacing:1px; font-weight:500; }
-.coltag{
-  font-family:'Barlow Condensed',sans-serif; font-size:.7rem; font-weight:700;
-  letter-spacing:2px; text-transform:uppercase; margin:.2rem 0 .55rem;
-}
+.coltag{ font-family:'Barlow Condensed',sans-serif; font-size:.7rem; font-weight:700; letter-spacing:2px; text-transform:uppercase; margin:.2rem 0 .55rem; }
 .coltag.c{ color:var(--charg); } .coltag.d{ color:var(--dech); }
-
-.card{
-  background:var(--panel); border:1px solid var(--line); border-radius:6px;
-  padding:.7rem .85rem; margin-bottom:.55rem; display:grid;
-  grid-template-columns:auto 1fr; gap:.7rem; align-items:start;
-}
-.card.c{ border-color:var(--charg-l); }
-.card.d{ border-color:var(--dech-l); }
-.card .hour{
-  font-family:'Barlow Condensed',sans-serif; font-size:1.25rem; font-weight:700;
-  line-height:1; padding-top:1px; min-width:3.1rem;
-}
+.card{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.7rem .85rem; margin-bottom:.55rem; display:grid; grid-template-columns:auto 1fr; gap:.7rem; align-items:start; }
+.card.c{ border-color:var(--charg-l); } .card.d{ border-color:var(--dech-l); }
+.card .hour{ font-family:'Barlow Condensed',sans-serif; font-size:1.25rem; font-weight:700; line-height:1; padding-top:1px; min-width:3.1rem; }
 .card.c .hour{ color:var(--charg); } .card.d .hour{ color:var(--dech); }
 .card .hour .dno{ display:block; font-size:.6rem; font-weight:500; color:var(--faint); letter-spacing:.5px; margin-top:3px; }
-.card .loc{
-  font-family:'Barlow Condensed',sans-serif; font-size:1.08rem; font-weight:600;
-  color:var(--txt); text-transform:uppercase; letter-spacing:.3px; line-height:1.05;
-}
+.card .loc{ font-family:'Barlow Condensed',sans-serif; font-size:1.08rem; font-weight:600; color:var(--txt); text-transform:uppercase; letter-spacing:.3px; line-height:1.05; }
 .card .site{ font-size:.78rem; color:var(--muted); margin-top:1px; }
 .card .leg{ font-size:.73rem; color:var(--faint); margin-top:3px; }
 .card .leg b{ color:var(--muted); font-weight:600; }
-
 .tags{ display:flex; flex-wrap:wrap; gap:5px; margin-top:.5rem; }
-.tag{
-  font-family:'Barlow Condensed',sans-serif; font-size:.68rem; font-weight:600;
-  letter-spacing:.3px; padding:1px 6px; border-radius:3px; border:1px solid var(--line);
-  color:var(--muted); background:var(--panel2);
-}
+.tag{ font-family:'Barlow Condensed',sans-serif; font-size:.68rem; font-weight:600; letter-spacing:.3px; padding:1px 6px; border-radius:3px; border:1px solid var(--line); color:var(--muted); background:var(--panel2); }
 .tag.tra{ color:var(--tra); border-color:var(--tra-l); background:var(--tra-d); }
 .tag.cb{ color:var(--charg); border-color:var(--charg-l); background:var(--charg-d); }
 .tag.prod{ color:var(--txt); }
-
-/* Swimlane par ressource */
 .lane{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.65rem .85rem; margin-bottom:.55rem; }
-.lane .who{
-  font-family:'Barlow Condensed',sans-serif; font-size:1.05rem; font-weight:700;
-  color:var(--txt); text-transform:uppercase; letter-spacing:.4px; display:flex; gap:.6rem; align-items:center;
-}
+.lane .who{ font-family:'Barlow Condensed',sans-serif; font-size:1.05rem; font-weight:700; color:var(--txt); text-transform:uppercase; letter-spacing:.4px; display:flex; gap:.6rem; align-items:center; }
 .lane .who .meta{ font-size:.68rem; color:var(--faint); font-weight:500; letter-spacing:1px; text-transform:none; }
 .flow{ display:flex; flex-wrap:wrap; gap:6px; margin-top:.5rem; }
-.stop{
-  font-size:.72rem; font-family:'Barlow Condensed',sans-serif; font-weight:600;
-  padding:3px 9px; border-radius:3px; border:1px solid; letter-spacing:.3px; white-space:nowrap;
-}
+.stop{ font-size:.72rem; font-family:'Barlow Condensed',sans-serif; font-weight:600; padding:3px 9px; border-radius:3px; border:1px solid; letter-spacing:.3px; white-space:nowrap; }
 .stop.c{ color:var(--charg); border-color:var(--charg-l); background:var(--charg-d); }
 .stop.d{ color:var(--dech); border-color:var(--dech-l); background:var(--dech-d); }
 .stop .t{ opacity:.7; font-weight:500; margin-right:5px; }
-
-/* Vue Par jour — disposition Lignes */
 .rows{ border:1px solid var(--line); border-radius:7px; overflow:hidden; margin-bottom:.5rem; }
-.row{ display:grid; grid-template-columns:108px minmax(0,1.5fr) 16px minmax(0,1.5fr) minmax(0,1.4fr);
-      gap:.45rem .75rem; align-items:center; padding:.42rem .75rem; border-bottom:1px solid var(--line2); }
+.row{ display:grid; grid-template-columns:108px minmax(0,1.5fr) 16px minmax(0,1.5fr) minmax(0,1.4fr); gap:.45rem .75rem; align-items:center; padding:.42rem .75rem; border-bottom:1px solid var(--line2); }
 .row:last-child{ border-bottom:none; }
 .row:nth-child(odd){ background:var(--panel2); }
 .row .c1{ display:flex; flex-direction:column; gap:3px; align-items:flex-start; }
@@ -266,12 +168,7 @@ st.markdown("""
 .dens-large .row{ padding:.62rem .85rem; gap:.5rem .9rem; }
 .dens-large .leg2 .lh, .dens-large .leg2 .ll{ font-size:1.02rem; }
 .dens-large .leg2 .ls{ font-size:.78rem; }
-@media(max-width:820px){
-  .row{ grid-template-columns:1fr; gap:.18rem; }
-  .rarrow{ display:none; }
-}
-
-/* Vue Cartes */
+@media(max-width:820px){ .row{ grid-template-columns:1fr; gap:.18rem; } .rarrow{ display:none; } }
 .trips{ display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:.5rem; margin-bottom:.5rem; }
 .trip{ background:var(--panel2); border:1px solid var(--line2); border-radius:7px; padding:.5rem .65rem .55rem; }
 .trip-h{ display:flex; justify-content:space-between; align-items:center; gap:.4rem; margin-bottom:.3rem; flex-wrap:wrap; }
@@ -284,41 +181,81 @@ st.markdown("""
 .leg .ls{ grid-column:2; font-size:.72rem; color:var(--muted); line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .leg.off{ display:block; grid-template-columns:none; font-size:.72rem; font-style:italic; color:var(--faint); padding:.12rem 0; }
 .arrow{ color:var(--faint); font-size:.78rem; line-height:1; margin:.1rem 0 .15rem .15rem; }
-
-/* Regroupements */
-.cluster{
-  background:var(--alert-d); border:1px solid var(--alert-l); border-radius:6px;
-  padding:.7rem .95rem; margin-bottom:.5rem;
-}
+.cluster{ background:var(--alert-d); border:1px solid var(--alert-l); border-radius:6px; padding:.7rem .95rem; margin-bottom:.5rem; }
 .cluster .ch{ font-family:'Barlow Condensed',sans-serif; font-weight:700; font-size:1rem; color:#e6a59d; text-transform:uppercase; letter-spacing:.5px; }
 .cluster .cs{ font-size:.76rem; color:#b08580; margin-top:3px; }
 .cluster.d{ background:var(--dech-d); border-color:var(--dech-l); }
 .cluster.d .ch{ color:#9cc4e6; } .cluster.d .cs{ color:#7d9ab0; }
 .legendline{ color:var(--faint); font-size:.74rem; margin-top:.4rem; }
 .legendline b.c{ color:var(--charg); } .legendline b.d{ color:var(--dech); } .legendline b.x{ color:var(--alert); }
+/* ── Boutons pays : nouveau visuel ── */
+.pp-card-btn {
+    background: #141821;
+    border: 1.5px solid #222838;
+    border-radius: 10px;
+    padding: 1rem 1.1rem .85rem;
+    transition: border-color .15s, background .15s;
+    font-family: 'Barlow Condensed', sans-serif;
+    display: flex;
+    flex-direction: column;
+    gap: .15rem;
+    min-height: 88px;
+    margin-bottom: 0;
+}
+.pp-card-btn:hover { border-color: #3a4a6a; background: #1a2030; }
+.pp-row-top { display: flex; align-items: baseline; gap: .5rem; }
+.pp-flag { font-size: 1.6rem; line-height: 1; }
+.pp-code {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 1.5rem; font-weight: 700;
+    color: #cdd4ea; letter-spacing: .5px; line-height: 1;
+}
+.pp-detail-line {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: .75rem; font-weight: 600; color: #4a5470;
+    letter-spacing: .2px; line-height: 1.4;
+    margin-top: .3rem; border-top: 1px solid #1a2030; padding-top: .3rem;
+}
+/* Colle le bouton Streamlit invisible sur la carte HTML */
+.pp-wrap {
+    position: relative;
+    margin-bottom: .5rem;
+}
+.pp-wrap > div[data-testid="element-container"] {
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 2 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    height: 100% !important;
+}
+.pp-wrap > div[data-testid="element-container"] > div,
+.pp-wrap > div[data-testid="element-container"] > div > div {
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+.pp-wrap [data-testid="stBaseButton-secondary"] {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    opacity: 0 !important;
+    cursor: pointer !important;
+    border: none !important;
+    background: transparent !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ─── Communes frontalières → pays logistique (override d'affichage carte) ─────
-# Ces communes sont encodées côté client avec le pays source (FR) mais
-# logistiquement rattachées à un autre pays pour le compteur carte.
-# Format : { normalize(localite) : "CODE_PAYS_LOGISTIQUE" }
 COMMUNES_PAYS_LOGISTIQUE = {
-    # Ardennes 08 – zone Sedan/Carignan frontalière Belgique
-    "bazeilles":         "BE",
-    "carignan":          "BE",
-    "mouzon":            "BE",
-    "remilly aillicourt":"BE",
-    "douzy":             "BE",
-    "sedan":             "BE",
-    # Moselle 57 – zone frontalière Luxembourg
-    "thionville":        "LU",
-    "yutz":              "LU",
-    "metzange":          "LU",
-    # Ajoutez ici d'autres communes si besoin
+    "bazeilles": "BE", "carignan": "BE", "mouzon": "BE",
+    "remilly aillicourt": "BE", "douzy": "BE", "sedan": "BE",
+    "thionville": "LU", "yutz": "LU", "metzange": "LU",
 }
 
-# ─── Utilitaires ─────────────────────────────────────────────────────────────
 def normalize(text) -> str:
     if text is None or (isinstance(text, float) and np.isnan(text)):
         return ""
@@ -329,7 +266,6 @@ def normalize(text) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 def normalize_key(text) -> str:
-    """Version minuscule pour les clés dict."""
     if not text:
         return ""
     text = str(text).lower().strip()
@@ -406,17 +342,14 @@ DEPT_NOM = {
 }
 
 def pays_logistique(localite: str, pays_source: str) -> str:
-    """Renvoie le code pays logistique : override frontalier si connu, sinon pays source normalisé."""
     key = normalize_key(localite)
     if key in COMMUNES_PAYS_LOGISTIQUE:
         return COMMUNES_PAYS_LOGISTIQUE[key]
-    # Normalise FR/F → FR, BE/B → BE, etc.
     p = (pays_source or "").upper().strip()
     MAP = {"F": "FR", "B": "BE", "D": "DE", "E": "ES", "I": "IT",
            "L": "LU", "A": "AT", "P": "PT", "UK": "GB"}
     return MAP.get(p, p) if p else "??"
 
-# ─── Géocodage ───────────────────────────────────────────────────────────────
 def _photon(query: str):
     url = f"https://photon.komoot.io/api/?q={_uparse.quote(query)}&limit=1&lang=fr"
     try:
@@ -452,7 +385,6 @@ def geocode_cached(ville: str, cp: str, pays: str):
     ville_exp = re.sub(r'\bSTE\b', 'SAINTE', ville_exp, flags=re.IGNORECASE)
     pays_u = (pays or "").upper()
     pays_label = PAYS_MAP_DISPLAY.get(pays_u, pays) if pays else ""
-
     if PTV_AVAILABLE:
         fix_key = ville.strip().lower()
         if fix_key in GPS_FIXES:
@@ -482,16 +414,13 @@ def geocode_cached(ville: str, cp: str, pays: str):
                     return r
     return None
 
-# ─── Chargement / préparation ─────────────────────────────────────────────────
 def smart_to_datetime(s):
     s = s.fillna("").astype(str).str.strip()
     a = pd.to_datetime(s, errors="coerce", dayfirst=True)
     b = pd.to_datetime(s, errors="coerce", dayfirst=False)
-
     def span_days(x):
         x = x.dropna()
         return (x.max() - x.min()).days if len(x) > 1 else 0
-
     na_a, na_b = int(a.isna().sum()), int(b.isna().sum())
     if na_a != na_b:
         return (a, "jour/mois") if na_a < na_b else (b, "mois/jour")
@@ -504,7 +433,6 @@ def load_activites(file_bytes):
     df = pd.read_excel(io.BytesIO(file_bytes), dtype=str)
     df.columns = df.columns.str.strip()
     cols = list(df.columns)
-
     C = {
         "dossier":    find_col(cols, "N° Dossier", "No Dossier", "Dossier", "N Dossier"),
         "activite":   find_col(cols, "Activité", "Activite", "Activ"),
@@ -525,11 +453,9 @@ def load_activites(file_bytes):
         "immat":      find_col(cols, "Immat. tracteur", "Immat tracteur", "Immatriculation", "Immat"),
         "remorque":   find_col(cols, "Remorque"),
     }
-
     def col(key):
         c = C[key]
         return df[c] if c and c in df.columns else pd.Series([None] * len(df))
-
     out = pd.DataFrame()
     out["dossier"]    = col("dossier").fillna("").astype(str).str.strip()
     out["_act_raw"]   = col("activite").fillna("").astype(str).str.strip()
@@ -551,22 +477,13 @@ def load_activites(file_bytes):
     out["depart_trac"]= col("depart_trac").fillna("").astype(str).str.strip()
     out["immat"]      = col("immat").fillna("").astype(str).str.strip()
     out["remorque"]   = col("remorque").fillna("").astype(str).str.strip()
-
     cp2 = out["cp"].str.extract(r"^(\d{2})", expand=False)
     out["dept"] = out["dept"].where(out["dept"].str.len() > 0, cp2).fillna("")
-
     out["is_tra"] = out["depart_trac"].str.upper().str.contains("TRA", na=False)
-
-    # Pays logistique (avec overrides communes frontalières)
-    out["pays_logi"] = out.apply(
-        lambda r: pays_logistique(r["localite"], r["pays"]), axis=1)
-
-    out["_dt"] = out["date"] + pd.to_timedelta(
-        out["_hval"].where(out["_hval"] < 30, 0), unit="h")
-
+    out["pays_logi"] = out.apply(lambda r: pays_logistique(r["localite"], r["pays"]), axis=1)
+    out["_dt"] = out["date"] + pd.to_timedelta(out["_hval"].where(out["_hval"] < 30, 0), unit="h")
     out = out[out["dossier"] != ""].copy()
     out = out.sort_values(["date", "_hval"], na_position="last").reset_index(drop=True)
-
     act_distinct = (df[C["activite"]].dropna().astype(str).str.strip().value_counts()
                     if C["activite"] else pd.Series(dtype=int))
     return out, C, act_distinct, _date_order
@@ -627,6 +544,155 @@ def build_trips(d):
 def html(s: str):
     st.markdown("\n".join(line.lstrip() for line in s.splitlines()), unsafe_allow_html=True)
 
+def build_pays_panel(points_list, show_mode_param):
+    from collections import defaultdict
+    pays_total  = defaultdict(int)
+    pays_detail = defaultdict(list)
+    for p in points_list:
+        pl = p.get("pays_logi", p.get("pays", "??"))
+        ps = p.get("pays", "??")
+        n  = p["camions"]
+        pays_total[pl] += n
+        ps_norm = pays_logistique("__no_override__", ps)
+        if pl != ps_norm:
+            pays_detail[pl].append((p["nom"], n))
+    return pays_total, pays_detail
+
+# ─── Fragment : panneau pays + carte (rerun partiel) ─────────────────────────
+@st.fragment
+def render_pays_carte(points, arcs_draw, agg, pays_total, pays_detail,
+                      pays_rows, show_mode, focus_norm, legs, dmap, MAX_GEO):
+
+    val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
+    title_mode = {"Les deux": "Tous", "Chargements": "Charg.", "Déchargements": "Déch."}[show_mode]
+
+    if "pp_selected_pays" not in st.session_state:
+        st.session_state["pp_selected_pays"] = None
+
+    col_panel, col_map = st.columns([1, 5])
+
+    with col_panel:
+        st.markdown(
+            f'<div style="font-size:.58rem;font-weight:700;letter-spacing:2.5px;'
+            f'text-transform:uppercase;color:#3a4258;margin-bottom:.5rem;'
+            f'font-family:\'Barlow Condensed\',sans-serif;">🚛 Camions · {title_mode}</div>',
+            unsafe_allow_html=True)
+
+        pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
+
+        for pays_code in pays_order:
+            total     = pays_total[pays_code]
+            flag      = PAYS_FLAGS.get(pays_code, "🏳️")
+            details   = pays_detail.get(pays_code, [])
+            is_active = st.session_state["pp_selected_pays"] == pays_code
+
+            detail_html = ""
+            if details:
+                parts = [f"+{n} {loc}" for loc, n in details[:4]]
+                detail_html = '<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
+
+            active_style = (
+                f"border-color:{val_color};background:#1a2b1f;"
+                f"box-shadow:0 0 0 1px {val_color}33;"
+            ) if is_active else ""
+
+            # Carte HTML visible
+            st.markdown(f"""
+<div class="pp-wrap">
+  <div class="pp-card-btn" style="{active_style}">
+    <div class="pp-row-top">
+      <span class="pp-flag">{flag}</span>
+      <span class="pp-code">{pays_code}</span>
+      <span style="font-family:'Barlow Condensed',sans-serif;font-size:2.4rem;font-weight:800;color:{val_color};line-height:1;margin-left:auto;">{total}</span>
+    </div>
+    {detail_html}
+  </div>""", unsafe_allow_html=True)
+
+            # Bouton invisible par-dessus
+            if st.button("\u200b", key=f"pp_btn_{pays_code}", use_container_width=True):
+                st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
+                st.rerun(scope="fragment")
+
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    with col_map:
+        try:
+            import pydeck as pdk
+            dfp = pd.DataFrame(points)
+            layers = [
+                pdk.Layer("ScatterplotLayer", data=dfp, id="pts",
+                          get_position="[lon, lat]", get_radius="radius",
+                          radius_min_pixels=8, radius_max_pixels=48,
+                          get_fill_color="color", get_line_color=[255,255,255,110],
+                          stroked=True, line_width_min_pixels=1, pickable=True,
+                          auto_highlight=True),
+                pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
+                          get_text="label", get_size=14, get_color=[10,14,18,255],
+                          get_anchor="middle", get_alignment_baseline="'center'", font_weight=800),
+                pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
+                          get_text="nom", get_size=11, get_color=[200,210,230,210],
+                          get_anchor="middle", get_alignment_baseline="'bottom'",
+                          get_pixel_offset=[0,-16]),
+            ]
+            if arcs_draw:
+                layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs_draw),
+                    get_source_position="[sl, sla]", get_target_position="[tl, tla]",
+                    get_source_color=[74,191,106,150], get_target_color=[74,138,191,170],
+                    get_width="w", width_min_pixels=1))
+            deck = pdk.Deck(
+                layers=layers,
+                initial_view_state=pdk.ViewState(
+                    latitude=dfp["lat"].mean(), longitude=dfp["lon"].mean(),
+                    zoom=5, pitch=25),
+                tooltip={"html": "<b>{nom}</b><br>{typ} · <b>{camions}</b> dossier(s)<br>"
+                                 "<span style='color:#8a93ad'>Dossiers : {dossiers}</span>",
+                         "style": {"background":"#141821","color":"#cdd4ea",
+                                   "font-family":"Barlow Condensed, sans-serif","padding":"9px"}},
+                map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+            )
+            try:
+                st.pydeck_chart(deck, use_container_width=True, height=680,
+                                key="planmap", selection_mode="single-object", on_select="rerun")
+            except TypeError:
+                st.pydeck_chart(deck, use_container_width=True, height=680)
+                st.caption("💡 Clic-pour-isoler indisponible sur cette version de Streamlit.")
+            if len(agg) >= MAX_GEO and not focus_norm:
+                st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
+        except ImportError:
+            st.map(pd.DataFrame(points).rename(columns={"lat":"latitude","lon":"longitude"}))
+
+    # ── Détail pays pleine largeur ─────────────────────────────────────────
+    sel_pays = st.session_state.get("pp_selected_pays")
+    if sel_pays and sel_pays in pays_rows:
+        flag_s = PAYS_FLAGS.get(sel_pays, "🏳️")
+        rows_sel = pays_rows[sel_pays]
+        detail_records = []
+        for row in rows_sel:
+            dos = row["dossier"]
+            lg  = legs.get(dos, {})
+            detail_records.append({
+                "N° Dossier":  dos,
+                "Type":        "Chargement" if row["type"] == "C" else (
+                               "Déchargement" if row["type"] == "D" else "?"),
+                "Date":        row["date"].strftime("%d/%m/%Y") if pd.notna(row["date"]) else "—",
+                "Heure":       row["heure"] or "—",
+                "Localité":    row["localite"] or "—",
+                "Chauffeur":   row["chauffeur"] or "—",
+                "Tracteur":    row["immat"] or "—",
+                "Remorque":    row["remorque"] or "—",
+                "Flotte":      "TRA" if row["is_tra"] else "CB",
+                "Charg. →":    lg.get("c_loc", "—"),
+                "→ Déch.":     lg.get("d_loc", "—"),
+            })
+        df_detail = pd.DataFrame(detail_records).sort_values(["Date", "Heure", "N° Dossier"])
+        n_dos = df_detail["N° Dossier"].nunique()
+        st.markdown(
+            f'<div class="sect">{flag_s} Détail {sel_pays} '
+            f'<span class="hint">{n_dos} dossiers · {len(df_detail)} activités</span></div>',
+            unsafe_allow_html=True)
+        st.dataframe(df_detail, hide_index=True, use_container_width=True,
+                     height=min(420, 38 + len(df_detail) * 36))
+
 # ─── Header ──────────────────────────────────────────────────────────────────
 ptv_badge = ('<span class="badge ptv">PTV routing actif</span>' if PTV_AVAILABLE
              else '<span class="badge ptv off">PTV indisponible — géocodage OSM</span>')
@@ -642,8 +708,7 @@ st.markdown(f"""
 
 up = st.file_uploader("📋 Fichier des activités (chargements / déchargements)", type=["xlsx", "xls"])
 if not up:
-    st.info("👆 Chargez l'export des activités pour démarrer. "
-            "Chaque ligne = une activité (chargement ou déchargement) rattachée à un N° Dossier.")
+    st.info("👆 Chargez l'export des activités pour démarrer.")
     st.stop()
 
 df, COLS, ACT_DISTINCT, DATE_ORDER = load_activites(up.read())
@@ -660,14 +725,13 @@ with st.expander("🔧 Debug — colonnes détectées & valeurs Activité"):
                  hide_index=True, use_container_width=True)
     n_unknown = int((df["type"] == "?").sum())
     if n_unknown:
-        st.warning(f"⚠️ {n_unknown} activité(s) non classées. Vérifie le mapping ci-dessus.")
+        st.warning(f"⚠️ {n_unknown} activité(s) non classées.")
     _dd = df["date"].dropna()
     if not _dd.empty:
         st.write(f"**Format de date détecté :** `{DATE_ORDER}` — "
                  f"du {_dd.min().strftime('%d/%m/%Y')} au {_dd.max().strftime('%d/%m/%Y')} "
                  f"({_dd.dt.date.nunique()} jours).")
 
-# ─── Filtres ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="sect">🎛️ Filtres planning <span class="hint">multiselect vide = tout confondu</span></div>',
             unsafe_allow_html=True)
 
@@ -729,21 +793,16 @@ if dfx.empty:
         st.warning("Aucune activité ne correspond à ces filtres.")
     st.stop()
 
-# ─── KPIs ────────────────────────────────────────────────────────────────────
 n_charg = int((dfx["type"] == "C").sum())
 n_dech  = int((dfx["type"] == "D").sum())
 n_tra   = int(dfx["is_tra"].sum())
 
-# ════════════════════════════════════════════════════════════════════════════════
-# ─── CARTE (EN HAUT, AFFICHAGE DIRECT) ───────────────────────────────────────
-# ════════════════════════════════════════════════════════════════════════════════
 st.markdown('<div class="sect">🗺️ Carte des activités '
             '<span class="hint">taille &amp; chiffre = nb de dossiers · vert charg · bleu déch · arcs = liaisons</span></div>',
             unsafe_allow_html=True)
 
 MAX_GEO = 120
 
-# ── Options carte ─────────────────────────────────────────────────────────────
 mc1, mc2, mc3, mc4 = st.columns([1.3, 1, 1, 1.5])
 with mc1:
     dates_opt = sorted(dfx["date"].dropna().dt.date.unique())
@@ -778,7 +837,6 @@ else:
 
     focus_norm = clicked_norm or (normalize(focus_choice) if focus_choice != "— tout afficher" else None)
 
-    # ── Agrégat par lieu + type ───────────────────────────────────────────────
     agg = (dmap.assign(loc_norm=dmap["localite"].apply(normalize))
                .groupby(["loc_norm", "type"])
                .agg(localite=("localite", "first"), cp=("cp", "first"),
@@ -810,7 +868,6 @@ else:
                     "type_code": row["type"],
                 })
 
-    # ── Arcs ─────────────────────────────────────────────────────────────────
     arcs = []
     for dos in dmap["dossier"].unique():
         lg = legs.get(dos, {})
@@ -823,7 +880,6 @@ else:
             arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0],
                          "dos": dos, "cn": cn, "dn": dn, "w": 1.6})
 
-    # ── Application options (isolation > filtre type) ─────────────────────────
     if focus_norm:
         arcs_draw = [a for a in arcs if a["cn"] == focus_norm or a["dn"] == focus_norm]
         related   = {focus_norm} | {a["cn"] for a in arcs_draw} | {a["dn"] for a in arcs_draw}
@@ -843,268 +899,18 @@ else:
         elif show_mode == "Déchargements":
             points = [p for p in points if p["type_code"] == "D"]
 
-    # ── Panneau pays ──────────────────────────────────────────────────────────
-    # Comptage camions par pays logistique, avec détail des communes override
-    def build_pays_panel(points_list, show_mode_param):
-        """
-        Renvoie un dict pays_logi → {total, details: [(loc, n)]}
-        details = communes dont le pays_logi diffère du pays source (overrides frontaliers).
-        """
-        from collections import defaultdict
-        pays_total  = defaultdict(int)
-        pays_detail = defaultdict(list)   # pays → [(localite, n)]
-        
-        for p in points_list:
-            pl   = p.get("pays_logi", p.get("pays", "??"))
-            ps   = p.get("pays", "??")
-            n    = p["camions"]
-            pays_total[pl] += n
-            # Si override frontalier : pays_logi != pays source normalisé
-            ps_norm = pays_logistique("__no_override__", ps)  # juste normalisation
-            if pl != ps_norm:  # commune remappée → on l'indique en détail
-                pays_detail[pl].append((p["nom"], n))
-        
-        return pays_total, pays_detail
-
-    # ── Initialisation avant le bloc conditionnel ──────────────────────────
-    _render_map = False
-    col_map_ref = None
     if points:
         pays_total, pays_detail = build_pays_panel(points, show_mode)
-        title_mode = {"Les deux": "Tous", "Chargements": "Charg.", "Déchargements": "Déch."}[show_mode]
         from collections import defaultdict
         pays_rows = defaultdict(list)
         for _, row in dmap.iterrows():
             pl = row.get("pays_logi", row.get("pays", "??"))
             pays_rows[pl].append(row)
 
-        # ── Initialise + sync query params ────────────────────────────────
-        if "pp_selected_pays" not in st.session_state:
-            st.session_state["pp_selected_pays"] = None
-        _qp_pays = st.query_params.get("pays", "")
-        if _qp_pays and _qp_pays != st.session_state.get("pp_selected_pays"):
-            st.session_state["pp_selected_pays"] = _qp_pays
-        elif not _qp_pays and st.session_state.get("pp_selected_pays"):
-            st.session_state["pp_selected_pays"] = None
-
-        col_panel, col_map = st.columns([1, 6])
-        col_map_ref = col_map  # ← référence gardée hors du with
-        with col_panel:
-            val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
-
-            st.markdown(f"""
-<style>
-.pp-card-btn {{
-    background: #141821;
-    border: 1.5px solid #222838;
-    border-radius: 10px;
-    padding: 1rem 1.1rem .85rem;
-    cursor: pointer;
-    transition: border-color .15s, background .15s;
-    font-family: 'Barlow Condensed', sans-serif;
-    display: flex;
-    flex-direction: column;
-    gap: .15rem;
-    min-height: 88px;
-}}
-.pp-card-btn:hover {{
-    border-color: #3a4a6a;
-    background: #1a2030;
-}}
-.pp-row-top {{
-    display: flex;
-    align-items: baseline;
-    gap: .5rem;
-}}
-.pp-flag {{ font-size: 1.6rem; line-height: 1; }}
-.pp-code {{
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: #cdd4ea;
-    letter-spacing: .5px;
-    line-height: 1;
-}}
-.pp-num {{
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: 2.4rem;
-    font-weight: 800;
-    color: {val_color};
-    line-height: 1;
-    margin-left: auto;
-}}
-.pp-detail-line {{
-    font-family: 'Barlow Condensed', sans-serif;
-    font-size: .75rem;
-    font-weight: 600;
-    color: #4a5470;
-    letter-spacing: .2px;
-    line-height: 1.4;
-    margin-top: .3rem;
-    border-top: 1px solid #1a2030;
-    padding-top: .3rem;
-}}
-</style>""", unsafe_allow_html=True)
-
-            st.markdown(
-                f'<div style="font-size:.58rem;font-weight:700;letter-spacing:2.5px;'
-                f'text-transform:uppercase;color:#3a4258;margin-bottom:.5rem;'
-                f'font-family:\'Barlow Condensed\',sans-serif;">🚛 Camions · {title_mode}</div>',
-                unsafe_allow_html=True)
-
-            pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
-
-            # Lire le pays actif depuis query params
-            _qp = st.query_params.get("pays", None)
-            if _qp and st.session_state.get("pp_selected_pays") != _qp:
-                st.session_state["pp_selected_pays"] = _qp
-
-            # ── Toutes les cartes + tous les détails pré-rendus, toggle CSS ──
-            cards_html = '<div id="pp-panel">'
-            for pays_code in pays_order:
-                total     = pays_total[pays_code]
-                flag      = PAYS_FLAGS.get(pays_code, "🏳️")
-                details   = pays_detail.get(pays_code, [])
-                is_active = st.session_state["pp_selected_pays"] == pays_code
-
-                detail_html = ""
-                if details:
-                    parts = [f"+{n} {loc}" for loc, n in details[:4]]
-                    detail_html = '<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
-
-                active_cls = "active" if is_active else ""
-                cards_html += f"""
-<div class="pp-card-btn {active_cls}" onclick="togglePays('{pays_code}')"
-     id="pp-card-{pays_code}" style="margin-bottom:.5rem;{'border-color:' + val_color + ';background:#1a2b1f;box-shadow:0 0 0 1px ' + val_color + '33;' if is_active else ''}">
-  <div class="pp-row-top">
-    <span class="pp-flag">{flag}</span>
-    <span class="pp-code">{pays_code}</span>
-    <span class="pp-num">{total}</span>
-  </div>
-  {detail_html}
-</div>"""
-
-            cards_html += f"""</div>
-<script>
-var _activePays = "{st.session_state.get('pp_selected_pays', '') or ''}";
-function togglePays(code) {{
-    // Reset toutes les cartes
-    document.querySelectorAll('.pp-card-btn').forEach(function(el) {{
-        el.style.borderColor = '';
-        el.style.background = '#141821';
-        el.style.boxShadow = '';
-    }});
-    if (_activePays === code) {{
-        _activePays = '';
-    }} else {{
-        _activePays = code;
-        var card = document.getElementById('pp-card-' + code);
-        if (card) {{
-            card.style.borderColor = '{val_color}';
-            card.style.background = '#1a2b1f';
-            card.style.boxShadow = '0 0 0 1px {val_color}33';
-        }}
-    }}
-    // Envoie le pays sélectionné à Streamlit via query param sans recharger
-    var url = new URL(window.location);
-    if (_activePays) {{
-        url.searchParams.set('pays', _activePays);
-    }} else {{
-        url.searchParams.delete('pays');
-    }}
-    window.history.pushState({{}}, '', url);
-}}
-</script>"""
-
-            st.markdown(cards_html, unsafe_allow_html=True)
-
-        with col_map:
-            _render_map = True
-
-        # ── Détail pays (sous la carte, pleine largeur) ────────────────────
-        sel_pays = st.session_state.get("pp_selected_pays")
-        if sel_pays and sel_pays in pays_rows:
-            flag_s = PAYS_FLAGS.get(sel_pays, "🏳️")
-            rows_sel = pays_rows[sel_pays]
-
-            detail_records = []
-            for row in rows_sel:
-                dos = row["dossier"]
-                lg  = legs.get(dos, {})
-                detail_records.append({
-                    "N° Dossier":  dos,
-                    "Type":        "Chargement" if row["type"] == "C" else (
-                                   "Déchargement" if row["type"] == "D" else "?"),
-                    "Date":        row["date"].strftime("%d/%m/%Y") if pd.notna(row["date"]) else "—",
-                    "Heure":       row["heure"] or "—",
-                    "Localité":    row["localite"] or "—",
-                    "Chauffeur":   row["chauffeur"] or "—",
-                    "Tracteur":    row["immat"] or "—",
-                    "Remorque":    row["remorque"] or "—",
-                    "Flotte":      "TRA" if row["is_tra"] else "CB",
-                    "Charg. →":    lg.get("c_loc", "—"),
-                    "→ Déch.":     lg.get("d_loc", "—"),
-                })
-
-            df_detail = pd.DataFrame(detail_records).sort_values(["Date", "Heure", "N° Dossier"])
-            n_dos = df_detail["N° Dossier"].nunique()
-            st.markdown(
-                f'<div class="sect">{flag_s} Détail {sel_pays} '
-                f'<span class="hint">{n_dos} dossiers · {len(df_detail)} activités</span></div>',
-                unsafe_allow_html=True)
-            st.dataframe(df_detail, hide_index=True, use_container_width=True,
-                         height=min(420, 38 + len(df_detail) * 36))
-
+        render_pays_carte(points, arcs_draw, agg, pays_total, pays_detail,
+                          pays_rows, show_mode, focus_norm, legs, dmap, MAX_GEO)
     else:
         st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
-
-    if _render_map and col_map_ref is not None and points:
-        with col_map_ref:
-            try:
-                import pydeck as pdk
-                dfp = pd.DataFrame(points)
-                layers = [
-                    pdk.Layer("ScatterplotLayer", data=dfp, id="pts",
-                              get_position="[lon, lat]", get_radius="radius",
-                              radius_min_pixels=8, radius_max_pixels=48,
-                              get_fill_color="color", get_line_color=[255,255,255,110],
-                              stroked=True, line_width_min_pixels=1, pickable=True,
-                              auto_highlight=True),
-                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
-                              get_text="label", get_size=14, get_color=[10,14,18,255],
-                              get_anchor="middle", get_alignment_baseline="'center'", font_weight=800),
-                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
-                              get_text="nom", get_size=11, get_color=[200,210,230,210],
-                              get_anchor="middle", get_alignment_baseline="'bottom'",
-                              get_pixel_offset=[0,-16]),
-                ]
-                if arcs_draw:
-                    layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs_draw),
-                        get_source_position="[sl, sla]", get_target_position="[tl, tla]",
-                        get_source_color=[74,191,106,150], get_target_color=[74,138,191,170],
-                        get_width="w", width_min_pixels=1))
-                deck = pdk.Deck(
-                    layers=layers,
-                    initial_view_state=pdk.ViewState(
-                        latitude=dfp["lat"].mean(),
-                        longitude=dfp["lon"].mean(),
-                        zoom=5, pitch=25),
-                    tooltip={"html": "<b>{nom}</b><br>{typ} · <b>{camions}</b> dossier(s)<br>"
-                                     "<span style='color:#8a93ad'>Dossiers : {dossiers}</span>",
-                             "style": {"background":"#141821","color":"#cdd4ea",
-                                       "font-family":"Barlow Condensed, sans-serif","padding":"9px"}},
-                    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-                )
-                try:
-                    st.pydeck_chart(deck, use_container_width=True, height=680,
-                                    key="planmap", selection_mode="single-object", on_select="rerun")
-                except TypeError:
-                    st.pydeck_chart(deck, use_container_width=True, height=680)
-                    st.caption("💡 Clic-pour-isoler indisponible sur cette version de Streamlit.")
-                if len(agg) >= MAX_GEO and not focus_norm:
-                    st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
-            except ImportError:
-                st.map(pd.DataFrame(points).rename(columns={"lat":"latitude","lon":"longitude"}))
 
 # ─── Regroupements géographiques ─────────────────────────────────────────────
 st.markdown('<div class="sect">📍 Regroupements géographiques <span class="hint">≥2 activités même jour · même département</span></div>',
@@ -1141,7 +947,6 @@ if clusters:
 else:
     st.caption("Aucune concentration ≥2 activités sur un même jour/département dans ce périmètre.")
 
-# ─── Helpers tags ressources ──────────────────────────────────────────────────
 def _badge(t):
     if t["is_tra"]:
         dep = (t["depart_trac"] or "").strip()
@@ -1162,11 +967,7 @@ def _ddate(t):
             (pd.isna(t["plan_date"]) or t["d_date"].date() != t["plan_date"].date()))
     return f' · {t["d_date"].strftime("%d/%m")}' if diff else ""
 
-# ════════════════════════════════════════════════════════════════════════════════
-# ─── VUE PAR JOUR (dans un expander) ─────────────────────────────────────────
-# ════════════════════════════════════════════════════════════════════════════════
 with st.expander(f"📅 Planning par jour — {vue}", expanded=False):
-
     if vue == "Par jour":
         lc1, lc2, _sp = st.columns([1.1, 1.5, 2])
         with lc1:
@@ -1175,14 +976,12 @@ with st.expander(f"📅 Planning par jour — {vue}", expanded=False):
             densite = st.select_slider("Densité", options=["Compact", "Normal", "Large"],
                                        value="Normal", key="dens_pj")
         dens_cls = {"Compact": "dens-compact", "Normal": "dens-normal", "Large": "dens-large"}[densite]
-
         df_sel = df_scope[df_scope[dim_col].isin(sel)] if sel else df_scope
         trips  = build_trips(df_sel)
         _lo2, _hi2 = _range_bounds(date_range)
         if _lo2 is not None:
             d0t, d1t = pd.Timestamp(_lo2), pd.Timestamp(_hi2)
             trips = [t for t in trips if pd.notna(t["plan_date"]) and d0t <= t["plan_date"] <= d1t]
-
         if not trips:
             st.warning("Aucun dossier sur cette période.")
         else:
@@ -1190,13 +989,11 @@ with st.expander(f"📅 Planning par jour — {vue}", expanded=False):
             by_day = defaultdict(list)
             for t in trips:
                 by_day[t["plan_date"].date()].append(t)
-
             for day in sorted(by_day.keys()):
                 day_trips = sorted(by_day[day], key=lambda t: t["plan_hval"])
                 n_full = sum(1 for t in day_trips if t["has_c"] and t["has_d"])
                 html(f'<div class="dayhead">{pd.Timestamp(day).strftime("%A %d %B %Y").capitalize()}'
                      f'<span class="cnt">{len(day_trips)} dossiers · {n_full} avec charg.+déch.</span></div>')
-
                 if layout == "Cartes":
                     parts = ['<div class="trips">']
                     for t in day_trips:
@@ -1218,8 +1015,7 @@ with st.expander(f"📅 Planning par jour — {vue}", expanded=False):
                             f'{leg_c}<div class="arrow">↓</div>{leg_d}</div>')
                     parts.append('</div>')
                     html("".join(parts))
-
-                else:  # Lignes
+                else:
                     parts = [f'<div class="rows {dens_cls}">']
                     for t in day_trips:
                         cflag, dflag = PAYS_FLAGS.get(t["c_pays"], ""), PAYS_FLAGS.get(t["d_pays"], "")
@@ -1240,13 +1036,10 @@ with st.expander(f"📅 Planning par jour — {vue}", expanded=False):
                             f'<div class="res">{_tags(t, with_badge=False)}</div></div>')
                     parts.append('</div>')
                     html("".join(parts))
-
-    # ── Vue PAR RESSOURCE (swimlane) ──────────────────────────────────────────
     else:
         st.markdown(f'<div class="sect">🚚 Planning par {dimension.lower()} '
                     f'<span class="hint">enchaînement chronologique des activités</span></div>',
                     unsafe_allow_html=True)
-
         resources = [r for r in dfx[dim_col].dropna().unique() if str(r).strip()]
         resources = sorted(resources, key=lambda r: -len(dfx[dfx[dim_col] == r]))
         MAX_LANES = 40
@@ -1277,10 +1070,8 @@ with st.expander(f"📅 Planning par jour — {vue}", expanded=False):
               <div class="flow">{stops}</div>
             </div>""")
         if len(resources) > MAX_LANES:
-            st.caption(f"Affichage des {MAX_LANES} ressources les plus actives. "
-                       "Affine via le multiselect pour le reste.")
+            st.caption(f"Affichage des {MAX_LANES} ressources les plus actives.")
 
-# ─── Tableau & export ────────────────────────────────────────────────────────
 with st.expander("📋 Tableau détaillé + export"):
     show = dfx.copy()
     show["Type"]   = show["type"].map({"C":"Chargement","D":"Déchargement","?":"?"})
@@ -1292,7 +1083,6 @@ with st.expander("📋 Tableau détaillé + export"):
         "pays":"Pays","site":"Site","produit":"Produit","chauffeur":"Chauffeur",
         "immat":"Immat. tracteur","remorque":"Remorque","depart_trac":"Départ. tracteur"})
     st.dataframe(table, hide_index=True, use_container_width=True)
-
     buf = io.BytesIO()
     table.to_excel(buf, index=False, engine="openpyxl")
     st.download_button("📥 Exporter Excel", data=buf.getvalue(),
