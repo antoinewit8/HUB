@@ -953,12 +953,14 @@ else:
                 unsafe_allow_html=True)
 
             pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
-            
-            # Lire le pays actif depuis query params (plus fiable que bouton invisible)
+
+            # Lire le pays actif depuis query params
             _qp = st.query_params.get("pays", None)
             if _qp and st.session_state.get("pp_selected_pays") != _qp:
                 st.session_state["pp_selected_pays"] = _qp
 
+            # ── Toutes les cartes en un seul st.markdown ──────────────────
+            cards_html = '<div style="display:flex;flex-direction:column;gap:.5rem;">'
             for pays_code in pays_order:
                 total     = pays_total[pays_code]
                 flag      = PAYS_FLAGS.get(pays_code, "🏳️")
@@ -970,13 +972,15 @@ else:
                     parts = [f"+{n} {loc}" for loc, n in details[:4]]
                     detail_html = '<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
 
-                active_cls = "active" if is_active else ""
-                
-                # Lien cliquable pur HTML — pas de bouton Streamlit
+                active_style = (
+                    f"border-color:{val_color};background:#1a2b1f;"
+                    f"box-shadow:0 0 0 1px {val_color}33;"
+                ) if is_active else ""
+
                 toggle_pays = "" if is_active else pays_code
-                st.markdown(f"""
-<a href="?pays={toggle_pays}" target="_self" style="text-decoration:none;display:block;margin-bottom:.5rem;">
-  <div class="pp-card-btn {active_cls}" style="{'border-color:' + val_color + ';background:#1a2b1f;box-shadow:0 0 0 1px ' + val_color + '33;' if is_active else ''}">
+                cards_html += f"""
+<a href="?pays={toggle_pays}" target="_self" style="text-decoration:none;display:block;">
+  <div class="pp-card-btn" style="{active_style}">
     <div class="pp-row-top">
       <span class="pp-flag">{flag}</span>
       <span class="pp-code">{pays_code}</span>
@@ -984,7 +988,10 @@ else:
     </div>
     {detail_html}
   </div>
-</a>""", unsafe_allow_html=True)
+</a>"""
+
+            cards_html += '</div>'
+            st.markdown(cards_html, unsafe_allow_html=True)
 
                 if st.button("\u200b", key=f"pp_btn_{pays_code}", use_container_width=True):
                     st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
