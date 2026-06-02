@@ -866,38 +866,36 @@ else:
         
         return pays_total, pays_detail
 
+    # ── Initialisation avant le bloc conditionnel ──────────────────────────
+    _render_map = False
+    col_map_ref = None
+
     if points:
         pays_total, pays_detail = build_pays_panel(points, show_mode)
 
         title_mode = {"Les deux": "Tous", "Chargements": "Charg.", "Déchargements": "Déch."}[show_mode]
 
-        # ── Données par pays pour le détail dossiers ─────────────────────────
-        # pays_logi → {dossiers: set, camions: [(localite, date, heure, chauffeur, immat, dos, type)]}
         from collections import defaultdict
-        pays_rows = defaultdict(list)  # pays_logi → liste de lignes dfx
+        pays_rows = defaultdict(list)
         for _, row in dmap.iterrows():
             pl = row.get("pays_logi", row.get("pays", "??"))
             pays_rows[pl].append(row)
 
-        # ── Initialise session_state pour le pays sélectionné ─────────────
         if "pp_selected_pays" not in st.session_state:
             st.session_state["pp_selected_pays"] = None
 
-        # ── Panneau gauche + carte ─────────────────────────────────────────
         col_panel, col_map = st.columns([1, 5])
+        col_map_ref = col_map  # ← référence gardée hors du with
 
         with col_panel:
             val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
 
             st.markdown(f"""
 <style>
-/* ── Wrapper bouton-pays ───────────────────────────────────────── */
 .pp-btn-wrap {{
     margin-bottom: .5rem;
     position: relative;
 }}
-
-/* ── Bouton Streamlit : on le rend invisible mais cliquable ─────── */
 .pp-btn-wrap [data-testid="stBaseButton-secondary"] {{
     position: absolute !important;
     inset: 0 !important;
@@ -911,8 +909,6 @@ else:
     border: none !important;
     background: transparent !important;
 }}
-
-/* ── Carte visuelle cliquable en dessous ─────────────────────────── */
 .pp-card-btn {{
     background: #141821;
     border: 1.5px solid #222838;
@@ -937,8 +933,6 @@ else:
     background: #1a2b1f;
     box-shadow: 0 0 0 1px {val_color}33;
 }}
-
-/* ── Ligne du haut : flag + code + chiffre ───────────────────────── */
 .pp-row-top {{
     display: flex;
     align-items: baseline;
@@ -961,7 +955,6 @@ else:
     line-height: 1;
     margin-left: auto;
 }}
-/* ── Ligne du bas : détail communes frontalières ──────────────────── */
 .pp-detail-line {{
     font-family: 'Barlow Condensed', sans-serif;
     font-size: .75rem;
@@ -983,21 +976,17 @@ else:
 
             pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
             for pays_code in pays_order:
-                total    = pays_total[pays_code]
-                flag     = PAYS_FLAGS.get(pays_code, "🏳️")
-                details  = pays_detail.get(pays_code, [])
+                total     = pays_total[pays_code]
+                flag      = PAYS_FLAGS.get(pays_code, "🏳️")
+                details   = pays_detail.get(pays_code, [])
                 is_active = st.session_state["pp_selected_pays"] == pays_code
 
-                # Ligne de détail communes frontalières
                 detail_html = ""
                 if details:
                     parts = [f"+{n} {loc}" for loc, n in details[:4]]
-                    detail_html = (
-                        f'<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
-                    )
+                    detail_html = '<div class="pp-detail-line">⤷ ' + "  ·  ".join(parts) + '</div>'
 
                 active_cls = "active" if is_active else ""
-                # Carte visuelle HTML
                 st.markdown(f"""
 <div class="pp-btn-wrap {active_cls}">
   <div class="pp-card-btn">
@@ -1009,12 +998,14 @@ else:
     {detail_html}
   </div>""", unsafe_allow_html=True)
 
-                # Bouton Streamlit invisible par-dessus (garde toute la logique click)
-                if st.button("​", key=f"pp_btn_{pays_code}", use_container_width=True):  # espace zéro-largeur
+                if st.button("\u200b", key=f"pp_btn_{pays_code}", use_container_width=True):
                     st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
                     st.rerun()
 
                 st.markdown('</div>', unsafe_allow_html=True)
+
+        with col_map:
+            _render_map = True  # ← assigné ici, dans le bon contexte
 
         # ── Détail pays (sous la carte, pleine largeur) ────────────────────
         sel_pays = st.session_state.get("pp_selected_pays")
@@ -1022,7 +1013,6 @@ else:
             flag_s = PAYS_FLAGS.get(sel_pays, "🏳️")
             rows_sel = pays_rows[sel_pays]
 
-            # Construit un DataFrame lisible
             detail_records = []
             for row in rows_sel:
                 dos = row["dossier"]
@@ -1042,9 +1032,7 @@ else:
                     "→ Déch.":     lg.get("d_loc", "—"),
                 })
 
-            df_detail = pd.DataFrame(detail_records).sort_values(
-                ["Date", "Heure", "N° Dossier"])
-
+            df_detail = pd.DataFrame(detail_records).sort_values(["Date", "Heure", "N° Dossier"])
             n_dos = df_detail["N° Dossier"].nunique()
             st.markdown(
                 f'<div class="sect">{flag_s} Détail {sel_pays} '
@@ -1054,12 +1042,10 @@ else:
                          height=min(420, 38 + len(df_detail) * 36))
 
     else:
-        _render_map = False
-        col_map = None
         st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
 
-    if _render_map and col_map is not None and points:
-        with col_map:
+    if _render_map and col_map_ref is not None and points:
+        with col_map_ref:
             try:
                 import pydeck as pdk
                 dfp = pd.DataFrame(points)
