@@ -99,5 +99,16 @@
     "source": "carte_manuelle",
     "date": "2026-06-02",
     "confiance": 1
+  },
+  {
+    "origine": "Puerto De Sagunto, 46520, Spain",
+    "destination": "Hermes, 60370, France",
+    "waypoints": [
+      "44.913455, 3.223397"
+    ],
+    "km_reference": 1441.3,
+    "source": "carte_manuelle",
+    "date": "2026-06-02",
+    "confiance": 1
   }
 ]
