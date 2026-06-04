@@ -734,17 +734,21 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
                 _pts      = _objs.get("pts") if isinstance(_objs, dict) else None
                 new_click = _pts[0].get("loc_norm") if _pts else None
                 current   = st.session_state.get("_planmap_clicked")
-                # Ne rerun que si un vrai point est cliqué ET que la valeur change
-                if new_click is not None:
+                last_seen = st.session_state.get("_planmap_last_seen")
+                # Traiter seulement si c'est un vrai clic sur un point
+                # ET que ce n'est pas le même event qu'on vient déjà de traiter
+                if new_click is not None and new_click != last_seen:
+                    st.session_state["_planmap_last_seen"] = new_click
                     if new_click == current:
-                        # reclique même point → reset
+                        # reclique même point → reset vue d'ensemble
                         st.session_state.pop("_planmap_clicked", None)
-                        st.rerun(scope="fragment")
                     else:
-                        # nouveau point
+                        # nouveau point → isoler
                         st.session_state["_planmap_clicked"] = new_click
-                        st.rerun(scope="fragment")
-                # new_click is None → clic dans le vide, on ignore totalement
+                    st.rerun(scope="fragment")
+                elif new_click is None and last_seen is not None:
+                    # clic dans le vide → reset last_seen pour autoriser re-clic
+                    st.session_state.pop("_planmap_last_seen", None)
             if len(agg) >= MAX_GEO and not focus_norm:
                 st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
         except ImportError:
