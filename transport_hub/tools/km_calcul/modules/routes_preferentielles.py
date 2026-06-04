@@ -9,10 +9,21 @@ from modules.villes_jalons import detecter_villes_jalons
 # ==========================================
 # CONFIG
 # ==========================================
-BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
-JSON_PATH     = os.path.join(BASE_DIR, "..", "routes_preferentielles.json")
-JSON_APPRISES = os.path.join(BASE_DIR, "..", "routes_apprises.json")
-CACHE_PATH    = os.path.join(BASE_DIR, "..", "cache_geocodage.json")
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
+JSON_PATH  = os.path.join(BASE_DIR, "..", "routes_preferentielles.json")
+CACHE_PATH = os.path.join(BASE_DIR, "..", "cache_geocodage.json")
+
+# routes_apprises.json peut se trouver à différents niveaux selon le déploiement
+# (Streamlit Cloud, repo, local) → on teste plusieurs emplacements.
+ROUTES_APPRISES_NAME = "routes_apprises.json"
+def _candidate_apprises_paths() -> list:
+    return [
+        os.path.join(BASE_DIR, "..", ROUTES_APPRISES_NAME),                  # km_calcul/
+        os.path.join(BASE_DIR, "..", "..", ROUTES_APPRISES_NAME),            # tools/
+        os.path.join(BASE_DIR, "..", "..", "..", ROUTES_APPRISES_NAME),      # transport_hub/
+        os.path.join(BASE_DIR, "..", "..", "..", "..", ROUTES_APPRISES_NAME),# racine repo
+        os.path.join(os.getcwd(), ROUTES_APPRISES_NAME),
+    ]
 
 PTV_API_KEY = os.environ.get("PTV_API_KEY", "")
 PTV_GEO_URL = "https://api.myptv.com/geocoding/v1/locations/by-text"
@@ -44,38 +55,71 @@ _geocache: dict = charger_cache()
 # ==========================================
 _routes_cache: list | None = None
 
-def _lire_json(path: str) -> list:
-    """Lit un fichier JSON de routes, retourne [] si absent ou corrompu."""
-    path = os.path.abspath(path)
+def _load_json_list(path: str):
+    """Charge un fichier JSON attendu comme liste. None si absent, [] si illisible."""
     if not os.path.exists(path):
-        return []
+        return None
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        print(f"⚠️ Erreur lecture {os.path.basename(path)} : {e}")
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"⚠️ Erreur lecture {path} : {e}")
         return []
 
+def _normalize_route_entry(r: dict):
+    """Tolère quelques variantes de clés (origine/origin, destination/dest, waypoints/wps)."""
+    if not isinstance(r, dict):
+        return None
+    origine = r.get("origine") or r.get("origin")      or r.get("depart")  or ""
+    dest    = r.get("destination") or r.get("dest")    or r.get("arrivee") or ""
+    wps     = r.get("waypoints") or r.get("wps")       or []
+    if not origine or not dest:
+        return None
+    return {"origine": origine, "destination": dest, "waypoints": wps}
+
 def charger_routes() -> list:
-    """
-    Fusionne routes_preferentielles.json + routes_apprises.json.
-    Les routes apprises sont placées en tête (priorité sur les manuelles).
-    """
     global _routes_cache
     if _routes_cache is not None:
         return _routes_cache
 
-    manuelles = _lire_json(JSON_PATH)
-    apprises  = _lire_json(JSON_APPRISES)
+    routes: list = []
 
-    if apprises:
-        print(f"   📚 {len(apprises)} routes apprises chargées (+ {len(manuelles)} manuelles)")
+    # ── 1. routes_apprises.json (PRIORITÉ : corrections explicites de l'utilisateur) ──
+    apprises_raw, apprises_path = None, None
+    for p in _candidate_apprises_paths():
+        abs_p = os.path.abspath(p)
+        data = _load_json_list(abs_p)
+        if data is not None:
+            apprises_raw, apprises_path = data, abs_p
+            break
+    if apprises_raw is not None:
+        n = 0
+        for r in apprises_raw:
+            norm = _normalize_route_entry(r)
+            if norm:
+                routes.append(norm)
+                n += 1
+        print(f"   📚 routes_apprises.json : {n} routes chargées ({apprises_path})")
     else:
-        print(f"   📋 {len(manuelles)} routes manuelles chargées (pas encore de routes apprises)")
+        print(f"   ⚠️ routes_apprises.json introuvable. Cherché : "
+              f"{[os.path.abspath(p) for p in _candidate_apprises_paths()]}")
 
-    # Routes apprises en tête → matchées en priorité
-    _routes_cache = apprises + manuelles
-    return _routes_cache
+    # ── 2. routes_preferentielles.json (fallback) ──
+    pref_raw = _load_json_list(os.path.abspath(JSON_PATH))
+    if pref_raw is None:
+        print(f"⚠️ routes_preferentielles.json introuvable : {os.path.abspath(JSON_PATH)}")
+    else:
+        n = 0
+        for r in pref_raw:
+            norm = _normalize_route_entry(r)
+            if norm:
+                routes.append(norm)
+                n += 1
+        print(f"   📋 routes_preferentielles.json : {n} routes chargées")
+
+    _routes_cache = routes
+    return routes
 
 # ==========================================
 # NORMALISATION
@@ -262,34 +306,33 @@ def haversine(lat1, lon1, lat2, lon2) -> float:
 # ==========================================
 # FONCTION PRINCIPALE (remplace l'ancienne)
 # ==========================================
-def get_waypoints(origin: str, dest: str) -> list:
+def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> list:
+    """Retourne les waypoints d'une route apprise/préférentielle.
+
+    - Match exact (texte) et match par proximité GPS : TOUJOURS appliqués.
+    - Détection automatique de villes-jalons : UNIQUEMENT si auto_jalons=True
+      (mode SUPER), car elle peut introduire des détours.
+    """
     routes = charger_routes()
-    print(f"   🔍 Recherche route préférentielle : '{origin}' → '{dest}'")
+    norm_origin = normalize(origin)
+    norm_dest   = normalize(dest)
+    print(f"   🔍 Recherche route apprise : '{origin}' → '{dest}'")
 
-    coords_origin = geocoder_ville(origin)
-    coords_dest   = geocoder_ville(dest)
-    norm_origin   = normalize(origin)
-    norm_dest     = normalize(dest)
-
-        # ── 1. Chercher route manuelle (texte exact) ──
+    # ── 1. Match texte exact (routes apprises + préférentielles) — sans géocodage ──
     for route in routes:
         origine_ref = route.get("origine", "")
         dest_ref    = route.get("destination", "")
-        norm_orig_ref = normalize(origine_ref)
-        norm_dest_ref = normalize(dest_ref)
-
-        match_dep = (norm_orig_ref == norm_origin)
-        match_arr = (norm_dest_ref == norm_dest)
-
-        if match_dep and match_arr:
+        if normalize(origine_ref) == norm_origin and normalize(dest_ref) == norm_dest:
             waypoints = route.get("waypoints", [])
-            print(f"   ✅ Route manuelle trouvée : {origine_ref} → {dest_ref} "
+            print(f"   ✅ Route apprise (match exact) : {origine_ref} → {dest_ref} "
                   f"({len(waypoints)} waypoints)")
             return waypoints
 
-    # ── 2. Chercher route par proximité GPS (pré-filtre par mots communs) ──
-    mots_origin = set(norm_origin.split())
-    mots_dest   = set(norm_dest.split())
+    # ── 2. Match par proximité GPS (50 km) — géocodage seulement maintenant ──
+    coords_origin = geocoder_ville(origin)
+    coords_dest   = geocoder_ville(dest)
+    mots_origin   = set(norm_origin.split())
+    mots_dest     = set(norm_dest.split())
 
     for route in routes:
         origine_ref = route.get("origine", "")
@@ -297,11 +340,9 @@ def get_waypoints(origin: str, dest: str) -> list:
         norm_orig_ref = normalize(origine_ref)
         norm_dest_ref = normalize(dest_ref)
 
-        mots_ref_o = set(norm_orig_ref.split())
-        mots_ref_d = set(norm_dest_ref.split())
-
-        # Skip si aucun mot commun ni côté départ ni côté arrivée
-        if not (mots_origin & mots_ref_o) and not (mots_dest & mots_ref_d):
+        # Pré-filtre : au moins un mot commun d'un côté
+        if not (mots_origin & set(norm_orig_ref.split())) \
+           and not (mots_dest & set(norm_dest_ref.split())):
             continue
 
         match_dep = (norm_orig_ref == norm_origin)
@@ -317,7 +358,7 @@ def get_waypoints(origin: str, dest: str) -> list:
             if not coords_ref_dep:
                 continue
             if haversine(coords_origin[0], coords_origin[1],
-                        coords_ref_dep[0], coords_ref_dep[1]) > RAYON_KM:
+                         coords_ref_dep[0], coords_ref_dep[1]) > RAYON_KM:
                 continue
             match_dep = True
 
@@ -326,21 +367,19 @@ def get_waypoints(origin: str, dest: str) -> list:
             if not coords_ref_arr:
                 continue
             if haversine(coords_dest[0], coords_dest[1],
-                        coords_ref_arr[0], coords_ref_arr[1]) > RAYON_KM:
+                         coords_ref_arr[0], coords_ref_arr[1]) > RAYON_KM:
                 continue
             match_arr = True
 
         if match_dep and match_arr:
             waypoints = route.get("waypoints", [])
-            print(f"   ✅ Route manuelle trouvée : {origine_ref} → {dest_ref} "
+            print(f"   ✅ Route apprise (proximité <{RAYON_KM}km) : {origine_ref} → {dest_ref} "
                   f"({len(waypoints)} waypoints)")
             return waypoints
 
-
-
-    # ── 2. Sinon : détection automatique villes-jalons ──
-    if coords_origin and coords_dest:
-        print(f"   🔄 Pas de route manuelle → détection villes-jalons...")
+    # ── 3. Détection automatique villes-jalons — UNIQUEMENT en mode SUPER ──
+    if auto_jalons and coords_origin and coords_dest:
+        print(f"   🔄 Mode SUPER : détection villes-jalons...")
         jalons = detecter_villes_jalons(
             coords_origin[0], coords_origin[1],
             coords_dest[0], coords_dest[1]
@@ -349,5 +388,5 @@ def get_waypoints(origin: str, dest: str) -> list:
             print(f"   ✅ {len(jalons)} villes-jalons détectées automatiquement")
             return jalons
 
-    print(f"   📍 Aucune route préférentielle → PTV choisit le trajet")
+    print(f"   📍 Aucune route apprise → PTV choisit le trajet")
     return []
