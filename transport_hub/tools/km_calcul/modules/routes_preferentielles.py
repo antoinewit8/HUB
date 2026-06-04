@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import html
 import unicodedata
 import re
 import requests
@@ -125,6 +126,7 @@ def charger_routes() -> list:
 # NORMALISATION
 # ==========================================
 def normalize(text: str) -> str:
+    text = html.unescape(text)          # &#39; → ' , &amp; → & , etc.
     text = text.lower().strip()
     text = unicodedata.normalize("NFD", text)
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
