@@ -76,7 +76,9 @@ def traiter_trajet(index, total, route, cache, calculer_peage, super_pref=False)
         flush(log)
         return {"row": route["row"], "data": None}
 
-    waypoints = get_waypoints(route["origin"], route["dest"])
+    wp_result = get_waypoints(route["origin"], route["dest"], auto_jalons=super_pref)
+    waypoints = wp_result.get("waypoints", [])
+    prohibited_countries = wp_result.get("prohibited_countries", [])
 
     # ── Calcul itinéraire ─────────────────────────────────────────────────
     data = calculate_km_route(
@@ -84,7 +86,8 @@ def traiter_trajet(index, total, route, cache, calculer_peage, super_pref=False)
         dest_coords[0],   dest_coords[1],
         waypoints      = waypoints,
         calculer_peage = calculer_peage,
-        super_pref     = super_pref
+        super_pref     = super_pref,
+        prohibited_countries = prohibited_countries
     )
 
     if not data:
