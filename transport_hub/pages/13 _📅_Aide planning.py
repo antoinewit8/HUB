@@ -649,9 +649,18 @@ def render_pays_carte(points, arcs_draw, agg, pays_total, pays_detail,
                 map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
             )
             map_key = f"planmap_{sel_pays or 'all'}"
+            # APRÈS
             try:
-                st.pydeck_chart(deck, use_container_width=True, height=680,
-                                key=map_key, selection_mode="single-object", on_select="rerun")
+                event = st.pydeck_chart(deck, use_container_width=True, height=680,
+                                         key=map_key, selection_mode="single-object", on_select="rerun")
+                # Stocker la sélection en session_state pour lecture par le parent
+                if event and hasattr(event, "selection"):
+                    objs = event.selection.get("objects", {}) if isinstance(event.selection, dict) else {}
+                    pts = objs.get("pts") if isinstance(objs, dict) else None
+                    if pts:
+                        st.session_state["_planmap_clicked"] = pts[0].get("loc_norm")
+                    else:
+                        st.session_state.pop("_planmap_clicked", None)
             except TypeError:
                 st.pydeck_chart(deck, use_container_width=True, height=680)
             if len(agg) >= MAX_GEO and not focus_norm:
@@ -821,17 +830,7 @@ if msel_date != "Toutes les dates":
 if dmap.empty:
     st.info("Aucune activité pour ces filtres carte.")
 else:
-    clicked_norm = None
-    try:
-        _state = st.session_state.get("planmap")
-        if _state and "selection" in _state:
-            _objs = _state["selection"]["objects"]
-            _pts  = _objs.get("pts") if isinstance(_objs, dict) else None
-            if _pts:
-                clicked_norm = _pts[0].get("loc_norm")
-    except Exception:
-        clicked_norm = None
-
+    clicked_norm = st.session_state.get("_planmap_clicked")
     focus_norm = clicked_norm or (normalize(focus_choice) if focus_choice != "— tout afficher" else None)
 
     agg = (dmap.assign(loc_norm=dmap["localite"].apply(normalize))
