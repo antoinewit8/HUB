@@ -203,37 +203,6 @@ st.markdown("""
     letter-spacing: .2px; line-height: 1.4;
     margin-top: .3rem; border-top: 1px solid #1a2030; padding-top: .3rem;
 }
-/* Colle le bouton Streamlit invisible sur la carte HTML */
-.pp-wrap {
-    position: relative;
-    margin-bottom: .5rem;
-}
-.pp-wrap > div[data-testid="element-container"] {
-    position: absolute !important;
-    inset: 0 !important;
-    z-index: 2 !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    height: 100% !important;
-}
-.pp-wrap > div[data-testid="element-container"] > div,
-.pp-wrap > div[data-testid="element-container"] > div > div {
-    height: 100% !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
-.pp-wrap [data-testid="stBaseButton-secondary"] {
-    position: absolute !important;
-    inset: 0 !important;
-    width: 100% !important;
-    height: 100% !important;
-    opacity: 0 !important;
-    cursor: pointer !important;
-    border: none !important;
-    background: transparent !important;
-    margin: 0 !important;
-    padding: 0 !important;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -545,16 +514,106 @@ def build_pays_panel(points_list, show_mode_param):
             pays_detail[pl].append((p["nom"], n))
     return pays_total, pays_detail
 
+# ─── Géocodage mis en cache ──────────────────────────────────────────────────
+# Construit points_all (tous les lieux, charg + déch) et arcs_all (toutes les
+# liaisons charg→déch). Mis en cache : ne se relance QUE si dmap change vraiment.
+# Le clic carte / bouton pays / filtre show_mode ne re-géocodent plus rien.
+@st.cache_data(show_spinner="📡 Géocodage des lieux…")
+def build_geo_data(agg_json, arc_legs_json):
+    agg_records = json.loads(agg_json)
+    arc_legs    = json.loads(arc_legs_json)
+
+    _local = {}
+    def geo(loc, cp, pays):
+        k = (normalize(loc), str(cp or ""), str(pays or ""))
+        if k not in _local:
+            _local[k] = geocode_cached(loc, cp, pays)
+        return _local[k]
+
+    points_all = []
+    for row in agg_records:
+        c = geo(row["localite"], row.get("cp", ""), row.get("pays", ""))
+        if c:
+            n = int(row["camions"])
+            points_all.append({
+                "nom": row["localite"], "loc_norm": row["loc_norm"], "label": str(n),
+                "camions": n,
+                "typ": "Chargement" if row["type"] == "C" else "Déchargement",
+                "pays": row.get("pays", ""),
+                "pays_logi": row.get("pays_logi", row.get("pays", "")),
+                "dossiers": row.get("dossiers", ""),
+                "lat": c[0], "lon": c[1],
+                "radius": 900 + (n ** 0.5) * 1150,
+                "color": [74, 191, 106, 215] if row["type"] == "C" else [74, 138, 191, 215],
+                "type_code": row["type"],
+            })
+
+    arcs_all = []
+    for lg in arc_legs:
+        cc = geo(lg["c_loc"], lg.get("c_cp", ""), lg.get("c_pays", "")) if lg.get("c_loc") else None
+        dc = geo(lg["d_loc"], lg.get("d_cp", ""), lg.get("d_pays", "")) if lg.get("d_loc") else None
+        if cc and dc:
+            arcs_all.append({
+                "sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0],
+                "dos": lg["dos"],
+                "cn": normalize(lg["c_loc"]), "dn": normalize(lg["d_loc"]),
+                "c_nom": lg["c_loc"], "d_nom": lg["d_loc"],
+                "w": 1.6,
+            })
+    return points_all, arcs_all
+
+def _read_pydeck_sel(event, key):
+    """Lit le loc_norm du point sélectionné dans pydeck, sinon None."""
+    def _from_sel(s):
+        if s is None:
+            return None
+        objs = s.get("objects") if isinstance(s, dict) else getattr(s, "objects", None)
+        if isinstance(objs, dict):
+            pts = objs.get("pts")
+            if pts:
+                return pts[0].get("loc_norm")
+        return None
+    try:
+        s = getattr(event, "selection", None)
+        if s is None and isinstance(event, dict):
+            s = event.get("selection")
+        r = _from_sel(s)
+        if r is not None:
+            return r
+    except Exception:
+        pass
+    try:
+        stt = st.session_state.get(key)
+        if isinstance(stt, dict):
+            return _from_sel(stt.get("selection"))
+    except Exception:
+        pass
+    return None
+
 # ─── Fragment : panneau pays + carte (rerun partiel) ─────────────────────────
 @st.fragment
-def render_pays_carte(points, arcs_draw, agg, pays_total, pays_detail,
-                      pays_rows, show_mode, focus_norm, legs, dmap, MAX_GEO):
+def render_pays_carte(points_all, arcs_all, n_agg, pays_rows,
+                      show_mode, show_arcs, focus_norm_ext, legs, MAX_GEO):
+    from collections import defaultdict
 
     val_color = "#4a8abf" if show_mode == "Déchargements" else "#cdd4ea" if show_mode == "Les deux" else "#4abf6a"
     title_mode = {"Les deux": "Tous", "Chargements": "Charg.", "Déchargements": "Déch."}[show_mode]
 
     if "pp_selected_pays" not in st.session_state:
         st.session_state["pp_selected_pays"] = None
+
+    # Focus = clic carte (écrit en fin de fragment) sinon selectbox
+    clicked_norm = st.session_state.get("pp_focus_raw")
+    focus_norm   = clicked_norm or focus_norm_ext
+
+    # Panneau pays : compteurs selon le mode d'affichage
+    if show_mode == "Chargements":
+        panel_points = [p for p in points_all if p["type_code"] == "C"]
+    elif show_mode == "Déchargements":
+        panel_points = [p for p in points_all if p["type_code"] == "D"]
+    else:
+        panel_points = points_all
+    pays_total, pays_detail = build_pays_panel(panel_points, show_mode)
 
     col_panel, col_map = st.columns([1, 5])
 
@@ -566,7 +625,6 @@ def render_pays_carte(points, arcs_draw, agg, pays_total, pays_detail,
             unsafe_allow_html=True)
 
         pays_order = sorted(pays_total.keys(), key=lambda k: -pays_total[k])
-
         for pays_code in pays_order:
             total     = pays_total[pays_code]
             flag      = PAYS_FLAGS.get(pays_code, "🏳️")
@@ -595,78 +653,141 @@ def render_pays_carte(points, arcs_draw, agg, pays_total, pays_detail,
 
             btn_label = "✕ Fermer" if is_active else "📋 Détails"
             btn_type  = "primary" if is_active else "secondary"
-
             if st.button(btn_label, key=f"pp_btn_{pays_code}",
                          use_container_width=True, type=btn_type):
                 st.session_state["pp_selected_pays"] = (None if is_active else pays_code)
+                st.session_state["pp_focus_raw"] = None
                 st.rerun(scope="fragment")
 
-    # ── Filtre carte selon pays sélectionné ───────────────────────────────
-    sel_pays = st.session_state.get("pp_selected_pays")
-    if sel_pays:
-        points_map = [p for p in points if p.get("pays_logi", p.get("pays")) == sel_pays]
-        locs_sel   = {p["loc_norm"] for p in points_map}
-        arcs_map   = [a for a in arcs_draw if a["cn"] in locs_sel or a["dn"] in locs_sel]
-    else:
-        points_map = points
-        arcs_map   = arcs_draw
+        if focus_norm:
+            if st.button("↩ Vue d'ensemble", key="pp_reset_focus",
+                         use_container_width=True, type="primary"):
+                st.session_state["pp_focus_raw"] = None
+                st.rerun(scope="fragment")
 
+    sel_pays = st.session_state.get("pp_selected_pays")
+
+    # ── Jeu de points / arcs à afficher ────────────────────────────────────
+    if focus_norm:
+        # Point isolé : on cherche les liaisons dans TOUTE la liste d'arcs,
+        # et les points liés dans TOUS les points (autre pays / autre type OK).
+        # Si un point lié manque (non géocodé en propre), on le reconstruit
+        # depuis les coordonnées portées par l'arc.
+        arcs_map = [dict(a) for a in arcs_all if a["cn"] == focus_norm or a["dn"] == focus_norm]
+        pmap     = {p["loc_norm"]: p for p in points_all}
+        related  = {focus_norm}
+        for a in arcs_map:
+            related.add(a["cn"]); related.add(a["dn"])
+
+        points_map = []
+        for nrm in related:
+            if nrm in pmap:
+                points_map.append(dict(pmap[nrm]))
+            else:
+                syn = None
+                for a in arcs_map:
+                    if a["cn"] == nrm:
+                        syn = {"nom": a["c_nom"], "loc_norm": nrm, "label": "",
+                               "camions": 0, "typ": "Chargement", "pays": "",
+                               "pays_logi": "", "dossiers": "",
+                               "lat": a["sla"], "lon": a["sl"], "radius": 1100,
+                               "color": [74, 191, 106, 215], "type_code": "C"}
+                        break
+                    if a["dn"] == nrm:
+                        syn = {"nom": a["d_nom"], "loc_norm": nrm, "label": "",
+                               "camions": 0, "typ": "Déchargement", "pays": "",
+                               "pays_logi": "", "dossiers": "",
+                               "lat": a["tla"], "lon": a["tl"], "radius": 1100,
+                               "color": [74, 138, 191, 215], "type_code": "D"}
+                        break
+                if syn:
+                    points_map.append(syn)
+
+        for a in arcs_map:
+            a["w"] = 3.0
+        for p in points_map:
+            if p["loc_norm"] == focus_norm:
+                p["radius"] = p["radius"] * 1.5
+                p["color"]  = p["color"][:3] + [255]
+        foc_name = next((p["nom"] for p in points_map if p["loc_norm"] == focus_norm), focus_norm)
+        st.info(f"🔎 **{foc_name}** isolé — {len(arcs_map)} liaison(s). "
+                f"Recliquez le point (ou le fond de carte / « ↩ Vue d'ensemble ») pour revenir.")
+    else:
+        pts = list(points_all)
+        if sel_pays:
+            pts = [p for p in pts if p.get("pays_logi", p.get("pays")) == sel_pays]
+        if show_mode == "Chargements":
+            pts = [p for p in pts if p["type_code"] == "C"]
+        elif show_mode == "Déchargements":
+            pts = [p for p in pts if p["type_code"] == "D"]
+        points_map = [dict(p) for p in pts]
+        if show_arcs and points_map:
+            locs = {p["loc_norm"] for p in points_map}
+            if sel_pays:
+                arcs_map = [a for a in arcs_all if a["cn"] in locs or a["dn"] in locs]
+            else:
+                arcs_map = list(arcs_all)
+        else:
+            arcs_map = []
+
+    # ── Carte ──────────────────────────────────────────────────────────────
     with col_map:
-        try:
-            import pydeck as pdk
-            dfp = pd.DataFrame(points_map)
-            layers = [
-                pdk.Layer("ScatterplotLayer", data=dfp, id="pts",
-                          get_position="[lon, lat]", get_radius="radius",
-                          radius_min_pixels=8, radius_max_pixels=48,
-                          get_fill_color="color", get_line_color=[255,255,255,110],
-                          stroked=True, line_width_min_pixels=1, pickable=True,
-                          auto_highlight=True),
-                pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
-                          get_text="label", get_size=14, get_color=[10,14,18,255],
-                          get_anchor="middle", get_alignment_baseline="'center'", font_weight=800),
-                pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
-                          get_text="nom", get_size=11, get_color=[200,210,230,210],
-                          get_anchor="middle", get_alignment_baseline="'bottom'",
-                          get_pixel_offset=[0,-16]),
-            ]
-            if arcs_map:
-                layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs_map),
-                    get_source_position="[sl, sla]", get_target_position="[tl, tla]",
-                    get_source_color=[74,191,106,150], get_target_color=[74,138,191,170],
-                    get_width="w", width_min_pixels=1))
-            zoom_level = 6 if sel_pays else 5
-            deck = pdk.Deck(
-                layers=layers,
-                initial_view_state=pdk.ViewState(
-                    latitude=dfp["lat"].mean(),
-                    longitude=dfp["lon"].mean(),
-                    zoom=zoom_level, pitch=25),
-                tooltip={"html": "<b>{nom}</b><br>{typ} · <b>{camions}</b> dossier(s)<br>"
-                                 "<span style='color:#8a93ad'>Dossiers : {dossiers}</span>",
-                         "style": {"background":"#141821","color":"#cdd4ea",
-                                   "font-family":"Barlow Condensed, sans-serif","padding":"9px"}},
-                map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-            )
-            map_key = f"planmap_{sel_pays or 'all'}"
-            # APRÈS
+        if not points_map:
+            st.info("Aucun point à afficher pour ces filtres.")
+        else:
             try:
-                event = st.pydeck_chart(deck, use_container_width=True, height=680,
-                                         key=map_key, selection_mode="single-object", on_select="rerun")
-                # Stocker la sélection en session_state pour lecture par le parent
-                if event and hasattr(event, "selection"):
-                    objs = event.selection.get("objects", {}) if isinstance(event.selection, dict) else {}
-                    pts = objs.get("pts") if isinstance(objs, dict) else None
-                    if pts:
-                        st.session_state["_planmap_clicked"] = pts[0].get("loc_norm")
-                    else:
-                        st.session_state.pop("_planmap_clicked", None)
-            except TypeError:
-                st.pydeck_chart(deck, use_container_width=True, height=680)
-            if len(agg) >= MAX_GEO and not focus_norm:
-                st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
-        except ImportError:
-            st.map(pd.DataFrame(points_map).rename(columns={"lat":"latitude","lon":"longitude"}))
+                import pydeck as pdk
+                dfp = pd.DataFrame(points_map)
+                layers = [
+                    pdk.Layer("ScatterplotLayer", data=dfp, id="pts",
+                              get_position="[lon, lat]", get_radius="radius",
+                              radius_min_pixels=8, radius_max_pixels=48,
+                              get_fill_color="color", get_line_color=[255,255,255,110],
+                              stroked=True, line_width_min_pixels=1, pickable=True,
+                              auto_highlight=True),
+                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
+                              get_text="label", get_size=14, get_color=[10,14,18,255],
+                              get_anchor="middle", get_alignment_baseline="'center'", font_weight=800),
+                    pdk.Layer("TextLayer", data=dfp, get_position="[lon, lat]",
+                              get_text="nom", get_size=11, get_color=[200,210,230,210],
+                              get_anchor="middle", get_alignment_baseline="'bottom'",
+                              get_pixel_offset=[0,-16]),
+                ]
+                if arcs_map:
+                    layers.insert(0, pdk.Layer("ArcLayer", data=pd.DataFrame(arcs_map),
+                        get_source_position="[sl, sla]", get_target_position="[tl, tla]",
+                        get_source_color=[74,191,106,150], get_target_color=[74,138,191,170],
+                        get_width="w", width_min_pixels=1))
+                zoom_level = 7 if focus_norm else (6 if sel_pays else 5)
+                deck = pdk.Deck(
+                    layers=layers,
+                    initial_view_state=pdk.ViewState(
+                        latitude=dfp["lat"].mean(),
+                        longitude=dfp["lon"].mean(),
+                        zoom=zoom_level, pitch=25),
+                    tooltip={"html": "<b>{nom}</b><br>{typ} · <b>{camions}</b> dossier(s)<br>"
+                                     "<span style='color:#8a93ad'>Dossiers : {dossiers}</span>",
+                             "style": {"background":"#141821","color":"#cdd4ea",
+                                       "font-family":"Barlow Condensed, sans-serif","padding":"9px"}},
+                    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+                )
+                # Clé stable (ne dépend pas du focus) → la sélection pydeck
+                # persiste : recliquer le point sélectionné le désélectionne.
+                map_key = f"planmap_{sel_pays or 'all'}"
+                try:
+                    event = st.pydeck_chart(deck, use_container_width=True, height=680,
+                                            key=map_key, selection_mode="single-object",
+                                            on_select="rerun")
+                    new_sel = _read_pydeck_sel(event, map_key)
+                    if new_sel != st.session_state.get("pp_focus_raw"):
+                        st.session_state["pp_focus_raw"] = new_sel
+                        st.rerun(scope="fragment")
+                except TypeError:
+                    st.pydeck_chart(deck, use_container_width=True, height=680)
+                if n_agg >= MAX_GEO and not focus_norm:
+                    st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
+            except ImportError:
+                st.map(pd.DataFrame(points_map).rename(columns={"lat":"latitude","lon":"longitude"}))
 
     # ── Détail pays pleine largeur ─────────────────────────────────────────
     if sel_pays and sel_pays in pays_rows:
@@ -804,7 +925,7 @@ n_dech  = int((dfx["type"] == "D").sum())
 n_tra   = int(dfx["is_tra"].sum())
 
 st.markdown('<div class="sect">🗺️ Carte des activités '
-            '<span class="hint">taille &amp; chiffre = nb de dossiers · vert charg · bleu déch · arcs = liaisons</span></div>',
+            '<span class="hint">clic sur un point = isole + montre ses liaisons · reclic = vue d\'ensemble</span></div>',
             unsafe_allow_html=True)
 
 MAX_GEO = 120
@@ -830,8 +951,8 @@ if msel_date != "Toutes les dates":
 if dmap.empty:
     st.info("Aucune activité pour ces filtres carte.")
 else:
-    clicked_norm = st.session_state.get("_planmap_clicked")
-    focus_norm = clicked_norm or (normalize(focus_choice) if focus_choice != "— tout afficher" else None)
+    # Focus manuel via selectbox (le clic carte est géré DANS le fragment)
+    focus_norm_ext = normalize(focus_choice) if focus_choice != "— tout afficher" else None
 
     agg = (dmap.assign(loc_norm=dmap["localite"].apply(normalize))
                .groupby(["loc_norm", "type"])
@@ -844,69 +965,31 @@ else:
     agg = agg[agg["localite"].str.strip() != ""]
     agg = agg.sort_values("camions", ascending=False).head(MAX_GEO)
 
-    coords_cache, points = {}, []
-    with st.spinner(f"📡 Géocodage de {len(agg)} lieux…"):
-        for _, row in agg.iterrows():
-            key = (row["loc_norm"], row["cp"], row["pays"])
-            if key not in coords_cache:
-                coords_cache[key] = geocode_cached(row["localite"], row["cp"], row["pays"])
-            c = coords_cache[key]
-            if c:
-                n = int(row["camions"])
-                points.append({
-                    "nom": row["localite"], "loc_norm": row["loc_norm"], "label": str(n),
-                    "camions": n, "typ": "Chargement" if row["type"] == "C" else "Déchargement",
-                    "pays": row["pays"], "pays_logi": row["pays_logi"],
-                    "dossiers": row["dossiers"],
-                    "lat": c[0], "lon": c[1],
-                    "radius": 900 + (n ** 0.5) * 1150,
-                    "color": [74, 191, 106, 215] if row["type"] == "C" else [74, 138, 191, 215],
-                    "type_code": row["type"],
-                })
-
-    arcs = []
+    arc_legs = []
     for dos in dmap["dossier"].unique():
         lg = legs.get(dos, {})
-        cn, dn = normalize(lg.get("c_loc", "")), normalize(lg.get("d_loc", ""))
-        ck = (cn, lg.get("c_cp", ""), lg.get("c_pays", ""))
-        dk = (dn, lg.get("d_cp", ""), lg.get("d_pays", ""))
-        cc = coords_cache.get(ck) or (geocode_cached(lg.get("c_loc",""), lg.get("c_cp",""), lg.get("c_pays","")) if lg.get("c_loc") else None)
-        dc = coords_cache.get(dk) or (geocode_cached(lg.get("d_loc",""), lg.get("d_cp",""), lg.get("d_pays","")) if lg.get("d_loc") else None)
-        if cc and dc:
-            arcs.append({"sl": cc[1], "sla": cc[0], "tl": dc[1], "tla": dc[0],
-                         "dos": dos, "cn": cn, "dn": dn, "w": 1.6})
+        if lg.get("c_loc") or lg.get("d_loc"):
+            arc_legs.append({
+                "dos":    str(dos),
+                "c_loc":  lg.get("c_loc", ""),  "c_cp": lg.get("c_cp", ""),  "c_pays": lg.get("c_pays", ""),
+                "d_loc":  lg.get("d_loc", ""),  "d_cp": lg.get("d_cp", ""),  "d_pays": lg.get("d_pays", ""),
+            })
 
-    if focus_norm:
-        arcs_draw = [a for a in arcs if a["cn"] == focus_norm or a["dn"] == focus_norm]
-        related   = {focus_norm} | {a["cn"] for a in arcs_draw} | {a["dn"] for a in arcs_draw}
-        points    = [p for p in points if p["loc_norm"] in related]
-        for a in arcs_draw:
-            a["w"] = 3.0
-        for p in points:
-            if p["loc_norm"] == focus_norm:
-                p["radius"] *= 1.5
-                p["color"]   = p["color"][:3] + [255]
-        foc_name = next((p["nom"] for p in points if p["loc_norm"] == focus_norm), focus_choice)
-        st.info(f"🔎 Point isolé : **{foc_name}** — {len(arcs_draw)} liaison(s).")
+    points_all, arcs_all = build_geo_data(
+        agg.to_json(orient="records"),
+        json.dumps(arc_legs, ensure_ascii=False))
+
+    if not points_all:
+        st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
     else:
-        arcs_draw = arcs if show_arcs else []
-        if show_mode == "Chargements":
-            points = [p for p in points if p["type_code"] == "C"]
-        elif show_mode == "Déchargements":
-            points = [p for p in points if p["type_code"] == "D"]
-
-    if points:
-        pays_total, pays_detail = build_pays_panel(points, show_mode)
         from collections import defaultdict
         pays_rows = defaultdict(list)
         for _, row in dmap.iterrows():
             pl = row.get("pays_logi", row.get("pays", "??"))
             pays_rows[pl].append(row)
 
-        render_pays_carte(points, arcs_draw, agg, pays_total, pays_detail,
-                          pays_rows, show_mode, focus_norm, legs, dmap, MAX_GEO)
-    else:
-        st.info("Aucun lieu géocodé (vérifie le périmètre, ou PTV/OSM indisponible).")
+        render_pays_carte(points_all, arcs_all, len(agg), pays_rows,
+                          show_mode, show_arcs, focus_norm_ext, legs, MAX_GEO)
 
 # ─── Regroupements géographiques ─────────────────────────────────────────────
 st.markdown('<div class="sect">📍 Regroupements géographiques <span class="hint">≥2 activités même jour · même département</span></div>',
