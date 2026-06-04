@@ -103,19 +103,6 @@ st.markdown("""
   font-size:.68rem; letter-spacing:1.4px; text-transform:uppercase;
   padding:3px 11px; border-radius:3px; white-space:nowrap;
 }
-.badge.ptv{ background:var(--charg-d); border:1px solid var(--charg-l); color:var(--charg); }
-.badge.ptv.off{ background:var(--alert-d); border:1px solid var(--alert-l); color:var(--alert); }
-.kgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:.7rem; margin-bottom:1.2rem; }
-.kpi{ background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:.8rem 1rem; }
-.kpi .v{ font-family:'Barlow Condensed',sans-serif; font-size:1.85rem; font-weight:700; color:var(--txt); line-height:1; }
-.kpi .l{ font-size:.66rem; color:var(--faint); text-transform:uppercase; letter-spacing:1.4px; margin-top:5px; }
-.kpi.tra .v{ color:var(--tra); }
-.sect{
-  font-family:'Barlow Condensed',sans-serif; font-size:.72rem; color:var(--faint);
-  text-transform:uppercase; letter-spacing:2.6px; margin:1.6rem 0 .7rem;
-  padding-bottom:.45rem; border-bottom:1px solid var(--line2);
-  display:flex; justify-content:space-between; align-items:baseline;
-}
 .sect .hint{ color:var(--faint); letter-spacing:1px; font-size:.66rem; }
 .dayhead{
   font-family:'Barlow Condensed',sans-serif; color:var(--txt);
