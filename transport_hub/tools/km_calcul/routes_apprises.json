@@ -170,30 +170,8 @@
     "origine": "Trebaseleghe, 35010, Italy",
     "destination": "Saint-Martin-d'Abbat, 45110, France",
     "waypoints": [
-      "45.7936, 6.9747"
+      "45.8355, 6.9290"
     ],
     "source": "manuel"
-  },
-  {
-    "origine": "Trebaseleghe, 35010, Italy",
-    "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
-    "waypoints": [
-      "45.898186, 6.815445"
-    ],
-    "km_reference": 1172.7,
-    "source": "carte_manuelle",
-    "date": "2026-06-04",
-    "confiance": 2
-  },
-  {
-    "origine": "lyon, france",
-    "destination": "aosta, italie",
-    "waypoints": [
-      "45.941246, 6.634419"
-    ],
-    "km_reference": 401.8,
-    "source": "carte_manuelle",
-    "date": "2026-06-04",
-    "confiance": 1
   }
 ]
