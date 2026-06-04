@@ -224,13 +224,38 @@ def _decode_polyline(encoded: str) -> list:
         coords.append([lat / 1e5, lng / 1e5])
     return coords
 
+_BROAD_COUNTRY_FILTER = "FR,BE,LU,DE,ES,NL,GB,IT,CH,AT,PT"
+
+_COUNTRY_WORDS = {
+    "france": "FR",
+    "belgique": "BE", "belgium": "BE", "belgie": "BE",
+    "italie": "IT", "italia": "IT", "italy": "IT",
+    "espagne": "ES", "espana": "ES", "spain": "ES",
+    "allemagne": "DE", "deutschland": "DE", "germany": "DE",
+    "pays-bas": "NL", "nederland": "NL", "netherlands": "NL", "holland": "NL",
+    "luxembourg": "LU",
+    "suisse": "CH", "switzerland": "CH", "schweiz": "CH",
+    "autriche": "AT", "austria": "AT",
+    "portugal": "PT",
+    "royaume-uni": "GB", "angleterre": "GB", "england": "GB", "uk": "GB",
+}
+
+def _country_filter_for(text: str) -> str:
+    """Si le texte mentionne un pays connu, restreint le filtre PTV à ce seul pays
+    (évite les faux positifs type 'Turin Italie' → Nice). Sinon, filtre large."""
+    tokens = text.lower().replace(",", " ").split()
+    for word, iso in _COUNTRY_WORDS.items():
+        if word in tokens:
+            return iso
+    return _BROAD_COUNTRY_FILTER
+
 async def _geocode(address: str) -> Optional[list]:
     """Géocode une adresse via PTV → [lat, lng]."""
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             "https://api.myptv.com/geocoding/v1/locations/by-text",
             headers={"apiKey": PTV_API_KEY},
-            params={"searchText": address, "countryFilter": "FR,BE,LU,DE,ES,NL,GB,IT,CH,AT,PT"},
+            params={"searchText": address, "countryFilter": _country_filter_for(address)},
             timeout=15,
         )
     if resp.status_code != 200:
@@ -299,7 +324,7 @@ async def api_geocode(q: str):
         resp = await client.get(
             "https://api.myptv.com/geocoding/v1/locations/by-text",
             headers={"apiKey": PTV_API_KEY},
-            params={"searchText": q, "countryFilter": "FR,BE,LU,DE,ES,NL,GB,IT,CH,AT,PT"},
+            params={"searchText": q, "countryFilter": _country_filter_for(q)},
             timeout=15,
         )
         
