@@ -736,10 +736,15 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
                 event = st.pydeck_chart(deck, use_container_width=True, height=680,
                                         key=map_key, selection_mode="single-object", on_select="rerun")
                 if event and hasattr(event, "selection"):
-                    objs     = event.selection.get("objects", {}) if isinstance(event.selection, dict) else {}
-                    pts      = objs.get("pts") if isinstance(objs, dict) else None
+                    objs      = event.selection.get("objects", {}) if isinstance(event.selection, dict) else {}
+                    pts       = objs.get("pts") if isinstance(objs, dict) else None
                     new_click = pts[0].get("loc_norm") if pts else None
-                    if new_click != st.session_state.get("_planmap_clicked"):
+                    current   = st.session_state.get("_planmap_clicked")
+                    if new_click is not None and new_click == current:
+                        # reclique sur le même point → reset
+                        st.session_state.pop("_planmap_clicked", None)
+                        st.rerun(scope="fragment")
+                    elif new_click != current:
                         st.session_state["_planmap_clicked"] = new_click
                         st.rerun(scope="fragment")
             except TypeError:
