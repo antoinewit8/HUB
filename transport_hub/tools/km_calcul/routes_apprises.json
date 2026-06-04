@@ -169,7 +169,10 @@
   {
     "origine": "Trebaseleghe, 35010, Italy",
     "destination": "Saint-Martin-d'Abbat, 45110, France",
-    "waypoints": ["45.8360, 6.9280", "45.9080, 6.8690"],
-    "prohibited_countries": ["CH"],
+    "waypoints": [
+      "45.8360, 6.9280", 
+      "45.9080, 6.8690",
+      "46.0370, 6.5590",
+      "46.1080, 6.1600"]
   }
 ]
