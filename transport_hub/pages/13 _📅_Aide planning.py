@@ -672,13 +672,28 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
 
     # ── Appliquer focus_norm ICI dans le fragment ──────────────────────────
     if focus_norm:
-        # Arcs qui touchent le point sélectionné (dans toute la liste, pas seulement pays filtré)
+        # Arcs qui touchent le point sélectionné (dans toute la liste)
         arcs_focus = [a for a in arcs_all if a["cn"] == focus_norm or a["dn"] == focus_norm]
         arcs_map   = [dict(a, w=3.0) for a in arcs_focus]
         # Locs liées (l'autre bout de chaque arc)
         related    = {focus_norm} | {a["cn"] for a in arcs_focus} | {a["dn"] for a in arcs_focus}
-        # Chercher les points liés dans TOUS les points (points_all), pas seulement le sous-ensemble filtré
+        # loc_norm disponibles dans points_all
+        all_loc_norms = {p["loc_norm"] for p in points_all}
+        # Points liés trouvés dans points_all
         points_map = [p for p in points_all if p["loc_norm"] in related]
+        # Points manquants : dans related mais pas dans points_all (mismatch normalize)
+        missing = related - all_loc_norms
+
+        with st.expander("🔧 Debug focus", expanded=True):
+            st.write(f"**focus_norm** : `{focus_norm}`")
+            st.write(f"**arcs trouvés** : {len(arcs_focus)}")
+            st.write(f"**related locs** : {related}")
+            st.write(f"**points trouvés** : {len(points_map)} — locs : {[p['loc_norm'] for p in points_map]}")
+            st.write(f"**manquants (related ∉ points_all)** : {missing}")
+            st.write(f"**tous les loc_norm disponibles** : {sorted(all_loc_norms)[:30]}")
+            if arcs_focus:
+                st.write(f"**cn/dn des arcs** : {[(a['cn'], a['dn']) for a in arcs_focus[:5]]}")
+
         # Mettre en valeur le point cliqué
         points_map = [
             dict(p, radius=p["radius"] * 1.5, color=p["color"][:3] + [255])
