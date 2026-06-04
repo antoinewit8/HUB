@@ -611,7 +611,7 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
     if "pp_selected_pays" not in st.session_state:
         st.session_state["pp_selected_pays"] = None
 
-    # focus_norm : priorité au clic carte, sinon selectbox du corps principal
+    # focus_norm : priorité au clic carte, sinon selectbox
     clicked_norm = st.session_state.get("_planmap_clicked")
     focus_norm   = clicked_norm or focus_norm_ext
 
@@ -686,13 +686,7 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
             for p in points_map
         ]
         foc_name = next((p["nom"] for p in points_map if p["loc_norm"] == focus_norm), focus_norm)
-        ri1, ri2 = st.columns([4, 1])
-        with ri1:
-            st.info(f"🔎 **{foc_name}** — {len(arcs_map)} liaison(s)")
-        with ri2:
-            if st.button("✕ Réinitialiser", key="btn_reset_focus", use_container_width=True):
-                st.session_state.pop("_planmap_clicked", None)
-                st.rerun(scope="fragment")
+        st.info(f"🔎 **{foc_name}** — {len(arcs_map)} liaison(s) · Utilisez le selectbox pour réinitialiser")
 
     with col_map:
         try:
@@ -732,25 +726,22 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
                 map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
             )
             map_key = f"planmap_{sel_pays or 'all'}"
-            try:
-                event = st.pydeck_chart(deck, use_container_width=True, height=680,
-                                        key=map_key, selection_mode="single-object", on_select="rerun")
-                if event and hasattr(event, "selection"):
-                    objs      = event.selection.get("objects", {}) if isinstance(event.selection, dict) else {}
-                    pts       = objs.get("pts") if isinstance(objs, dict) else None
-                    new_click = pts[0].get("loc_norm") if pts else None
-                    current   = st.session_state.get("_planmap_clicked")
-                    if new_click is not None and new_click == current:
-                        # reclique sur le même point → reset vers vue d'ensemble
-                        st.session_state.pop("_planmap_clicked", None)
-                        st.rerun(scope="fragment")
-                    elif new_click is not None and new_click != current:
-                        # nouveau point → isoler
-                        st.session_state["_planmap_clicked"] = new_click
-                        st.rerun(scope="fragment")
-                    # new_click is None (clic vide) → ne rien faire, pas de rerun
-            except TypeError:
-                st.pydeck_chart(deck, use_container_width=True, height=680)
+            event = st.pydeck_chart(deck, use_container_width=True, height=680,
+                                    key=map_key, selection_mode="single-object",
+                                    on_select="ignore")
+            # Lire la sélection depuis session_state (peuplé par pydeck sans rerun)
+            _raw = st.session_state.get(map_key, {})
+            _objs = (_raw.get("selection", {}).get("objects", {})
+                     if isinstance(_raw, dict) else {})
+            _pts = _objs.get("pts") if isinstance(_objs, dict) else None
+            new_click = _pts[0].get("loc_norm") if _pts else None
+            current = st.session_state.get("_planmap_clicked")
+            if new_click is not None and new_click != current:
+                st.session_state["_planmap_clicked"] = new_click
+                st.rerun(scope="fragment")
+            elif new_click is not None and new_click == current:
+                st.session_state.pop("_planmap_clicked", None)
+                st.rerun(scope="fragment")
             if len(agg) >= MAX_GEO and not focus_norm:
                 st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
         except ImportError:
