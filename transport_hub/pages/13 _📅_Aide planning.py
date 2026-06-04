@@ -741,12 +741,14 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
                     new_click = pts[0].get("loc_norm") if pts else None
                     current   = st.session_state.get("_planmap_clicked")
                     if new_click is not None and new_click == current:
-                        # reclique sur le même point → reset
+                        # reclique sur le même point → reset vers vue d'ensemble
                         st.session_state.pop("_planmap_clicked", None)
                         st.rerun(scope="fragment")
-                    elif new_click != current:
+                    elif new_click is not None and new_click != current:
+                        # nouveau point → isoler
                         st.session_state["_planmap_clicked"] = new_click
                         st.rerun(scope="fragment")
+                    # new_click is None (clic vide) → ne rien faire, pas de rerun
             except TypeError:
                 st.pydeck_chart(deck, use_container_width=True, height=680)
             if len(agg) >= MAX_GEO and not focus_norm:
