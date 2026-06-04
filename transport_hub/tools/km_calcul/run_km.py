@@ -199,10 +199,14 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             # Waypoints : routes apprises TOUJOURS appliquées.
             # La détection auto de villes-jalons reste réservée au mode SUPER.
             waypoints = []
+            prohibited_countries = []
             try:
-                waypoints = get_waypoints(origin, dest, auto_jalons=super_pref)
+                wp_result = get_waypoints(origin, dest, auto_jalons=super_pref)
+                waypoints = wp_result.get("waypoints", [])
+                prohibited_countries = wp_result.get("prohibited_countries", [])
             except Exception:
                 waypoints = []
+                prohibited_countries = []
 
             # Calcul via PTV
             try:
@@ -212,7 +216,8 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 data = calculate_km_route(
                     lat_start, lon_start, lat_end, lon_end,
                     calculer_peage=calculer_peage,
-                    waypoints=waypoints
+                    waypoints=waypoints,
+                    prohibited_countries=prohibited_countries
                 )
             except Exception as e:
                 print(f"!!! CRASH calculate_km_route: {e}", flush=True)
