@@ -308,8 +308,19 @@ def haversine(lat1, lon1, lat2, lon2) -> float:
 # ==========================================
 # FONCTION PRINCIPALE (remplace l'ancienne)
 # ==========================================
-def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> list:
-    """Retourne les waypoints d'une route apprise/préférentielle.
+def _extract_prohibited(route: dict) -> list:
+    """Récupère les pays interdits d'une route (tolère plusieurs noms de clés)."""
+    raw = (route.get("prohibited_countries")
+           or route.get("prohibitedCountries")
+           or route.get("avoid_countries")
+           or route.get("pays_interdits")
+           or [])
+    if isinstance(raw, str):
+        raw = [c for c in raw.replace(";", ",").split(",")]
+    return [str(c).strip().upper() for c in raw if str(c).strip()]
+
+def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> dict:
+    """Retourne {"waypoints": [...], "prohibited_countries": [...]} pour une route apprise.
 
     - Match exact (texte) et match par proximité GPS : TOUJOURS appliqués.
     - Détection automatique de villes-jalons : UNIQUEMENT si auto_jalons=True
@@ -326,9 +337,10 @@ def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> list:
         dest_ref    = route.get("destination", "")
         if normalize(origine_ref) == norm_origin and normalize(dest_ref) == norm_dest:
             waypoints = route.get("waypoints", [])
+            prohibited = _extract_prohibited(route)
             print(f"   ✅ Route apprise (match exact) : {origine_ref} → {dest_ref} "
-                  f"({len(waypoints)} waypoints)")
-            return waypoints
+                  f"({len(waypoints)} waypoints, pays interdits: {prohibited or 'aucun'})")
+            return {"waypoints": waypoints, "prohibited_countries": prohibited}
 
     # ── 2. Match par proximité GPS (50 km) — géocodage seulement maintenant ──
     coords_origin = geocoder_ville(origin)
@@ -375,9 +387,10 @@ def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> list:
 
         if match_dep and match_arr:
             waypoints = route.get("waypoints", [])
+            prohibited = _extract_prohibited(route)
             print(f"   ✅ Route apprise (proximité <{RAYON_KM}km) : {origine_ref} → {dest_ref} "
-                  f"({len(waypoints)} waypoints)")
-            return waypoints
+                  f"({len(waypoints)} waypoints, pays interdits: {prohibited or 'aucun'})")
+            return {"waypoints": waypoints, "prohibited_countries": prohibited}
 
     # ── 3. Détection automatique villes-jalons — UNIQUEMENT en mode SUPER ──
     if auto_jalons and coords_origin and coords_dest:
@@ -388,7 +401,7 @@ def get_waypoints(origin: str, dest: str, auto_jalons: bool = False) -> list:
         )
         if jalons:
             print(f"   ✅ {len(jalons)} villes-jalons détectées automatiquement")
-            return jalons
+            return {"waypoints": jalons, "prohibited_countries": []}
 
     print(f"   📍 Aucune route apprise → PTV choisit le trajet")
-    return []
+    return {"waypoints": [], "prohibited_countries": []}
