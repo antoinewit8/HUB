@@ -677,23 +677,8 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
         arcs_map   = [dict(a, w=3.0) for a in arcs_focus]
         # Locs liées (l'autre bout de chaque arc)
         related    = {focus_norm} | {a["cn"] for a in arcs_focus} | {a["dn"] for a in arcs_focus}
-        # loc_norm disponibles dans points_all
-        all_loc_norms = {p["loc_norm"] for p in points_all}
-        # Points liés trouvés dans points_all
+        # Chercher dans TOUS les points (points_all) pour inclure charg + déch
         points_map = [p for p in points_all if p["loc_norm"] in related]
-        # Points manquants : dans related mais pas dans points_all (mismatch normalize)
-        missing = related - all_loc_norms
-
-        with st.expander("🔧 Debug focus", expanded=True):
-            st.write(f"**focus_norm** : `{focus_norm}`")
-            st.write(f"**arcs trouvés** : {len(arcs_focus)}")
-            st.write(f"**related locs** : {related}")
-            st.write(f"**points trouvés** : {len(points_map)} — locs : {[p['loc_norm'] for p in points_map]}")
-            st.write(f"**manquants (related ∉ points_all)** : {missing}")
-            st.write(f"**tous les loc_norm disponibles** : {sorted(all_loc_norms)[:30]}")
-            if arcs_focus:
-                st.write(f"**cn/dn des arcs** : {[(a['cn'], a['dn']) for a in arcs_focus[:5]]}")
-
         # Mettre en valeur le point cliqué
         points_map = [
             dict(p, radius=p["radius"] * 1.5, color=p["color"][:3] + [255])
@@ -701,7 +686,13 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
             for p in points_map
         ]
         foc_name = next((p["nom"] for p in points_map if p["loc_norm"] == focus_norm), focus_norm)
-        st.info(f"🔎 Point isolé : **{foc_name}** — {len(arcs_map)} liaison(s). Cliquez ailleurs pour réinitialiser.")
+        ri1, ri2 = st.columns([4, 1])
+        with ri1:
+            st.info(f"🔎 **{foc_name}** — {len(arcs_map)} liaison(s)")
+        with ri2:
+            if st.button("✕ Réinitialiser", key="btn_reset_focus", use_container_width=True):
+                st.session_state.pop("_planmap_clicked", None)
+                st.rerun(scope="fragment")
 
     with col_map:
         try:
