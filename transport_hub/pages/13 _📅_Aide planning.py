@@ -69,7 +69,7 @@ else:
     PAYS_TO_ISO = {}
     GPS_FIXES   = {}
 
-st.set_page_config(page_title="Planning Plateaux", page_icon="🗂️", layout="wide")
+st.set_page_config(page_title="Aide Planning", page_icon="🗂️", layout="wide")
 
 st.markdown("""
 <style>
