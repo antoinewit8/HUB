@@ -728,20 +728,23 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
             map_key = f"planmap_{sel_pays or 'all'}"
             event = st.pydeck_chart(deck, use_container_width=True, height=680,
                                     key=map_key, selection_mode="single-object",
-                                    on_select="ignore")
-            # Lire la sélection depuis session_state (peuplé par pydeck sans rerun)
-            _raw = st.session_state.get(map_key, {})
-            _objs = (_raw.get("selection", {}).get("objects", {})
-                     if isinstance(_raw, dict) else {})
-            _pts = _objs.get("pts") if isinstance(_objs, dict) else None
-            new_click = _pts[0].get("loc_norm") if _pts else None
-            current = st.session_state.get("_planmap_clicked")
-            if new_click is not None and new_click != current:
-                st.session_state["_planmap_clicked"] = new_click
-                st.rerun(scope="fragment")
-            elif new_click is not None and new_click == current:
-                st.session_state.pop("_planmap_clicked", None)
-                st.rerun(scope="fragment")
+                                    on_select="rerun")
+            if event and hasattr(event, "selection"):
+                _objs     = event.selection.get("objects", {}) if isinstance(event.selection, dict) else {}
+                _pts      = _objs.get("pts") if isinstance(_objs, dict) else None
+                new_click = _pts[0].get("loc_norm") if _pts else None
+                current   = st.session_state.get("_planmap_clicked")
+                # Ne rerun que si un vrai point est cliqué ET que la valeur change
+                if new_click is not None:
+                    if new_click == current:
+                        # reclique même point → reset
+                        st.session_state.pop("_planmap_clicked", None)
+                        st.rerun(scope="fragment")
+                    else:
+                        # nouveau point
+                        st.session_state["_planmap_clicked"] = new_click
+                        st.rerun(scope="fragment")
+                # new_click is None → clic dans le vide, on ignore totalement
             if len(agg) >= MAX_GEO and not focus_norm:
                 st.caption(f"Géocodage limité aux {MAX_GEO} lieux les plus actifs.")
         except ImportError:
