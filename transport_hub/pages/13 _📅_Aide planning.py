@@ -696,7 +696,7 @@ ptv_badge = ('<span class="badge ptv">PTV routing actif</span>' if PTV_AVAILABLE
 st.markdown(f"""
 <div class="hero">
   <div>
-    <h1>🗂️ Aide Planningx</h1>
+    <h1>🗂️ Aide Planning</h1>
     <p>Vue planeur — chargements &amp; déchargements par chauffeur, tracteur ou remorque, flotte CB et tractionnaires confondus.</p>
   </div>
   {ptv_badge}
