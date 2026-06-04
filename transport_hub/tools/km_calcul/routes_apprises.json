@@ -169,7 +169,7 @@
   {
     "origine": "Trebaseleghe, 35010, Italy",
     "destination": "Saint-Martin-d'Abbat, 45110, France",
-    "waypoints": ["45.8360, 6.9280", "45.9080, 6.8690"],
+    "waypoints": ["45.8360, 6.9280", "45.9080, 6.8690", "45.9340, 6.6320"],
     "source": "manuel"
   }
 ]
