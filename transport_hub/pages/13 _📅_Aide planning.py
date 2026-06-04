@@ -672,10 +672,14 @@ def render_pays_carte(points_all, arcs_all, agg, pays_total, pays_detail,
 
     # ── Appliquer focus_norm ICI dans le fragment ──────────────────────────
     if focus_norm:
-        arcs_map   = [a for a in arcs_map if a["cn"] == focus_norm or a["dn"] == focus_norm]
-        related    = {focus_norm} | {a["cn"] for a in arcs_map} | {a["dn"] for a in arcs_map}
-        points_map = [p for p in points_map if p["loc_norm"] in related]
-        arcs_map   = [dict(a, w=3.0) for a in arcs_map]
+        # Arcs qui touchent le point sélectionné (dans toute la liste, pas seulement pays filtré)
+        arcs_focus = [a for a in arcs_all if a["cn"] == focus_norm or a["dn"] == focus_norm]
+        arcs_map   = [dict(a, w=3.0) for a in arcs_focus]
+        # Locs liées (l'autre bout de chaque arc)
+        related    = {focus_norm} | {a["cn"] for a in arcs_focus} | {a["dn"] for a in arcs_focus}
+        # Chercher les points liés dans TOUS les points (points_all), pas seulement le sous-ensemble filtré
+        points_map = [p for p in points_all if p["loc_norm"] in related]
+        # Mettre en valeur le point cliqué
         points_map = [
             dict(p, radius=p["radius"] * 1.5, color=p["color"][:3] + [255])
             if p["loc_norm"] == focus_norm else p
