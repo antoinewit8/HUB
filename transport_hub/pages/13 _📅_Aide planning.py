@@ -862,13 +862,15 @@ with st.expander("🔧 Debug — colonnes détectées & valeurs Activité"):
 st.markdown('<div class="sect">🎛️ Filtres planning <span class="hint">multiselect vide = tout confondu</span></div>',
             unsafe_allow_html=True)
 
-f1, f2, f3 = st.columns([1.1, 1.1, 1])
+f1, f2, f3, f4 = st.columns([1.1, 1.1, .9, 1])
 with f1:
     dimension = st.radio("Dimension", ["Chauffeur", "Tracteur (immat.)", "Remorque"], horizontal=True)
     dim_col = {"Chauffeur": "chauffeur", "Tracteur (immat.)": "immat", "Remorque": "remorque"}[dimension]
 with f2:
     flotte = st.radio("Périmètre", ["Tous", "Flotte CB", "Tractionnaires"], horizontal=True)
 with f3:
+    type_tr_f = st.radio("Type transport", ["Tous", "PLA", "CIT"], horizontal=True)
+with f4:
     vue = st.radio("Vue", ["Par jour", "Par ressource"], horizontal=True)
 
 df_scope = df.copy()
@@ -876,6 +878,9 @@ if flotte == "Flotte CB":
     df_scope = df_scope[~df_scope["is_tra"]]
 elif flotte == "Tractionnaires":
     df_scope = df_scope[df_scope["is_tra"]]
+
+if type_tr_f != "Tous":
+    df_scope = df_scope[df_scope["type_tr"].str.upper().str.contains(type_tr_f, na=False)]
 
 options = sorted([v for v in df_scope[dim_col].dropna().unique() if str(v).strip()])
 g1, g2 = st.columns([2.2, 1])
