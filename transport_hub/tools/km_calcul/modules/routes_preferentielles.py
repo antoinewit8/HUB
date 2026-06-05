@@ -69,15 +69,19 @@ def _load_json_list(path: str):
         return []
 
 def _normalize_route_entry(r: dict):
-    """Tolère quelques variantes de clés (origine/origin, destination/dest, waypoints/wps)."""
     if not isinstance(r, dict):
         return None
-    origine = r.get("origine") or r.get("origin")      or r.get("depart")  or ""
-    dest    = r.get("destination") or r.get("dest")    or r.get("arrivee") or ""
-    wps     = r.get("waypoints") or r.get("wps")       or []
+    origine = r.get("origine") or r.get("origin")   or r.get("depart")  or ""
+    dest    = r.get("destination") or r.get("dest") or r.get("arrivee") or ""
+    wps     = r.get("waypoints") or r.get("wps")    or []
     if not origine or not dest:
         return None
-    return {"origine": origine, "destination": dest, "waypoints": wps}
+    # Conserver tous les champs supplémentaires (prohibited_countries, km_reference, etc.)
+    entry = {"origine": origine, "destination": dest, "waypoints": wps}
+    for k, v in r.items():
+        if k not in entry:
+            entry[k] = v
+    return entry
 
 def charger_routes() -> list:
     global _routes_cache
