@@ -174,5 +174,16 @@
     "prohibited_countries": [
       "CH"
     ]
+  },
+  {
+    "origine": "Rotterdam, 3029, Netherlands",
+    "destination": "Hermes, 60370, France",
+    "waypoints": [
+      "51.433039, 4.713573"
+    ],
+    "km_reference": 420.1,
+    "source": "carte_manuelle",
+    "date": "2026-06-05",
+    "confiance": 1
   }
 ]
