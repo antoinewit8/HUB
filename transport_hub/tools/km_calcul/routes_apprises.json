@@ -48,12 +48,13 @@
     "origine": "Rotterdam, 3029, Netherlands",
     "destination": "Saint-Martin-d&#39;Abbat, 45110, France",
     "waypoints": [
-      "51.437668, 4.720508"
+      "51.437668, 4.720508",
+      "48.319750, 2.199109"
     ],
-    "km_reference": 602.0,
+    "km_reference": 598.2,
     "source": "carte_manuelle",
     "date": "2026-06-05",
-    "confiance": 2
+    "confiance": 3
   },
   {
     "origine": "Beneden-Leeuwen, 6588, Netherlands",
