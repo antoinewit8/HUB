@@ -12,14 +12,26 @@ Entrée : Export tractionnaires (.xlsx)
              Département vente, Client
 
 Sorties :
-  • Tableau détail dossiers avec KM PTV estimés
-  • Résumé par tractionnaire / par véhicule : dossiers, KM, CA, rentabilité
+  • Tableau détail dossiers avec dates + KM PTV estimés
+  • Résumé par tractionnaire / par véhicule
   • Export Excel
 
-Nouveau :
-  • Filtres Véhicule / Chauffeur dans le tableau détail
-  • Sélection Tractionnaire + Véhicule pour le calcul PTV (cascade)
-  • Toggle KM à vide (économie d'appels PTV)
+Gestion des bords de mois :
+  Le mois d'analyse est déduit des dates de DÉCHARGEMENT (critère de
+  l'export). Chaque dossier est classé :
+    • Complet   → chargé ET déchargé dans le mois
+    • Entrant   → chargé le mois précédent, déchargé dans le mois (ex. 30/04 → 02/05)
+    • Sortant   → chargé dans le mois, déchargé le mois suivant
+    • Hors mois → ne concerne pas la période
+  Une règle d'attribution permet d'exclure les dossiers à cheval du
+  périmètre : ils ne sont alors ni affichés ni calculés (0 appel PTV).
+
+Anti-km parasites (KM à vide) :
+  • Cache de routes : une paire (départ, arrivée) identique n'est
+    appelée qu'une fois chez PTV
+  • Même lieu → 0 km, aucun appel
+  • Gap trop long entre 2 dossiers d'un camion → tronçon ignoré
+    (le camion n'est pas resté sur place : le "vide" est fictif)
 ──────────────────────────────────────────────────────────────────
 """
 
@@ -52,6 +64,9 @@ MAX_RETRIES  = 3
 RETRY_DELAY  = 2
 VEHICLE      = "EUR_TRAILER_TRUCK"
 
+# Seuil par défaut au-delà duquel un tronçon à vide est jugé fictif
+GAP_VIDE_DEFAUT = 3  # jours
+
 PAYS_MAP = {
     "F": "France", "B": "Belgium", "D": "Germany", "L": "Luxembourg",
     "NL": "Netherlands", "E": "Spain", "I": "Italy", "CH": "Switzerland",
@@ -69,6 +84,12 @@ PAYS_TO_ISO2 = {
 
 MOIS_FR = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
            "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+
+# Libellés de classification période
+P_COMPLET = "Complet"
+P_ENTRANT = "Entrant (chargé M-1)"
+P_SORTANT = "Sortant (déchargé M+1)"
+P_HORS    = "Hors mois"
 
 # ══════════════════════════════════════════════════════════════════
 #  UTILITAIRES
@@ -108,6 +129,12 @@ def _opts(series: pd.Series) -> List[str]:
     """Options triées, sans vides ni 'nan'."""
     return sorted({v for v in series.dropna().astype(str)
                    if v.strip() and v.strip().lower() != "nan"})
+
+
+def _libelle_mois(per) -> str:
+    if per is None:
+        return "Période inconnue"
+    return f"{MOIS_FR[per.month]} {per.year}"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -213,6 +240,23 @@ def calculate_route(coords_list: list) -> Optional[dict]:
     return None
 
 
+def _route_km_cached(cache: dict, a: Tuple[float, float], b: Tuple[float, float]) -> Optional[float]:
+    """Route A→B avec cache : une paire identique n'est demandée qu'une fois."""
+    if a is None or b is None:
+        return None
+    key = (round(a[0], 4), round(a[1], 4), round(b[0], 4), round(b[1], 4))
+    if key in cache:
+        return cache[key]
+    # Même point : aucun appel PTV
+    if key[0] == key[2] and key[1] == key[3]:
+        cache[key] = 0.0
+        return 0.0
+    res = calculate_route([a, b])
+    km = res["km"] if res else None
+    cache[key] = km
+    return km
+
+
 # ══════════════════════════════════════════════════════════════════
 #  PARSING
 # ══════════════════════════════════════════════════════════════════
@@ -297,20 +341,85 @@ def parse_tractionnaires(file) -> pd.DataFrame:
 
 
 # ══════════════════════════════════════════════════════════════════
+#  PERIODE — détection du mois et classification des dossiers
+# ══════════════════════════════════════════════════════════════════
+
+def detect_mois_analyse(df: pd.DataFrame):
+    """
+    Mois d'analyse = mois le plus fréquent des DÉCHARGEMENTS.
+    C'est le critère de l'export : un dossier chargé le 30/04 et
+    déchargé le 02/05 tombe dans l'export de mai.
+    """
+    d = df["_date_decharg_dt"].dropna()
+    if d.empty:
+        d = df["_date_charg_dt"].dropna()
+    if d.empty:
+        return None
+    modes = d.dt.to_period("M").mode()
+    if modes.empty:
+        return None
+    return modes.iloc[0]
+
+
+def classer_dossiers(df: pd.DataFrame, mois) -> pd.DataFrame:
+    """Ajoute la colonne _periode : Complet / Entrant / Sortant / Hors mois."""
+    df = df.copy()
+    if mois is None:
+        df["_periode"] = P_COMPLET
+        return df
+
+    per_charg   = df["_date_charg_dt"].dt.to_period("M")
+    per_decharg = df["_date_decharg_dt"].dt.to_period("M")
+
+    m_prev = mois - 1
+    m_next = mois + 1
+
+    def _cls(pc, pdch):
+        # Une seule date connue → on se fie à elle
+        if pd.isna(pc) and pd.isna(pdch):
+            return P_HORS
+        if pd.isna(pc):
+            return P_COMPLET if pdch == mois else P_HORS
+        if pd.isna(pdch):
+            return P_COMPLET if pc == mois else P_HORS
+        if pc == mois and pdch == mois:
+            return P_COMPLET
+        if pc == m_prev and pdch == mois:
+            return P_ENTRANT
+        if pc == mois and pdch == m_next:
+            return P_SORTANT
+        if pc == mois or pdch == mois:
+            # Chevauchement long (> 1 mois d'écart) : rattaché au mois quand même
+            return P_ENTRANT if pdch == mois else P_SORTANT
+        return P_HORS
+
+    df["_periode"] = [_cls(pc, pdch) for pc, pdch in zip(per_charg, per_decharg)]
+    return df
+
+
+# ══════════════════════════════════════════════════════════════════
 #  CALCUL KM PTV
 # ══════════════════════════════════════════════════════════════════
 
-def compute_km(df: pd.DataFrame, progress_cb=None, calc_vide: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def compute_km(df: pd.DataFrame,
+               progress_cb=None,
+               calc_vide: bool = True,
+               gap_max_jours: int = GAP_VIDE_DEFAUT) -> Tuple[pd.DataFrame, pd.DataFrame, dict]:
     """
     Géocode tous les points uniques et calcule :
     - km_ptv  : km chargement → déchargement par dossier
     - km_vide : déchargement → chargement suivant, par véhicule, ordre chronologique
 
-    calc_vide=False : saute entièrement le calcul des km à vide (économie d'appels PTV).
+    Anti-km parasites sur les tronçons à vide :
+      • même lieu           → 0 km, aucun appel PTV
+      • gap > gap_max_jours → tronçon ignoré (camion pas resté sur place)
+      • dates incohérentes  → tronçon ignoré
+      • cache de routes     → une paire (A,B) identique = 1 seul appel
 
-    Retourne (df_enrichi, df_vide).
+    Retourne (df_enrichi, df_vide, stats).
     """
     df = df.copy()
+    stats = {"appels_route": 0, "routes_cache": 0, "vide_ignores": 0, "vide_meme_lieu": 0}
 
     # ── Géocodage de tous les points uniques ──────────────────
     points = set()
@@ -330,6 +439,17 @@ def compute_km(df: pd.DataFrame, progress_cb=None, calc_vide: bool = True) -> Tu
         if coords is None:
             st.warning(f"⚠️ Géocodage échoué : {ville}, {cp}, {pays}")
 
+    route_cache = {}
+
+    def _route(a, b):
+        before = len(route_cache)
+        km = _route_km_cached(route_cache, a, b)
+        if len(route_cache) > before:
+            stats["appels_route"] += 1
+        else:
+            stats["routes_cache"] += 1
+        return km
+
     # ── Km chargés par dossier ────────────────────────────────
     km_results = []
     total_dos = len(df)
@@ -341,11 +461,7 @@ def compute_km(df: pd.DataFrame, progress_cb=None, calc_vide: bool = True) -> Tu
             )
         c_ch = geo_cache.get((_clean(row["localite_charg"]), _clean(row["cp_charg"]), _clean(row["pays_charg"])))
         c_de = geo_cache.get((_clean(row["localite_decharg"]), _clean(row["cp_decharg"]), _clean(row["pays_decharg"])))
-        if c_ch and c_de:
-            res = calculate_route([c_ch, c_de])
-            km_results.append(res["km"] if res else None)
-        else:
-            km_results.append(None)
+        km_results.append(_route(c_ch, c_de) if (c_ch and c_de) else None)
     df["km_ptv"] = km_results
 
     # ── Km à vide par véhicule ────────────────────────────────
@@ -363,29 +479,50 @@ def compute_km(df: pd.DataFrame, progress_cb=None, calc_vide: bool = True) -> Tu
                 row_cur  = grp.iloc[i]
                 row_next = grp.iloc[i + 1]
 
-                # Point de départ = déchargement du dossier courant
+                # Départ = déchargement du dossier courant
                 c_de = geo_cache.get((
                     _clean(row_cur["localite_decharg"]),
                     _clean(row_cur["cp_decharg"]),
                     _clean(row_cur["pays_decharg"]),
                 ))
-                # Point d'arrivée = chargement du dossier suivant
+                # Arrivée = chargement du dossier suivant
                 c_ch = geo_cache.get((
                     _clean(row_next["localite_charg"]),
                     _clean(row_next["cp_charg"]),
                     _clean(row_next["pays_charg"]),
                 ))
 
-                if c_de and c_ch:
+                # Écart en jours entre le déchargement courant et le chargement suivant
+                d_fin   = row_cur["_date_decharg_dt"]
+                d_debut = row_next["_date_charg_dt"]
+                if pd.notna(d_fin) and pd.notna(d_debut):
+                    gap = (d_debut - d_fin).days
+                else:
+                    gap = None
+
+                km_vide = None
+                statut_leg = "OK"
+
+                if c_de is None or c_ch is None:
+                    statut_leg = "Géocodage manquant"
+                elif gap is not None and gap < 0:
+                    statut_leg = "Dates incohérentes — ignoré"
+                    stats["vide_ignores"] += 1
+                elif gap is not None and gap > gap_max_jours:
+                    statut_leg = f"Gap {gap} j > {gap_max_jours} j — ignoré"
+                    stats["vide_ignores"] += 1
+                else:
                     if progress_cb:
                         progress_cb(
                             f"⚡ KM vide {vehicule} : {row_cur['localite_decharg']} → {row_next['localite_charg']}...",
                             0.7 + (v_idx + 1) / max(nb_veh, 1) * 0.3,
                         )
-                    res = calculate_route([c_de, c_ch])
-                    km_vide = res["km"] if res else None
-                else:
-                    km_vide = None
+                    km_vide = _route(c_de, c_ch)
+                    if km_vide == 0.0:
+                        statut_leg = "Même lieu"
+                        stats["vide_meme_lieu"] += 1
+                    elif km_vide is None:
+                        statut_leg = "Route PTV échouée"
 
                 vide_legs.append({
                     "vehicule":        vehicule,
@@ -395,20 +532,22 @@ def compute_km(df: pd.DataFrame, progress_cb=None, calc_vide: bool = True) -> Tu
                     "ville_depart":    row_cur["localite_decharg"],
                     "ville_arrivee":   row_next["localite_charg"],
                     "date_depart":     row_cur["_sort_key"].strftime("%d/%m/%Y") if pd.notna(row_cur["_sort_key"]) else "",
+                    "gap_jours":       gap if gap is not None else "",
+                    "statut_leg":      statut_leg,
                     "km_vide":         km_vide,
                 })
 
     df_vide = pd.DataFrame(vide_legs)
 
     if not df_vide.empty:
-        km_vide_by_dos = df_vide.groupby("dossier_depart")["km_vide"].sum()
+        km_vide_by_dos = df_vide.groupby("dossier_depart")["km_vide"].sum(min_count=1)
         df["km_vide"] = df["dossier"].map(km_vide_by_dos).fillna(0)
     else:
         df["km_vide"] = 0.0
 
     df["km_total_complet"] = df["km_ptv"].fillna(0) + df["km_vide"]
 
-    return df, df_vide
+    return df, df_vide, stats
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -416,7 +555,6 @@ def compute_km(df: pd.DataFrame, progress_cb=None, calc_vide: bool = True) -> Tu
 # ══════════════════════════════════════════════════════════════════
 
 def build_resume(df: pd.DataFrame, cle: str, label: str) -> pd.DataFrame:
-    """Résumé agrégé (KM + CA + rentabilité) sur une clé : tractionnaire ou vehicule."""
     res = df.groupby(cle, as_index=False).agg(
         Dossiers   = ("dossier",         "count"),
         KM_Charges = ("km_ptv",          "sum"),
@@ -448,7 +586,6 @@ def export_excel(df_detail: pd.DataFrame,
     try:
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
 
-            # Feuille détail
             col_rename_detail = {
                 "tractionnaire":    "Tractionnaire",
                 "chauffeur":        "Chauffeur",
@@ -457,6 +594,7 @@ def export_excel(df_detail: pd.DataFrame,
                 "dossier":          "N° Dossier",
                 "client":           "Client",
                 "statut":           "Statut facturation",
+                "_periode":         "Période",
                 "date_charg_fmt":   "Date chargement",
                 "localite_charg":   "Localité chargement",
                 "date_decharg_fmt": "Date déchargement",
@@ -476,22 +614,20 @@ def export_excel(df_detail: pd.DataFrame,
             df_d.to_excel(writer, sheet_name="Détail dossiers", index=False)
             _style_sheet(writer.sheets["Détail dossiers"], len(df_d))
 
-            # Feuille résumé tractionnaires
             df_resume_tract.to_excel(writer, sheet_name="Résumé tractionnaires", index=False)
             _style_sheet(writer.sheets["Résumé tractionnaires"], len(df_resume_tract))
 
-            # Feuille résumé véhicules
             if df_resume_veh is not None and not df_resume_veh.empty:
                 df_resume_veh.to_excel(writer, sheet_name="Résumé véhicules", index=False)
                 _style_sheet(writer.sheets["Résumé véhicules"], len(df_resume_veh))
 
-            # Feuille km à vide
             if df_vide is not None and not df_vide.empty:
                 vide_rename = {
                     "vehicule": "Véhicule", "tractionnaire": "Tractionnaire",
                     "dossier_depart": "Dossier départ", "dossier_arrivee": "Dossier arrivée",
                     "ville_depart": "Ville départ", "ville_arrivee": "Ville arrivée",
-                    "date_depart": "Date", "km_vide": "KM à vide",
+                    "date_depart": "Date", "gap_jours": "Gap (j)",
+                    "statut_leg": "Statut tronçon", "km_vide": "KM à vide",
                 }
                 df_v = df_vide[[c for c in vide_rename if c in df_vide.columns]].rename(columns=vide_rename).fillna("")
                 df_v.to_excel(writer, sheet_name="KM À Vide Détail", index=False)
@@ -540,25 +676,99 @@ file_tract = st.file_uploader("📋 Export tractionnaires (.xlsx)", type=["xlsx"
 if file_tract:
     with st.spinner("📂 Lecture du fichier..."):
         try:
-            df = parse_tractionnaires(file_tract)
+            df_raw = parse_tractionnaires(file_tract)
         except Exception as e:
             st.error(f"❌ Erreur lecture : {e}")
             st.stop()
 
-    if df.empty:
+    if df_raw.empty:
         st.error("❌ Aucun dossier valide détecté dans le fichier.")
         st.stop()
 
-    # ── Période détectée ──────────────────────────────────────
-    dates_valides = df["_date_dt"].dropna()
-    if not dates_valides.empty:
-        d_min, d_max = dates_valides.min(), dates_valides.max()
-        if d_min.month == d_max.month and d_min.year == d_max.year:
-            periode_label = f"{MOIS_FR[d_min.month]} {d_min.year}"
-        else:
-            periode_label = f"{d_min.strftime('%d/%m/%Y')} → {d_max.strftime('%d/%m/%Y')}"
+    # ══════════════════════════════════════════════════════════
+    #  PERIODE D'ANALYSE
+    # ══════════════════════════════════════════════════════════
+    mois_auto = detect_mois_analyse(df_raw)
+
+    st.markdown("### 🗓️ Période d'analyse")
+
+    # Choix du mois (auto par défaut, surchargeable)
+    mois_dispo = sorted({
+        p for p in pd.concat([
+            df_raw["_date_decharg_dt"], df_raw["_date_charg_dt"]
+        ]).dropna().dt.to_period("M").unique()
+    })
+    labels_mois = {_libelle_mois(p): p for p in mois_dispo}
+    default_label = _libelle_mois(mois_auto) if mois_auto is not None else None
+    liste_labels = list(labels_mois.keys())
+    idx_default = liste_labels.index(default_label) if default_label in liste_labels else 0
+
+    pc1, pc2 = st.columns([1, 2])
+    with pc1:
+        mois_label = st.selectbox(
+            "Mois analysé (déduit des déchargements) :",
+            options=liste_labels, index=idx_default, key="mois_sel",
+        )
+        mois = labels_mois.get(mois_label)
+
+    df_all = classer_dossiers(df_raw, mois)
+
+    # Comptage par catégorie
+    cnt = df_all["_periode"].value_counts().to_dict()
+    n_complet = cnt.get(P_COMPLET, 0)
+    n_entrant = cnt.get(P_ENTRANT, 0)
+    n_sortant = cnt.get(P_SORTANT, 0)
+    n_hors    = cnt.get(P_HORS, 0)
+
+    with pc2:
+        regle = st.radio(
+            "Règle d'attribution des dossiers à cheval :",
+            options=[
+                "Tout inclure (comme l'export)",
+                "Mois strict (chargement ET déchargement dans le mois)",
+                "Personnalisé",
+            ],
+            index=0, horizontal=False, key="regle_periode",
+        )
+
+    if regle == "Tout inclure (comme l'export)":
+        cats_gardees = [P_COMPLET, P_ENTRANT, P_SORTANT]
+    elif regle == "Mois strict (chargement ET déchargement dans le mois)":
+        cats_gardees = [P_COMPLET]
     else:
-        periode_label = "Période inconnue"
+        cats_gardees = st.multiselect(
+            "Catégories à conserver :",
+            options=[P_COMPLET, P_ENTRANT, P_SORTANT, P_HORS],
+            default=[P_COMPLET, P_ENTRANT, P_SORTANT],
+            key="cats_periode",
+        )
+
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric(f"✅ {P_COMPLET}", n_complet)
+    p2.metric("↩️ Entrants (chargés M-1)", n_entrant,
+              help="Ex. chargé le 30/04, déchargé le 02/05 → présent dans l'export de mai.")
+    p3.metric("↪️ Sortants (déchargés M+1)", n_sortant,
+              help="Chargé dans le mois, déchargé le mois suivant.")
+    p4.metric("🚫 Hors mois", n_hors)
+
+    # Périmètre retenu
+    df = df_all[df_all["_periode"].isin(cats_gardees)].copy()
+    n_exclus = len(df_all) - len(df)
+
+    if n_exclus:
+        ca_exclu = df_all[~df_all["_periode"].isin(cats_gardees)]["ventes_totales"].sum()
+        st.warning(
+            f"🚫 **{n_exclus} dossier(s) exclus** du périmètre "
+            f"({ca_exclu:,.0f} € de CA) — aucun km ni appel PTV ne sera calculé dessus."
+        )
+
+    if df.empty:
+        st.error("❌ Le périmètre retenu est vide. Élargis la règle d'attribution.")
+        st.stop()
+
+    periode_label = _libelle_mois(mois)
+
+    st.divider()
 
     # ── KPIs globaux ──────────────────────────────────────────
     st.markdown(f"### 📊 Aperçu — {periode_label}")
@@ -586,7 +796,6 @@ if file_tract:
             placeholder="Tous les tractionnaires", key="flt_tract",
         )
     with f2:
-        # Cascade : véhicules restreints aux tractionnaires sélectionnés
         _base_veh = df[df["tractionnaire"].isin(filtre_tract)] if filtre_tract else df
         veh_dispo = _opts(_base_veh["vehicule"])
         filtre_veh = st.multiselect(
@@ -619,7 +828,6 @@ if file_tract:
     if filtre_statut:
         df_display = df_display[df_display["statut"].isin(filtre_statut)]
 
-    # KPIs filtre
     if filtre_tract or filtre_veh or filtre_chauff or filtre_statut:
         _ca_f = df_display["ventes_totales"].sum()
         _nd_f = len(df_display)
@@ -630,11 +838,10 @@ if file_tract:
         fk4.metric("📈 CA moy/dossier",         f"{_ca_f/_nd_f:,.0f} €" if _nd_f else "—")
         fk5.metric("% du CA total",             f"{_ca_f/ca_total*100:.1f}%" if ca_total else "—")
 
-    # Tableau
     cols_show = {
         "dossier": "N° Dossier", "tractionnaire": "Tractionnaire",
         "chauffeur": "Chauffeur", "vehicule": "Véhicule", "remorque": "Remorque",
-        "client": "Client", "statut": "Statut",
+        "client": "Client", "statut": "Statut", "_periode": "Période",
         "date_charg_fmt": "Date chargement", "localite_charg": "Chargement",
         "date_decharg_fmt": "Date déchargement", "localite_decharg": "Déchargement",
         "ventes_totales": "CA (€)",
@@ -656,8 +863,7 @@ if file_tract:
         ).round(1)
         df_res_t["CA moy/dossier"] = (df_res_t["CA_Total"] / df_res_t["Dossiers"]).round(0)
         df_res_t = df_res_t.rename(columns={"tractionnaire": "Tractionnaire", "CA_Total": "CA Total (€)"})
-        df_res_t = df_res_t.sort_values("CA Total (€)", ascending=False)
-        st.dataframe(df_res_t, use_container_width=True)
+        st.dataframe(df_res_t.sort_values("CA Total (€)", ascending=False), use_container_width=True)
 
     with r_tab2:
         df_res_v = df_display[df_display["vehicule"] != ""].groupby("vehicule", as_index=False).agg(
@@ -667,29 +873,28 @@ if file_tract:
         ).round(1)
         df_res_v["CA moy/dossier"] = (df_res_v["CA_Total"] / df_res_v["Dossiers"]).round(0)
         df_res_v = df_res_v.rename(columns={"vehicule": "Véhicule", "CA_Total": "CA Total (€)"})
-        df_res_v = df_res_v.sort_values("CA Total (€)", ascending=False)
-        st.dataframe(df_res_v, use_container_width=True)
+        st.dataframe(df_res_v.sort_values("CA Total (€)", ascending=False), use_container_width=True)
 
     st.divider()
 
     # ══════════════════════════════════════════════════════════
-    #  CALCUL PTV — sélection tractionnaire + véhicule
+    #  CALCUL PTV
     # ══════════════════════════════════════════════════════════
     st.markdown("### 🗺️ Calcul KM via PTV")
     st.caption(
-        "⚠️ Le périmètre PTV est indépendant des filtres du tableau : "
-        "les km à vide se calculent sur la chronologie **complète** de chaque camion "
-        "(un filtre statut fausserait l'enchaînement)."
+        "⚠️ Le périmètre PTV suit la règle de période ci-dessus, mais **pas** les filtres "
+        "du tableau (statut/chauffeur) : les km à vide se calculent sur la chronologie "
+        "complète de chaque camion — un filtre statut fausserait l'enchaînement."
     )
 
-    p1, p2 = st.columns(2)
-    with p1:
+    pv1, pv2 = st.columns(2)
+    with pv1:
         tract_ptv = st.multiselect(
             "🏢 Tractionnaires à calculer :",
             options=tract_dispo, default=[],
             placeholder="Tous les tractionnaires", key="ptv_tract",
         )
-    with p2:
+    with pv2:
         _base_ptv_veh = df[df["tractionnaire"].isin(tract_ptv)] if tract_ptv else df
         veh_ptv_dispo = _opts(_base_ptv_veh["vehicule"])
         veh_ptv = st.multiselect(
@@ -698,16 +903,25 @@ if file_tract:
             placeholder="Tous les camions du périmètre", key="ptv_veh",
         )
 
-    c1, c2 = st.columns([1, 2])
-    with c1:
+    o1, o2, o3 = st.columns([1, 1, 1])
+    with o1:
         calc_vide = st.toggle("⚡ Calculer les KM à vide", value=True, key="ptv_calc_vide")
-    with c2:
-        if st.button("✅ Reprendre la sélection du tableau", use_container_width=False):
+    with o2:
+        gap_max = st.number_input(
+            "Gap max à vide (jours)", min_value=0, max_value=31,
+            value=GAP_VIDE_DEFAUT, step=1, key="ptv_gap",
+            help="Au-delà de ce délai entre un déchargement et le chargement suivant "
+                 "du même camion, le tronçon à vide est considéré comme fictif "
+                 "(le camion n'est pas resté sur place) et n'est pas calculé.",
+            disabled=not calc_vide,
+        )
+    with o3:
+        st.write("")
+        if st.button("✅ Reprendre la sélection du tableau"):
             st.session_state["ptv_tract"] = list(filtre_tract)
             st.session_state["ptv_veh"]   = list(filtre_veh)
             st.rerun()
 
-    # Construction du périmètre PTV
     df_ptv_scope = df.copy()
     if tract_ptv:
         df_ptv_scope = df_ptv_scope[df_ptv_scope["tractionnaire"].isin(tract_ptv)]
@@ -718,11 +932,10 @@ if file_tract:
     if not selection_faite:
         df_ptv_scope = pd.DataFrame(columns=df.columns)
 
-    if selection_faite:
-        nb_dos  = len(df_ptv_scope)
-        nb_veh  = len(_opts(df_ptv_scope["vehicule"]))
-        # Estimation grossière du nombre d'appels PTV
-        nb_pts  = len(set(
+    if selection_faite and not df_ptv_scope.empty:
+        nb_dos = len(df_ptv_scope)
+        nb_veh = len(_opts(df_ptv_scope["vehicule"]))
+        nb_pts = len(set(
             list(zip(df_ptv_scope["localite_charg"], df_ptv_scope["cp_charg"], df_ptv_scope["pays_charg"])) +
             list(zip(df_ptv_scope["localite_decharg"], df_ptv_scope["cp_decharg"], df_ptv_scope["pays_decharg"]))
         ))
@@ -730,11 +943,11 @@ if file_tract:
         st.info(
             f"ℹ️ **{nb_dos} dossiers** · **{nb_veh} camion(s)** · "
             f"~{nb_pts} géocodages + {nb_dos} routes chargées"
-            + (f" + ~{nb_legs_vide} routes à vide" if calc_vide else " (km à vide désactivés)")
+            + (f" + ≤{nb_legs_vide} routes à vide" if calc_vide else " (km à vide désactivés)")
         )
 
-    btn_ptv = st.button("🚀 Lancer le calcul PTV", disabled=(not selection_faite or df_ptv_scope.empty),
-                        type="primary")
+    btn_ptv = st.button("🚀 Lancer le calcul PTV",
+                        disabled=(not selection_faite or df_ptv_scope.empty), type="primary")
 
     if btn_ptv and selection_faite and not df_ptv_scope.empty:
         progress_bar = st.progress(0.0)
@@ -746,11 +959,13 @@ if file_tract:
                 progress_bar.progress(min(max(pct, 0.0), 1.0))
 
         try:
-            df_ptv_result, df_vide_result = compute_km(
-                df_ptv_scope, progress_cb=_progress, calc_vide=calc_vide
+            df_ptv_result, df_vide_result, stats = compute_km(
+                df_ptv_scope, progress_cb=_progress,
+                calc_vide=calc_vide, gap_max_jours=int(gap_max),
             )
             st.session_state["df_ptv_result"]  = df_ptv_result
             st.session_state["df_vide_result"] = df_vide_result
+            st.session_state["ptv_stats"]      = stats
             progress_bar.progress(1.0)
             status_text.success("✅ Calcul PTV terminé !")
         except Exception as e:
@@ -762,11 +977,19 @@ if file_tract:
     if "df_ptv_result" in st.session_state:
         df_r      = st.session_state["df_ptv_result"]
         df_vide_r = st.session_state.get("df_vide_result", pd.DataFrame())
+        stats     = st.session_state.get("ptv_stats", {})
 
         st.divider()
         st.markdown("### 📈 Résultats KM")
 
-        # ── Filtres sur les résultats ─────────────────────────
+        if stats:
+            st.caption(
+                f"🔧 {stats.get('appels_route', 0)} routes appelées · "
+                f"{stats.get('routes_cache', 0)} servies par le cache · "
+                f"{stats.get('vide_ignores', 0)} tronçons à vide ignorés (gap/incohérence) · "
+                f"{stats.get('vide_meme_lieu', 0)} tronçons à 0 km (même lieu)"
+            )
+
         rf1, rf2, rf3 = st.columns([2, 2, 1])
         with rf1:
             res_tract_dispo = _opts(df_r["tractionnaire"])
@@ -784,8 +1007,8 @@ if file_tract:
         with rf3:
             st.write("")
             if st.button("🗑️ Effacer résultats"):
-                st.session_state.pop("df_ptv_result", None)
-                st.session_state.pop("df_vide_result", None)
+                for k in ("df_ptv_result", "df_vide_result", "ptv_stats"):
+                    st.session_state.pop(k, None)
                 st.rerun()
 
         df_rf = df_r.copy()
@@ -827,13 +1050,13 @@ if file_tract:
             df_detail_show["rentabilite"] = (
                 df_detail_show["ventes_totales"] / df_detail_show["km_total_complet"].replace(0, np.nan)
             ).round(2)
-            # Tri chronologique par camion : reflète l'enchaînement réel des tournées
             df_detail_show = df_detail_show.sort_values(
                 ["vehicule", "_date_charg_dt"], na_position="last"
             )
             cols_det = {
                 "dossier": "N° Dossier", "tractionnaire": "Tractionnaire",
                 "chauffeur": "Chauffeur", "vehicule": "Véhicule", "client": "Client",
+                "_periode": "Période",
                 "date_charg_fmt": "Date chargement", "localite_charg": "Chargement",
                 "date_decharg_fmt": "Date déchargement", "localite_decharg": "Déchargement",
                 "ventes_totales": "CA (€)", "km_ptv": "KM Chargé",
@@ -857,26 +1080,29 @@ if file_tract:
 
         with tab4:
             if not df_vide_rf.empty:
+                nb_ignores = int((df_vide_rf["km_vide"].isna()).sum())
+                if nb_ignores:
+                    st.caption(f"⚠️ {nb_ignores} tronçon(s) non calculés — voir colonne « Statut tronçon ».")
                 st.dataframe(
                     df_vide_rf.rename(columns={
                         "vehicule": "Véhicule", "tractionnaire": "Tractionnaire",
                         "dossier_depart": "Dossier départ", "dossier_arrivee": "Dossier arrivée",
                         "ville_depart": "Ville départ", "ville_arrivee": "Ville arrivée",
-                        "date_depart": "Date", "km_vide": "KM à vide",
+                        "date_depart": "Date", "gap_jours": "Gap (j)",
+                        "statut_leg": "Statut tronçon", "km_vide": "KM à vide",
                     }),
                     use_container_width=True,
                 )
             else:
                 st.info("Aucun km à vide calculé.")
 
-        # ── Export ────────────────────────────────────────────
         st.divider()
         excel_bytes = export_excel(df_rf, df_res_ptv_t, df_res_ptv_v, df_vide_rf)
         if excel_bytes:
             st.download_button(
                 label="📥 Télécharger le rapport Excel",
                 data=excel_bytes,
-                file_name="Rapport_Tractionnaires_KM.xlsx",
+                file_name=f"Rapport_Tractionnaires_KM_{periode_label.replace(' ', '_')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
             )
@@ -886,15 +1112,20 @@ else:
     #### Comment utiliser cet outil
 
     1. **Chargez l'export tractionnaires** (.xlsx)
-    2. Consultez l'**aperçu global** et les résumés CA (tractionnaire / véhicule)
+    2. Vérifiez la **période d'analyse** : le mois est déduit des déchargements.
+       Les dossiers à cheval sont classés **Entrant** (chargé le mois précédent,
+       ex. 30/04 → 02/05) ou **Sortant** (déchargé le mois suivant).
+       Choisissez la règle d'attribution : tout inclure, mois strict, ou personnalisé.
     3. Filtrez le tableau par **tractionnaire, véhicule, chauffeur ou statut**
-    4. Dans la section PTV, sélectionnez les **tractionnaires et/ou camions** à calculer,
-       puis lancez le calcul
+    4. Sélectionnez les **tractionnaires et/ou camions** à calculer, puis lancez le PTV
     5. Filtrez les résultats et **téléchargez le rapport Excel**
 
-    > ⚠️ Les KM à vide s'appuient sur la chronologie complète de chaque camion.
-    > Ne filtre pas sur le statut de facturation avant un calcul PTV : l'enchaînement
-    > déchargement → chargement suivant serait faussé.
+    ##### Km parasites évités
+    - Les dossiers exclus par la règle de période ne génèrent **aucun appel PTV**
+    - Deux dossiers d'un camion espacés de plus de X jours → tronçon à vide **ignoré**
+      (le camion n'est pas resté sur place, le "vide" serait fictif)
+    - Déchargement et chargement suivant au même endroit → **0 km**, aucun appel
+    - Une paire (départ, arrivée) déjà calculée est **servie par le cache**
 
     > ⚙️ La clé PTV doit être configurée dans `.env` (`PTV_API_KEY`).
     """)
