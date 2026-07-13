@@ -554,6 +554,29 @@ def compute_km(df: pd.DataFrame,
 #  RESUMES
 # ══════════════════════════════════════════════════════════════════
 
+COLS_APERCU = {
+    "dossier":          "N° Dossier",
+    "_periode":         "Période",
+    "tractionnaire":    "Tractionnaire",
+    "vehicule":         "Véhicule",
+    "date_charg_fmt":   "Date chargement",
+    "localite_charg":   "Chargement",
+    "date_decharg_fmt": "Date déchargement",
+    "localite_decharg": "Déchargement",
+    "client":           "Client",
+    "statut":           "Statut",
+    "ventes_totales":   "CA (€)",
+}
+
+
+def tableau_apercu(dfx: pd.DataFrame) -> pd.DataFrame:
+    """Vue courte d'un lot de dossiers : n°, dates, villes, CA."""
+    if dfx.empty:
+        return pd.DataFrame(columns=list(COLS_APERCU.values()))
+    d = dfx.sort_values(["_date_charg_dt", "dossier"], na_position="last")
+    return d[[c for c in COLS_APERCU if c in d.columns]].rename(columns=COLS_APERCU)
+
+
 def build_resume(df: pd.DataFrame, cle: str, label: str) -> pd.DataFrame:
     res = df.groupby(cle, as_index=False).agg(
         Dossiers   = ("dossier",         "count"),
@@ -751,16 +774,46 @@ if file_tract:
               help="Chargé dans le mois, déchargé le mois suivant.")
     p4.metric("🚫 Hors mois", n_hors)
 
+    # ── Détail des dossiers par catégorie (audit) ─────────────
+    for _cat, _icone in [(P_ENTRANT, "↩️"), (P_SORTANT, "↪️"), (P_HORS, "🚫")]:
+        _sub = df_all[df_all["_periode"] == _cat]
+        if _sub.empty:
+            continue
+        _ca = _sub["ventes_totales"].sum()
+        _statut = "conservés" if _cat in cats_gardees else "exclus"
+        with st.expander(
+            f"{_icone} {_cat} — {len(_sub)} dossier(s) · {_ca:,.0f} € · **{_statut}**"
+        ):
+            st.dataframe(tableau_apercu(_sub), use_container_width=True, hide_index=True)
+
     # Périmètre retenu
     df = df_all[df_all["_periode"].isin(cats_gardees)].copy()
-    n_exclus = len(df_all) - len(df)
+    df_exclus = df_all[~df_all["_periode"].isin(cats_gardees)].copy()
+    n_exclus = len(df_exclus)
 
     if n_exclus:
-        ca_exclu = df_all[~df_all["_periode"].isin(cats_gardees)]["ventes_totales"].sum()
+        ca_exclu = df_exclus["ventes_totales"].sum()
         st.warning(
             f"🚫 **{n_exclus} dossier(s) exclus** du périmètre "
             f"({ca_exclu:,.0f} € de CA) — aucun km ni appel PTV ne sera calculé dessus."
         )
+        with st.expander(f"📄 Voir les {n_exclus} dossiers exclus (n° + dates)", expanded=False):
+            df_exc_tab = tableau_apercu(df_exclus)
+            st.dataframe(df_exc_tab, use_container_width=True, hide_index=True, height=280)
+
+            # Répartition par motif d'exclusion
+            _rep = df_exclus["_periode"].value_counts()
+            st.caption(
+                "Motifs : " + " · ".join(f"{k} = {v}" for k, v in _rep.items())
+            )
+
+            st.download_button(
+                "📥 Exporter les dossiers exclus (CSV)",
+                data=df_exc_tab.to_csv(index=False, sep=";").encode("utf-8-sig"),
+                file_name="Dossiers_exclus.csv",
+                mime="text/csv",
+                key="dl_exclus",
+            )
 
     if df.empty:
         st.error("❌ Le périmètre retenu est vide. Élargis la règle d'attribution.")
