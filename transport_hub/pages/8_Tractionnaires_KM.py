@@ -107,6 +107,12 @@ P_ENTRANT = "Entrant (chargé M-1)"
 P_SORTANT = "Sortant (déchargé M+1)"
 P_HORS    = "Hors mois"
 
+# Version du schéma des résultats stockés en session.
+# À incrémenter dès qu'on change les colonnes produites par compute_km :
+# un résultat calculé par une ancienne version est alors invalidé au lieu
+# de faire planter l'affichage (KeyError sur une colonne absente).
+RESULT_SCHEMA = "v2"
+
 # Statuts de tronçon à vide
 S_OK          = "OK"
 S_MEME_LIEU   = "Même lieu"
@@ -160,6 +166,30 @@ def _pt(row, sens: str) -> Tuple[str, str, str]:
 
 def _pt_vide(p: Tuple[str, str, str]) -> bool:
     return not (p[0] or p[1])
+
+
+def _ca_col(df: pd.DataFrame) -> str:
+    """Colonne de CA à utiliser : 'ventes_retenues' si le prorata a été appliqué,
+    sinon le CA brut. Évite toute dépendance dure à une colonne optionnelle."""
+    return "ventes_retenues" if "ventes_retenues" in df.columns else "ventes_totales"
+
+
+def _normaliser_resultat(df: pd.DataFrame) -> pd.DataFrame:
+    """Filet de sécurité : garantit la présence des colonnes attendues par
+    l'affichage, même sur un DataFrame issu d'une version antérieure."""
+    df = df.copy()
+    if "ventes_retenues" not in df.columns:
+        df["ventes_retenues"] = df.get("ventes_totales", 0.0)
+    if "_ligne_km" not in df.columns:
+        df["_ligne_km"] = True
+    if "_multi_veh" not in df.columns:
+        df["_multi_veh"] = False
+    for c in ("km_ptv", "km_vide"):
+        if c not in df.columns:
+            df[c] = 0.0
+    if "km_total_complet" not in df.columns:
+        df["km_total_complet"] = df["km_ptv"].fillna(0) + df["km_vide"].fillna(0)
+    return df
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -731,7 +761,7 @@ def build_resume(df: pd.DataFrame, cle: str, label: str) -> pd.DataFrame:
     CORRECTIF BUG 6 : 'Dossiers' compte les dossiers UNIQUES, pas les lignes.
     Les km sont portés par une seule ligne par dossier → la somme est juste.
     """
-    ca_col = "ventes_retenues" if "ventes_retenues" in df.columns else "ventes_totales"
+    ca_col = _ca_col(df)
     res = df.groupby(cle, as_index=False).agg(
         Dossiers   = ("dossier",  "nunique"),
         Lignes     = ("dossier",  "count"),
@@ -784,9 +814,9 @@ def export_excel(df_detail, df_resume_tract, df_resume_veh=None,
                 "_ligne_km":        "Ligne porteuse des KM",
                 "_multi_veh":       "Dossier multi-véhicules",
             }
-            df_d = df_detail.copy()
+            df_d = _normaliser_resultat(df_detail)
             df_d["rentabilite"] = (
-                df_d["ventes_retenues"] / df_d["km_total_complet"].replace(0, np.nan)
+                df_d[_ca_col(df_d)] / df_d["km_total_complet"].replace(0, np.nan)
             ).round(2)
             cols = [c for c in col_rename_detail if c in df_d.columns]
             df_d = df_d[cols].rename(columns=col_rename_detail).fillna("")
@@ -1164,16 +1194,40 @@ if file_tract:
             st.session_state["df_vide_result"] = df_vide_result
             st.session_state["df_dos_result"]  = df_dos_result
             st.session_state["ptv_stats"]      = stats
+            st.session_state["ptv_schema"]     = RESULT_SCHEMA
             progress_bar.progress(1.0)
             status_text.success("✅ Calcul PTV terminé !")
         except Exception as e:
-            st.error(f"❌ Erreur calcul PTV : {e}")
+            # Le calcul a échoué : on PURGE les anciens résultats, sinon le bloc
+            # d'affichage ci-dessous ré-affiche le DataFrame du run précédent
+            # (éventuellement produit par une version antérieure du code) et
+            # plante sur une colonne absente.
+            for k in ("df_ptv_result", "df_vide_result", "df_dos_result",
+                      "ptv_stats", "ptv_schema"):
+                st.session_state.pop(k, None)
+            st.error(f"❌ Erreur calcul PTV : {type(e).__name__} — {e}")
+            with st.expander("🐞 Détail technique"):
+                import traceback
+                st.code(traceback.format_exc())
 
     # ══════════════════════════════════════════════════════════
     #  RESULTATS PTV
     # ══════════════════════════════════════════════════════════
+    # Résultat en session mais produit par une version antérieure du code :
+    # on l'invalide au lieu de le rendre (c'était la cause du KeyError
+    # 'ventes_retenues').
+    if ("df_ptv_result" in st.session_state
+            and st.session_state.get("ptv_schema") != RESULT_SCHEMA):
+        for k in ("df_ptv_result", "df_vide_result", "df_dos_result",
+                  "ptv_stats", "ptv_schema"):
+            st.session_state.pop(k, None)
+        st.warning(
+            "♻️ Les résultats en mémoire venaient d'une version précédente de "
+            "l'outil et ont été effacés. Relance le calcul PTV."
+        )
+
     if "df_ptv_result" in st.session_state:
-        df_r      = st.session_state["df_ptv_result"]
+        df_r      = _normaliser_resultat(st.session_state["df_ptv_result"])
         df_vide_r = st.session_state.get("df_vide_result", pd.DataFrame())
         df_dos_r  = st.session_state.get("df_dos_result", pd.DataFrame())
         stats     = st.session_state.get("ptv_stats", {})
