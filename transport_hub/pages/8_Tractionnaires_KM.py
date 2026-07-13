@@ -287,6 +287,12 @@ def parse_tractionnaires(file) -> pd.DataFrame:
     )
     df["_date_dt"] = df["_date_charg_dt"]
 
+    # Dates formatées pour affichage (fallback = valeur brute si non parsable)
+    df["date_charg_fmt"] = df["_date_charg_dt"].dt.strftime("%d/%m/%Y")
+    df["date_charg_fmt"] = df["date_charg_fmt"].fillna(df["date_charg"].apply(_clean))
+    df["date_decharg_fmt"] = df["_date_decharg_dt"].dt.strftime("%d/%m/%Y")
+    df["date_decharg_fmt"] = df["date_decharg_fmt"].fillna(df["date_decharg"].apply(_clean))
+
     return df
 
 
@@ -451,7 +457,9 @@ def export_excel(df_detail: pd.DataFrame,
                 "dossier":          "N° Dossier",
                 "client":           "Client",
                 "statut":           "Statut facturation",
+                "date_charg_fmt":   "Date chargement",
                 "localite_charg":   "Localité chargement",
+                "date_decharg_fmt": "Date déchargement",
                 "localite_decharg": "Localité déchargement",
                 "ventes_totales":   "Ventes totales (€)",
                 "km_ptv":           "KM Chargé",
@@ -627,10 +635,12 @@ if file_tract:
         "dossier": "N° Dossier", "tractionnaire": "Tractionnaire",
         "chauffeur": "Chauffeur", "vehicule": "Véhicule", "remorque": "Remorque",
         "client": "Client", "statut": "Statut",
-        "localite_charg": "Chargement", "localite_decharg": "Déchargement",
+        "date_charg_fmt": "Date chargement", "localite_charg": "Chargement",
+        "date_decharg_fmt": "Date déchargement", "localite_decharg": "Déchargement",
         "ventes_totales": "CA (€)",
     }
-    df_table = df_display[[c for c in cols_show if c in df_display.columns]].rename(columns=cols_show)
+    df_table = df_display.sort_values("_date_charg_dt", na_position="last")
+    df_table = df_table[[c for c in cols_show if c in df_table.columns]].rename(columns=cols_show)
     st.dataframe(df_table, use_container_width=True, height=380)
 
     st.divider()
@@ -817,10 +827,15 @@ if file_tract:
             df_detail_show["rentabilite"] = (
                 df_detail_show["ventes_totales"] / df_detail_show["km_total_complet"].replace(0, np.nan)
             ).round(2)
+            # Tri chronologique par camion : reflète l'enchaînement réel des tournées
+            df_detail_show = df_detail_show.sort_values(
+                ["vehicule", "_date_charg_dt"], na_position="last"
+            )
             cols_det = {
                 "dossier": "N° Dossier", "tractionnaire": "Tractionnaire",
                 "chauffeur": "Chauffeur", "vehicule": "Véhicule", "client": "Client",
-                "localite_charg": "Chargement", "localite_decharg": "Déchargement",
+                "date_charg_fmt": "Date chargement", "localite_charg": "Chargement",
+                "date_decharg_fmt": "Date déchargement", "localite_decharg": "Déchargement",
                 "ventes_totales": "CA (€)", "km_ptv": "KM Chargé",
                 "km_vide": "KM À Vide", "km_total_complet": "KM Complet", "rentabilite": "€/km",
             }
