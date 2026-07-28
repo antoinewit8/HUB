@@ -1,19 +1,22 @@
 """
-4____Missions_CA_KM.py
+4b____Renta_Departements_CA.py
 ──────────────────────────────────────────────────────────────────
-Outil TX-FLEX : Analyse Missions + CA + Calcul KM PTV
+Rentabilité par DÉPARTEMENT de déchargement — fichier CA seul
 ──────────────────────────────────────────────────────────────────
-Entrées :
-  • Fichier Missions  (.xlsx) — colonnes : N°Dossier, Activité, Date, Heure,
-                                Nom1, Adresse, Numéro, Code pays, CP, Localité,
-                                Chauffeur, Immat. tracteur
-  • Fichier CA        (.xlsx) — colonnes : N°Dossier, Prix transport, Total vente
+Entrée :
+  • Fichier CA (.xlsx) — colonnes utilisées :
+      N° Dossier, Date chargement, Type de transport, Client facturation,
+      Localité/C.P./Pays chargement, Localité/C.P./Pays déchargement,
+      Département déchargement, Etat vente, Prix transport, Total des ventes
 
-Sorties :
-  • Tableau consolidé par chauffeur/dossier avec stops + CA
-  • Calcul PTV : km totaux (chaîne complète) + km à vide (DECHARGER→CHARGER)
-  • Rentabilité par DÉPARTEMENT de déchargement (France)
-  • Export Excel
+Sortie :
+  • KM chargés par dossier (PTV, chargement → déchargement)
+  • Rentabilité €/km par département de déchargement
+  • Export Excel / CSV
+
+⚠️ Limite : le fichier CA ne contient pas le chauffeur/tracteur, donc les
+   KM À VIDE ne peuvent pas être chaînés. Pour ça il faut le fichier missions
+   (page « Analyse Missions + CA + Calcul KM »).
 ──────────────────────────────────────────────────────────────────
 """
 
@@ -25,11 +28,8 @@ import time
 import os
 import io
 import re
-import json
-from typing import Optional, Tuple, Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
-from openpyxl import load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from openpyxl.utils import get_column_letter
 
@@ -48,17 +48,8 @@ RETRY_DELAY  = 2
 MAX_WORKERS  = 4
 VEHICLE      = "EUR_TRAILER_TRUCK"
 
-# ══════════════════════════════════════════════════════════════════
-#  IMPORTS excel_handler_km + ptv_router_km
-# ══════════════════════════════════════════════════════════════════
-
 try:
-    from excel_handler_km import (
-        PAYS_MAP, CP_LENGTHS, ZONE_CORRECTIONS,
-        CITY_CORRECTIONS, GPS_FIXES_ORIGIN,
-        parse_origin_from_parts,
-    )
-    from ptv_router_km import geocode_address as _ptv_geocode_address
+    from excel_handler_km import PAYS_MAP, parse_origin_from_parts
     _IMPORTS_OK = True
 except ImportError:
     _IMPORTS_OK = False
@@ -67,26 +58,12 @@ except ImportError:
         "NL": "Netherlands", "E": "Spain", "I": "Italy", "CH": "Switzerland",
         "GB": "United Kingdom", "A": "Austria", "P": "Portugal",
         "FR": "France", "BE": "Belgium", "DE": "Germany", "LU": "Luxembourg",
+        "IT": "Italy", "ES": "Spain", "AT": "Austria", "PT": "Portugal",
     }
-    CP_LENGTHS        = {}
-    ZONE_CORRECTIONS  = {}
-    CITY_CORRECTIONS  = {}
-    GPS_FIXES_ORIGIN  = {}
 
     def parse_origin_from_parts(city, cp, country):
         pays_full = PAYS_MAP.get(str(country).strip().upper(), country)
         return ", ".join(p for p in [city, cp, pays_full] if p and p != "nan")
-
-    def _ptv_geocode_address(address):
-        return None
-
-
-@st.cache_data(show_spinner=False)
-def geocode_address(address):
-    address = str(address).strip()
-    if not address or address.lower() in ("nan", ""):
-        return None
-    return _ptv_geocode_address(address)
 
 
 PAYS_TO_ISO2 = {
@@ -94,6 +71,33 @@ PAYS_TO_ISO2 = {
     "E": "ES", "A": "AT", "P": "PT", "CH": "CH", "GB": "GB",
     "NL": "NL", "FR": "FR", "BE": "BE", "DE": "DE", "LU": "LU",
     "IT": "IT", "ES": "ES", "AT": "AT", "PT": "PT",
+}
+
+PAYS_LABELS = {
+    "F": "🇫🇷 France", "B": "🇧🇪 Belgique", "L": "🇱🇺 Luxembourg",
+    "NL": "🇳🇱 Pays-Bas", "D": "🇩🇪 Allemagne", "CH": "🇨🇭 Suisse",
+    "I": "🇮🇹 Italie", "E": "🇪🇸 Espagne", "GB": "🇬🇧 Royaume-Uni",
+    "A": "🇦🇹 Autriche", "P": "🇵🇹 Portugal",
+}
+
+# ══════════════════════════════════════════════════════════════════
+#  BASES DE CALCUL DU CA
+#  Total des ventes = Prix transport + Suppléments + S.G. + Heures d'attente
+# ══════════════════════════════════════════════════════════════════
+
+BASES_CA = {
+    "💶 Total des ventes":            "total_vente",
+    "🚚 Prix transport seul":         "prix_transport",
+    "⛽ Prix transport + S.G.":       "prix_sg",
+    "➕ Prix transport + suppléments": "prix_supp",
+}
+
+BASES_AIDE = {
+    "total_vente":    "Prix transport + suppléments + S.G. + heures d'attente (facturation totale).",
+    "prix_transport": "Prix transport nu, hors surcharge gasoil, suppléments et attente — "
+                      "mesure la performance tarifaire pure de la ligne.",
+    "prix_sg":        "Prix transport + surcharge gasoil, hors suppléments et attente.",
+    "prix_supp":      "Prix transport + suppléments, hors surcharge gasoil et attente.",
 }
 
 
@@ -135,7 +139,6 @@ PAYS_FRANCE = {"F", "FR", "FRA", "FRANCE"}
 
 
 def normalize_cp_fr(cp):
-    """Nettoie un code postal français : '1000' -> '01000', '69 007' -> '69007'."""
     cp = re.sub(r"[^0-9A-Za-z]", "", str(cp or "").strip()).upper()
     if not cp or cp == "NAN":
         return ""
@@ -145,35 +148,26 @@ def normalize_cp_fr(cp):
 
 
 def extract_departement(cp, pays):
-    """
-    Retourne le code département FR ('01'..'95', '2A', '2B', '971'...) ou None.
-    Ne retourne un département que si le pays est la France (ou vide + CP FR à 5 chiffres).
-    """
+    """Code département FR ('01'..'95', '2A', '2B', '971'...) ou None."""
     pays_n = str(pays or "").strip().upper()
     cp_n   = normalize_cp_fr(cp)
 
     if not cp_n:
         return None
-
     if pays_n not in PAYS_FRANCE:
-        # Pays vide : on accepte uniquement un CP français plausible (5 chiffres)
         if pays_n not in ("", "NAN", "NONE"):
             return None
         if not (cp_n.isdigit() and len(cp_n) == 5):
             return None
 
-    # Corse
     if cp_n.startswith("2A"):
         return "2A"
     if cp_n.startswith("2B"):
         return "2B"
     if cp_n.startswith("20") and cp_n.isdigit() and len(cp_n) == 5:
         return "2A" if int(cp_n) < 20200 else "2B"
-
-    # DOM
     if cp_n[:2] in ("97", "98") and len(cp_n) >= 3:
         return cp_n[:3]
-
     if len(cp_n) >= 2:
         return cp_n[:2]
     return None
@@ -186,6 +180,10 @@ def dept_label(code):
     return f"{code} — {nom}" if nom else str(code)
 
 
+# ══════════════════════════════════════════════════════════════════
+#  PTV — GÉOCODAGE + ROUTE
+# ══════════════════════════════════════════════════════════════════
+
 def _ptv_by_text(query):
     if not query:
         return None
@@ -194,8 +192,7 @@ def _ptv_by_text(query):
             resp = requests.get(
                 f"{GEOCODE_URL}/locations/by-text",
                 params={"searchText": query},
-                headers=HEADERS,
-                timeout=15,
+                headers=HEADERS, timeout=15,
             )
             if resp.status_code == 429:
                 time.sleep(RETRY_DELAY * attempt)
@@ -220,14 +217,11 @@ def _ptv_by_postal_code(cp, iso2):
             resp = requests.get(
                 f"{GEOCODE_URL}/locations/by-postal-code",
                 params={"postalCode": cp, "countryCode": iso2},
-                headers=HEADERS,
-                timeout=15,
+                headers=HEADERS, timeout=15,
             )
             if resp.status_code == 429:
                 time.sleep(RETRY_DELAY * attempt)
                 continue
-            if resp.status_code in (400, 404):
-                return None
             if resp.status_code != 200:
                 return None
             locs = resp.json().get("locations", [])
@@ -240,9 +234,12 @@ def _ptv_by_postal_code(cp, iso2):
     return None
 
 
-def geocode_with_fallback(adresse_complete, ville, cp, pays):
-    pays_full = PAYS_MAP.get(pays.upper(), pays) if pays else ""
-    iso2      = PAYS_TO_ISO2.get(pays.upper(), pays.upper() if len(pays) == 2 else "")
+def geocode_point(ville, cp, pays):
+    pays      = str(pays or "").strip().upper()
+    pays_full = PAYS_MAP.get(pays, pays)
+    iso2      = PAYS_TO_ISO2.get(pays, pays if len(pays) == 2 else "")
+    cp        = str(cp or "").strip()
+    ville     = str(ville or "").strip()
 
     if ville and cp and pays_full:
         r = _ptv_by_text(f"{ville}, {cp}, {pays_full}")
@@ -256,62 +253,26 @@ def geocode_with_fallback(adresse_complete, ville, cp, pays):
         r = _ptv_by_text(f"{ville}, {pays_full}")
         if r:
             return r
-    if adresse_complete:
-        r = _ptv_by_text(adresse_complete)
-        if r:
-            return r
     return None
 
 
-def build_address_string(row):
-    def clean(v):
-        v = str(v or "").strip()
-        return "" if v.lower() in ("nan", "none") else v
-
-    ville   = clean(row.get("localite",    ""))
-    cp      = clean(row.get("code_postal", ""))
-    pays    = clean(row.get("code_pays",   "")).upper()
-    adresse = clean(row.get("adresse",     ""))
-    numero  = clean(row.get("numero",      ""))
-    nom     = clean(row.get("nom1",        ""))
-
-    addr = parse_origin_from_parts(ville, cp, pays)
-    rue  = " ".join(p for p in [numero, adresse] if p).strip()
-
-    if rue and addr:
-        addr = f"{rue}, {addr}"
-    elif rue:
-        addr = rue
-
-    return addr if addr else nom
-
-
-# ══════════════════════════════════════════════════════════════════
-#  CALCUL ROUTE PTV
-# ══════════════════════════════════════════════════════════════════
-
-def calculate_route(coords_list):
-    if len(coords_list) < 2:
+def calculate_km(coord_a, coord_b):
+    if not coord_a or not coord_b:
         return None
-
-    query_params = [
+    params = [
         ("profile", VEHICLE),
-        ("results", "POLYLINE"),
+        ("waypoints", f"{coord_a[0]},{coord_a[1]}"),
+        ("waypoints", f"{coord_b[0]},{coord_b[1]}"),
     ]
-    for i, (lat, lon) in enumerate(coords_list):
-        if 0 < i < len(coords_list) - 1:
-            query_params.append(("waypoints", f"{lat},{lon};radius=5000"))
-        else:
-            query_params.append(("waypoints", f"{lat},{lon}"))
-
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             resp = requests.get(
-                f"{PTV_BASE_URL}/routes",
-                headers=HEADERS,
-                params=query_params,
-                timeout=30,
+                f"{PTV_BASE_URL}/routes", headers=HEADERS,
+                params=params, timeout=30,
             )
+            if resp.status_code == 429:
+                time.sleep(RETRY_DELAY * attempt)
+                continue
             if resp.status_code != 200:
                 if attempt < MAX_RETRIES:
                     time.sleep(RETRY_DELAY)
@@ -328,28 +289,8 @@ def calculate_route(coords_list):
 
 
 # ══════════════════════════════════════════════════════════════════
-#  PARSING FICHIER MISSIONS
+#  PARSING FICHIER CA
 # ══════════════════════════════════════════════════════════════════
-
-ACTIVITE_KEYWORDS = {
-    "charger":       "CHARGEMENT",
-    "chargement":    "CHARGEMENT",
-    "décharger":     "DECHARGEMENT",
-    "dechargement":  "DECHARGEMENT",
-    "déchargement":  "DECHARGEMENT",
-    "decharger":     "DECHARGEMENT",
-    "douane":        "DOUANE",
-    "transit":       "DOUANE",
-}
-
-
-def normalize_activite(val):
-    v = str(val).strip().lower()
-    for kw, mapped in sorted(ACTIVITE_KEYWORDS.items(), key=lambda x: -len(x[0])):
-        if kw in v:
-            return mapped
-    return str(val).strip().upper()
-
 
 def _norm_col(s):
     s = str(s).strip().lower()
@@ -359,136 +300,54 @@ def _norm_col(s):
     return re.sub(r"[^a-z0-9]", "", s)
 
 
-def detect_col(df, keywords):
-    for col in df.columns:
-        col_n = _norm_col(col)
-        for kw in keywords:
-            kw_n = _norm_col(kw)
-            if kw_n == col_n or kw_n in col_n:
-                return col
-    return None
-
-
-MISSIONS_COL_CANDIDATES = {
-    "dossier":     ["N° Dossier", "N°Dossier", "N Dossier", "Dossier", "ndossier"],
-    "activite":    ["Activité", "Activite", "Activité / Enregistrement"],
-    "date":        ["Date"],
-    "heure":       ["Heure"],
-    "transport":   ["Type de transport", "Type transport"],
-    "nom1":        ["Nom 1", "Nom1", "Nom"],
-    "nom2":        ["Nom 2", "Nom2"],
-    "adresse":     ["Adresse", "Address"],
-    "numero":      ["Numéro", "Numero", "N°"],
-    "code_pays":   ["Code pays", "Code Pays", "Pays", "Country"],
-    "departement": ["Département", "Departement"],
-    "code_postal": ["Code postal", "Code Postal", "Code Postal "],
-    "localite":    ["Localité", "Localite", "Ville", "City"],
-    "produit":     ["Produit"],
-    "chauffeur":   ["Chauffeur", "Driver"],
-    "tracteur":    ["Immat. tracteur", "Immat tracteur", "Immat.tracteur",
-                    "Tracteur", "Immatriculation"],
-    "remorque":    ["Remorque"],
-}
-
-
-def parse_missions(file):
-    df = pd.read_excel(file, dtype=str)
-    df.columns = [str(c).strip() for c in df.columns]
-
-    cols_lower = {_norm_col(c): c for c in df.columns}
-
-    col_map = {}
-    for role, candidates in MISSIONS_COL_CANDIDATES.items():
-        found = None
-        for cand in candidates:
-            key = _norm_col(cand)
-            if key in cols_lower:
-                found = cols_lower[key]
-                break
-        if not found:
-            found = detect_col(df, candidates)
-        col_map[role] = found
-
-    critiques = ["dossier", "activite", "date", "heure", "code_pays", "code_postal", "localite"]
-    manquantes = [r for r in critiques if col_map.get(r) is None]
-    if manquantes:
-        st.warning(
-            f"⚠️ Colonnes non détectées dans le fichier missions : {manquantes}\n"
-            f"Colonnes disponibles : {list(df.columns)}"
-        )
-
-    rename = {v: k for k, v in col_map.items() if v}
-    df = df.rename(columns=rename)
-
-    for col in MISSIONS_COL_CANDIDATES.keys():
-        if col not in df.columns:
-            df[col] = ""
-
-    df["dossier"] = df["dossier"].str.strip()
-    df = df[df["dossier"].notna() & (df["dossier"] != "") & (df["dossier"] != "nan")]
-    df = df[df["dossier"].str.match(r"^\d+", na=False)]
-
-    df["activite_norm"] = df["activite"].apply(normalize_activite)
-
-    import datetime as _dt
-
-    def _combine(date_s, heure_s):
-        date_s  = str(date_s  or "").strip()[:10]
-        heure_s = str(heure_s or "").strip()
-        if not date_s or date_s == "nan":
-            return pd.NaT
-        try:
-            d = _dt.datetime.strptime(date_s, "%Y-%m-%d")
-        except Exception:
-            return pd.NaT
-        for fmt in ("%H:%M:%S", "%H:%M"):
-            try:
-                t = _dt.datetime.strptime(heure_s, fmt)
-                return pd.Timestamp(d.replace(hour=t.hour, minute=t.minute, second=t.second))
-            except Exception:
-                pass
-        return pd.Timestamp(d)
-
-    df["datetime"]         = df.apply(lambda r: _combine(r.get("date", ""), r.get("heure", "")), axis=1)
-    df["adresse_complete"] = df.apply(build_address_string, axis=1)
-
-    return df
-
-
-# ══════════════════════════════════════════════════════════════════
-#  PARSING FICHIER CA
-# ══════════════════════════════════════════════════════════════════
-
-CA_COL_CANDIDATES = {
+CA_COLS = {
     "dossier":          ["N° Dossier", "N°Dossier", "Dossier"],
-    "prix_transport":   ["Prix transport", "Prix Transport"],
-    "total_vente":      ["Total des ventes", "Total ventes", "Total des vente"],
-    "client":           ["Client facturation", "Client Facturation", "Client"],
-    "etat_vente":       ["Etat vente", "État vente", "Etat"],
-    "supplements":      ["Suppléments", "Supplements"],
-    "sg":               ["S.G.", "SG"],
-    "heures_attente":   ["Heures d'attente", "Heures attente"],
+    "reference":        ["Référence", "Reference"],
     "date_charg":       ["Date chargement", "Date Chargement"],
-    "type_transport":   ["Type de transport", "Type transport"],
-    "adr_charg":        ["Adresse chargement", "Adresse Chargement"],
+    "departement_int":  ["Département"],
+    "type_transport":   ["Type de transport"],
+    "type_dossier":     ["Type de dossier"],
+    "client":           ["Client facturation", "Client"],
+    "pays_client":      ["Pays client fac"],
+    "adr_charg":        ["Adresse chargement"],
     "localite_charg":   ["Localité chargement", "Localite chargement"],
-    "cp_charg":         ["C.P. chargement", "CP chargement", "Code postal chargement"],
-    "pays_charg":       ["Pays chargement", "Pays Chargement"],
+    "cp_charg":         ["C.P. chargement", "CP chargement"],
+    "dept_charg_src":   ["Département chargement", "Departement chargement"],
+    "pays_charg":       ["Pays chargement"],
     "adr_decharg":      ["Adresse déchargement", "Adresse dechargement"],
     "localite_decharg": ["Localité déchargement", "Localite dechargement"],
-    "cp_decharg":       ["C.P. déchargement", "CP dechargement", "Code postal dechargement"],
+    "cp_decharg":       ["C.P. déchargement", "CP dechargement"],
+    "dept_decharg_src": ["Département déchargement", "Departement dechargement"],
     "pays_decharg":     ["Pays déchargement", "Pays dechargement"],
+    "produit":          ["Produit"],
+    "type_produit":     ["Type produit"],
+    "etat_vente":       ["Etat vente", "État vente"],
+    "prix_transport":   ["Prix transport"],
+    "supplements":      ["Suppléments", "Supplements"],
+    "sg":               ["S.G.", "SG"],
+    "heures_attente":   ["Heures d'attente"],
+    "total_vente":      ["Total des ventes", "Total ventes"],
+    "total_achat":      ["Total des achats", "Total achats"],
 }
+
+
+def to_float(s):
+    try:
+        return float(
+            str(s).replace(",", ".").replace("\xa0", "")
+            .replace(" ", "").replace("€", "").strip()
+        )
+    except Exception:
+        return 0.0
 
 
 def parse_ca(file):
     df = pd.read_excel(file, dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
-
     cols_lower = {_norm_col(c): c for c in df.columns}
 
     col_map = {}
-    for role, candidates in CA_COL_CANDIDATES.items():
+    for role, candidates in CA_COLS.items():
         found = None
         for cand in candidates:
             key = _norm_col(cand)
@@ -497,1237 +356,686 @@ def parse_ca(file):
                 break
         col_map[role] = found
 
-    critiques_ca = ["dossier", "prix_transport", "total_vente"]
-    manquantes_ca = [r for r in critiques_ca if col_map.get(r) is None]
-    if manquantes_ca:
-        st.warning(
-            f"⚠️ Colonnes CA non détectées : {manquantes_ca} — "
-            f"Colonnes disponibles : {list(df.columns)}"
+    manquantes = [r for r in ("dossier", "total_vente", "cp_decharg", "pays_decharg")
+                  if col_map.get(r) is None]
+    if manquantes:
+        st.error(
+            f"❌ Colonnes indispensables non trouvées : {manquantes}\n\n"
+            f"Colonnes du fichier : {list(df.columns)}"
         )
+        st.stop()
 
-    rename = {v: k for k, v in col_map.items() if v}
-    df = df.rename(columns=rename)
-
-    for col in CA_COL_CANDIDATES.keys():
+    df = df.rename(columns={v: k for k, v in col_map.items() if v})
+    for col in CA_COLS:
         if col not in df.columns:
             df[col] = ""
 
-    df["dossier"] = df["dossier"].str.strip()
-    df = df[df["dossier"].notna() & (df["dossier"] != "") & (df["dossier"] != "nan")]
-    df = df[df["dossier"].str.match(r"^\d+", na=False)]
+    df["dossier"] = df["dossier"].astype(str).str.strip()
+    df = df[df["dossier"].str.match(r"^\d+", na=False)].copy()
 
-    def to_float(s):
-        try:
-            return float(
-                str(s).replace(",", ".").replace("\xa0", "").replace(" ", "")
-                .replace("€", "").strip()
-            )
-        except Exception:
-            return 0.0
-
-    df["prix_transport"] = df["prix_transport"].apply(to_float)
-    df["total_vente"]    = df["total_vente"].apply(to_float)
-
-    def _clean(v):
-        v = str(v or "").strip()
-        return "" if v.lower() in ("nan", "none") else v
-
-    def _addr_from_ca(row, prefix):
-        localite = _clean(row.get(f"localite_{prefix}", ""))
-        cp       = _clean(row.get(f"cp_{prefix}", ""))
-        pays     = _clean(row.get(f"pays_{prefix}", "")).upper()
-        return parse_origin_from_parts(localite, cp, pays)
-
-    df["adresse_charg_geo"]   = df.apply(lambda r: _addr_from_ca(r, "charg"),   axis=1)
-    df["adresse_decharg_geo"] = df.apply(lambda r: _addr_from_ca(r, "decharg"), axis=1)
-
-    df_agg = df.groupby("dossier", as_index=False).agg(
-        prix_transport      = ("prix_transport",     "sum"),
-        total_vente         = ("total_vente",        "sum"),
-        client              = ("client",             "first"),
-        etat_vente          = ("etat_vente",         "first"),
-        adresse_charg_geo   = ("adresse_charg_geo",  "first"),
-        adresse_decharg_geo = ("adresse_decharg_geo","first"),
-        localite_charg      = ("localite_charg",     "first"),
-        localite_decharg    = ("localite_decharg",   "first"),
-        cp_charg            = ("cp_charg",           "first"),
-        cp_decharg          = ("cp_decharg",         "first"),
-        pays_charg          = ("pays_charg",         "first"),
-        pays_decharg        = ("pays_decharg",       "first"),
-    )
-
-    return df_agg
-
-
-# ══════════════════════════════════════════════════════════════════
-#  CONSOLIDATION
-# ══════════════════════════════════════════════════════════════════
-
-def consolidate(df_missions, df_ca):
-    rows = []
+    for c in ("prix_transport", "supplements", "sg", "heures_attente",
+              "total_vente", "total_achat"):
+        df[c] = df[c].apply(to_float)
 
     def _c(v):
         v = str(v or "").strip()
         return "" if v.lower() in ("nan", "none") else v
 
-    for dossier, grp in df_missions.groupby("dossier"):
-        grp = grp.sort_values("datetime").reset_index(drop=True)
+    for c in ("localite_charg", "cp_charg", "pays_charg",
+              "localite_decharg", "cp_decharg", "pays_decharg",
+              "client", "etat_vente", "type_transport", "produit"):
+        df[c] = df[c].apply(_c)
 
-        chauffeur = next((v for v in grp["chauffeur"] if v and v not in ("nan", "")), "")
-        tracteur  = next((v for v in grp["tracteur"]  if v and v not in ("nan", "")), "")
-        remorque  = next(
-            (str(v).strip() for v in grp["remorque"] if v and str(v).strip() not in ("nan", "")), ""
-        ) if "remorque" in grp.columns else ""
+    df["pays_charg"]   = df["pays_charg"].str.upper()
+    df["pays_decharg"] = df["pays_decharg"].str.upper()
 
-        stops = []
-        for _, r in grp.iterrows():
-            stops.append({
-                "activite":  r["activite_norm"],
-                "datetime":  r["datetime"],
-                "adresse":   r["adresse_complete"],
-                "localite":  r.get("localite", ""),
-                "nom":       r.get("nom1", ""),
-                "ville_raw": str(r.get("localite",    "") or "").strip(),
-                "cp_raw":    str(r.get("code_postal", "") or "").strip(),
-                "pays_raw":  str(r.get("code_pays",   "") or "").strip().upper(),
-            })
+    df["date_dt"] = pd.to_datetime(df["date_charg"], errors="coerce")
+    df["mois"]    = df["date_dt"].dt.to_period("M").astype(str)
 
-        # ── Stop de chargement / déchargement réels (fichier missions) ──
-        stops_ch = [s for s in stops if s["activite"] == "CHARGEMENT"]
-        stops_de = [s for s in stops if s["activite"] == "DECHARGEMENT"]
-        s_ch = stops_ch[0]  if stops_ch else (stops[0]  if stops else None)
-        s_de = stops_de[-1] if stops_de else (stops[-1] if stops else None)
-
-        stop_labels = " → ".join(
-            f"[{s['activite']}] {s['localite'] or s['nom'] or s['adresse']}"
-            for s in stops
-        )
-
-        dates_valides = [s["datetime"] for s in stops if pd.notna(s["datetime"])]
-        date_debut = min(dates_valides).strftime("%d/%m/%Y") if dates_valides else ""
-        date_fin   = max(dates_valides).strftime("%d/%m/%Y") if dates_valides else ""
-
-        rows.append({
-            "dossier":            dossier,
-            "chauffeur":          chauffeur,
-            "tracteur":           tracteur,
-            "remorque":           remorque,
-            "date_debut":         date_debut,
-            "date_fin":           date_fin,
-            "nb_stops":           len(stops),
-            "nb_dechargements":   len(stops_de),
-            "stops_texte":        stop_labels,
-            "stops_data":         stops,
-            "loc_charg_stop":     _c(s_ch["ville_raw"]) if s_ch else "",
-            "cp_charg_stop":      _c(s_ch["cp_raw"])    if s_ch else "",
-            "pays_charg_stop":    _c(s_ch["pays_raw"])  if s_ch else "",
-            "loc_decharg_stop":   _c(s_de["ville_raw"]) if s_de else "",
-            "cp_decharg_stop":    _c(s_de["cp_raw"])    if s_de else "",
-            "pays_decharg_stop":  _c(s_de["pays_raw"])  if s_de else "",
-        })
-
-    df_cons = pd.DataFrame(rows)
-
-    ca_cols = [
-        "dossier", "prix_transport", "total_vente", "client", "etat_vente",
-        "adresse_charg_geo", "adresse_decharg_geo",
-        "localite_charg", "localite_decharg",
-        "cp_charg", "cp_decharg", "pays_charg", "pays_decharg",
-    ]
-    ca_cols_dispo = [c for c in ca_cols if c in df_ca.columns]
-    df_cons = df_cons.merge(df_ca[ca_cols_dispo], on="dossier", how="left")
-    df_cons["prix_transport"] = df_cons["prix_transport"].fillna(0.0)
-    df_cons["total_vente"]    = df_cons["total_vente"].fillna(0.0)
-
-    def _fill_from_stops(row):
-        loc_ch  = _c(row.get("localite_charg",   ""))
-        cp_ch   = _c(row.get("cp_charg",         ""))
-        pays_ch = _c(row.get("pays_charg",       ""))
-        loc_de  = _c(row.get("localite_decharg", ""))
-        cp_de   = _c(row.get("cp_decharg",       ""))
-        pays_de = _c(row.get("pays_decharg",     ""))
-
-        if not (loc_ch or cp_ch):
-            loc_ch  = _c(row.get("loc_charg_stop",  ""))
-            cp_ch   = _c(row.get("cp_charg_stop",   ""))
-            pays_ch = _c(row.get("pays_charg_stop", ""))
-        if not (loc_de or cp_de):
-            loc_de  = _c(row.get("loc_decharg_stop",  ""))
-            cp_de   = _c(row.get("cp_decharg_stop",   ""))
-            pays_de = _c(row.get("pays_decharg_stop", ""))
-
-        return pd.Series({
-            "localite_charg":   loc_ch,
-            "cp_charg":         cp_ch,
-            "pays_charg":       pays_ch,
-            "localite_decharg": loc_de,
-            "cp_decharg":       cp_de,
-            "pays_decharg":     pays_de,
-        })
-
-    filled = df_cons.apply(_fill_from_stops, axis=1)
-    df_cons["localite_charg"]   = filled["localite_charg"]
-    df_cons["cp_charg"]         = filled["cp_charg"]
-    df_cons["pays_charg"]       = filled["pays_charg"]
-    df_cons["localite_decharg"] = filled["localite_decharg"]
-    df_cons["cp_decharg"]       = filled["cp_decharg"]
-    df_cons["pays_decharg"]     = filled["pays_decharg"]
-
-    # ── Départements de déchargement (2 sources) ──
-    df_cons["dept_ca"] = df_cons.apply(
-        lambda r: extract_departement(r.get("cp_decharg", ""), r.get("pays_decharg", "")), axis=1
+    # Département : recalculé depuis CP + pays (fiable), repli sur la colonne source
+    df["dept_decharg"] = df.apply(
+        lambda r: extract_departement(r["cp_decharg"], r["pays_decharg"]), axis=1
     )
-    df_cons["dept_stop"] = df_cons.apply(
-        lambda r: extract_departement(r.get("cp_decharg_stop", ""), r.get("pays_decharg_stop", "")), axis=1
+    df["dept_charg"] = df.apply(
+        lambda r: extract_departement(r["cp_charg"], r["pays_charg"]), axis=1
+    )
+    df["dept_label"] = df["dept_decharg"].map(
+        lambda c: dept_label(c) if c else "🌍 Hors France"
     )
 
-    return df_cons
+    df["marge"]     = df["total_vente"] - df["total_achat"]
+    df["prix_sg"]   = df["prix_transport"] + df["sg"]
+    df["prix_supp"] = df["prix_transport"] + df["supplements"]
+
+    return df.reset_index(drop=True)
 
 
 # ══════════════════════════════════════════════════════════════════
-#  STATS PAR DÉPARTEMENT
+#  CALCUL PTV (multi-thread + cache)
 # ══════════════════════════════════════════════════════════════════
 
-def build_dept_stats(df):
-    """
-    Agrège par département de déchargement.
-    Fonctionne avec ou sans les colonnes km_total / km_vide.
-    """
-    if df is None or df.empty or "dept_decharg" not in df.columns:
-        return pd.DataFrame()
+def run_ptv(df, status, bar):
+    geo_cache   = st.session_state.setdefault("_geo_ca", {})
+    route_cache = st.session_state.setdefault("_route_ca", {})
 
+    pts_charg   = list(zip(df["localite_charg"], df["cp_charg"], df["pays_charg"]))
+    pts_decharg = list(zip(df["localite_decharg"], df["cp_decharg"], df["pays_decharg"]))
+    tous_pts    = {p for p in pts_charg + pts_decharg if p[0] or p[1]}
+    a_geocoder  = [p for p in tous_pts if p not in geo_cache]
+
+    echecs_geo = []
+    if a_geocoder:
+        status.text(f"🌍 Géocodage de {len(a_geocoder)} points (sur {len(tous_pts)})...")
+        done = 0
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            futs = {ex.submit(geocode_point, *p): p for p in a_geocoder}
+            for fut in as_completed(futs):
+                p = futs[fut]
+                try:
+                    geo_cache[p] = fut.result()
+                except Exception:
+                    geo_cache[p] = None
+                if geo_cache[p] is None:
+                    echecs_geo.append(p)
+                done += 1
+                bar.progress(min(done / max(len(a_geocoder), 1) * 0.45, 0.45))
+                if done % 5 == 0 or done == len(a_geocoder):
+                    status.text(f"🌍 Géocodage {done}/{len(a_geocoder)} — {p[0]} {p[1]}")
+
+    # ── Paires OD uniques ──
+    paires = []
+    for pc, pd_ in zip(pts_charg, pts_decharg):
+        ca_, cb_ = geo_cache.get(pc), geo_cache.get(pd_)
+        if ca_ and cb_:
+            key = (ca_, cb_)
+            if key not in route_cache:
+                paires.append(key)
+    paires = list(dict.fromkeys(paires))
+
+    if paires:
+        status.text(f"📍 Calcul de {len(paires)} trajets PTV...")
+        done = 0
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+            futs = {ex.submit(calculate_km, k[0], k[1]): k for k in paires}
+            for fut in as_completed(futs):
+                k = futs[fut]
+                try:
+                    route_cache[k] = fut.result()
+                except Exception:
+                    route_cache[k] = None
+                done += 1
+                bar.progress(0.45 + min(done / max(len(paires), 1) * 0.55, 0.55))
+                if done % 5 == 0 or done == len(paires):
+                    status.text(f"📍 Trajets {done}/{len(paires)}")
+
+    kms, heures = [], []
+    for pc, pd_ in zip(pts_charg, pts_decharg):
+        ca_, cb_ = geo_cache.get(pc), geo_cache.get(pd_)
+        res = route_cache.get((ca_, cb_)) if (ca_ and cb_) else None
+        kms.append(res["km"] if res else np.nan)
+        heures.append(res["travel_time_h"] if res else np.nan)
+
+    out = df.copy()
+    out["km"]      = kms
+    out["heures"]  = heures
+    out["renta"]   = (out["total_vente"] / out["km"].replace(0, np.nan)).round(2)
+    return out, echecs_geo
+
+
+# ══════════════════════════════════════════════════════════════════
+#  AGRÉGATION PAR DÉPARTEMENT
+# ══════════════════════════════════════════════════════════════════
+
+def build_dept_stats(df, base_col="total_vente"):
     d = df[df["dept_decharg"].notna() & (df["dept_decharg"].astype(str) != "")].copy()
     if d.empty:
         return pd.DataFrame()
 
-    for c in ("km_total", "km_vide"):
-        if c not in d.columns:
-            d[c] = np.nan
-        d[c] = pd.to_numeric(d[c], errors="coerce")
+    if "km" not in d.columns:
+        d["km"] = np.nan
+    d["km"] = pd.to_numeric(d["km"], errors="coerce")
 
-    for c in ("prix_transport", "total_vente"):
-        d[c] = pd.to_numeric(d.get(c), errors="coerce").fillna(0.0)
+    if base_col not in d.columns:
+        base_col = "total_vente"
+    d["_base"] = pd.to_numeric(d[base_col], errors="coerce").fillna(0.0)
 
     g = d.groupby("dept_decharg", as_index=False).agg(
         nb_dossiers    = ("dossier",        "count"),
-        km_charges     = ("km_total",       "sum"),
-        km_vide        = ("km_vide",        "sum"),
+        km             = ("km",             "sum"),
         prix_transport = ("prix_transport", "sum"),
         total_vente    = ("total_vente",    "sum"),
+        base           = ("_base",          "sum"),
+        nb_clients     = ("client",         "nunique"),
     )
-
-    g["km_charges"]    = g["km_charges"].round(0)
-    g["km_vide"]       = g["km_vide"].round(0)
-    g["km_complet"]    = g["km_charges"] + g["km_vide"]
-    g["pct_vide"]      = (g["km_vide"] / g["km_complet"].replace(0, np.nan) * 100).round(1)
-    g["renta_charge"]  = (g["total_vente"] / g["km_charges"].replace(0, np.nan)).round(2)
-    g["renta_complet"] = (g["total_vente"] / g["km_complet"].replace(0, np.nan)).round(2)
-    g["ca_moyen"]      = (g["total_vente"] / g["nb_dossiers"].replace(0, np.nan)).round(0)
-    g["km_moyen"]      = (g["km_complet"] / g["nb_dossiers"].replace(0, np.nan)).round(0)
-    g["nom_dept"]      = g["dept_decharg"].map(lambda c: DEPT_NOMS.get(c, "—"))
-
-    return g.sort_values("total_vente", ascending=False).reset_index(drop=True)
+    g["km"]        = g["km"].round(0)
+    g["renta"]     = (g["base"] / g["km"].replace(0, np.nan)).round(2)
+    g["ca_moyen"]  = (g["base"] / g["nb_dossiers"].replace(0, np.nan)).round(0)
+    g["km_moyen"]  = (g["km"] / g["nb_dossiers"].replace(0, np.nan)).round(0)
+    _tot           = g["base"].sum()
+    g["pct_ca"]    = (g["base"] / _tot * 100).round(1) if _tot else np.nan
+    g["nom_dept"]  = g["dept_decharg"].map(lambda c: DEPT_NOMS.get(c, "—"))
+    return g.sort_values("base", ascending=False).reset_index(drop=True)
 
 
-DEPT_COL_RENAME = {
+DEPT_RENAME = {
     "dept_decharg":   "Dépt",
     "nom_dept":       "Département",
     "nb_dossiers":    "Nb Dossiers",
-    "km_charges":     "KM Chargés",
-    "km_vide":        "KM À Vide",
-    "km_complet":     "KM Complet",
-    "pct_vide":       "% KM Vide",
+    "nb_clients":     "Nb Clients",
+    "km":             "KM Chargés",
     "km_moyen":       "KM moy/dossier",
     "prix_transport": "Prix Transport (€)",
     "total_vente":    "Total Vente (€)",
-    "ca_moyen":       "CA moy/dossier (€)",
-    "renta_charge":   "Renta €/km chargé",
-    "renta_complet":  "Renta €/km complet",
+    "base":           "CA retenu (€)",
+    "ca_moyen":       "CA retenu moy/dossier (€)",
+    "pct_ca":         "% du CA retenu",
+    "renta":          "Renta €/km",
 }
 
-DEPT_COL_ORDER = [
-    "dept_decharg", "nom_dept", "nb_dossiers",
-    "km_charges", "km_vide", "km_complet", "pct_vide", "km_moyen",
-    "prix_transport", "total_vente", "ca_moyen",
-    "renta_charge", "renta_complet",
+DEPT_ORDER = [
+    "dept_decharg", "nom_dept", "nb_dossiers", "nb_clients",
+    "km", "km_moyen", "prix_transport", "total_vente", "base",
+    "ca_moyen", "pct_ca", "renta",
 ]
 
 
-def format_dept_table(df_dept, avec_km=True):
+def format_dept(df_dept, avec_km=True, base_col="total_vente"):
+    """Met en forme le tableau départements. La colonne « CA retenu » n'est
+    affichée que si la base est composite (sinon elle doublonnerait)."""
     if df_dept.empty:
         return df_dept
-    cols = DEPT_COL_ORDER if avec_km else [
-        c for c in DEPT_COL_ORDER
-        if c not in ("km_charges", "km_vide", "km_complet", "pct_vide",
-                     "km_moyen", "renta_charge", "renta_complet")
+    cols = DEPT_ORDER if avec_km else [
+        c for c in DEPT_ORDER if c not in ("km", "km_moyen", "renta")
     ]
+    if base_col in ("total_vente", "prix_transport"):
+        cols = [c for c in cols if c != "base"]
     cols = [c for c in cols if c in df_dept.columns]
-    return df_dept[cols].rename(columns=DEPT_COL_RENAME)
-
-
-# ══════════════════════════════════════════════════════════════════
-#  CALCUL KM PAR CHAUFFEUR (PTV)
-# ══════════════════════════════════════════════════════════════════
-
-def compute_ptv_for_driver(df_cons, chauffeur, progress_cb=None):
-    df_ch = df_cons[df_cons["chauffeur"] == chauffeur].copy()
-    df_ch["_sort_date"] = pd.to_datetime(df_ch["date_debut"], format="%d/%m/%Y", errors="coerce")
-    df_ch = df_ch.sort_values("_sort_date").reset_index(drop=True)
-
-    def _c(v):
-        v = str(v or "").strip()
-        return "" if v.lower() in ("nan", "none") else v
-
-    results          = []
-    dossier_sequences = {}
-
-    for _, row in df_ch.iterrows():
-        dos = row["dossier"]
-
-        addr_ch  = _c(row.get("adresse_charg_geo",  ""))
-        addr_de  = _c(row.get("adresse_decharg_geo", ""))
-        loc_ch   = _c(row.get("localite_charg",      ""))
-        loc_de   = _c(row.get("localite_decharg",    ""))
-        cp_ch    = _c(row.get("cp_charg",            ""))
-        cp_de    = _c(row.get("cp_decharg",          ""))
-        pays_ch  = _c(row.get("pays_charg",          ""))
-        pays_de  = _c(row.get("pays_decharg",        ""))
-
-        stops_mid = [
-            s for s in row.get("stops_data", [])
-            if s.get("activite", "") in ("DOUANE",)
-        ]
-
-        dossier_sequences[dos] = {
-            "addr_ch":    addr_ch,  "loc_ch":  loc_ch,  "cp_ch":  cp_ch,  "pays_ch":  pays_ch,
-            "addr_de":    addr_de,  "loc_de":  loc_de,  "cp_de":  cp_de,  "pays_de":  pays_de,
-            "stops_mid":  stops_mid,
-            "date_debut": row["date_debut"],
-        }
-
-    # ── Géocodage ──
-    geo_cache        = {}
-    points_to_geocode = {}
-
-    for dos, seq in dossier_sequences.items():
-        if seq["loc_ch"] or seq["cp_ch"]:
-            points_to_geocode[(seq["loc_ch"], seq["cp_ch"], seq["pays_ch"])] = True
-        if seq["loc_de"] or seq["cp_de"]:
-            points_to_geocode[(seq["loc_de"], seq["cp_de"], seq["pays_de"])] = True
-        for s in seq["stops_mid"]:
-            k = (s.get("ville_raw", ""), s.get("cp_raw", ""), s.get("pays_raw", ""))
-            if k[0] or k[1]:
-                points_to_geocode[k] = True
-
-    total_geo = len(points_to_geocode)
-    for i, (ville_r, cp_r, pays_r) in enumerate(points_to_geocode.keys()):
-        label = f"{ville_r} {cp_r}".strip()
-        if progress_cb:
-            progress_cb(f"🌍 Géocodage {i+1}/{total_geo} : {label}...")
-        addr_display = parse_origin_from_parts(ville_r, cp_r, pays_r)
-        coords = geocode_with_fallback(addr_display, ville_r, cp_r, pays_r)
-        geo_cache[(ville_r, cp_r, pays_r)] = coords
-        if coords is None:
-            st.warning(f"⚠️ Géocodage échoué : {addr_display}")
-
-    # ── KM chargés par dossier ──
-    dossier_km = {}
-    for dos, seq in dossier_sequences.items():
-        coords_seq = []
-
-        c_ch = geo_cache.get((seq["loc_ch"], seq["cp_ch"], seq["pays_ch"]))
-        if c_ch:
-            coords_seq.append(c_ch)
-
-        for s in seq["stops_mid"]:
-            c = geo_cache.get((s.get("ville_raw", ""), s.get("cp_raw", ""), s.get("pays_raw", "")))
-            if c:
-                coords_seq.append(c)
-
-        c_de = geo_cache.get((seq["loc_de"], seq["cp_de"], seq["pays_de"]))
-        if c_de:
-            coords_seq.append(c_de)
-
-        if len(coords_seq) >= 2:
-            if progress_cb:
-                progress_cb(f"📍 Calcul km dossier {dos} ({seq['loc_ch']} → {seq['loc_de']})...")
-            res = calculate_route(coords_seq)
-            dossier_km[dos] = res["km"] if res else None
-        else:
-            dossier_km[dos] = None
-
-    # ── KM à vide inter-dossiers ──
-    dossiers_ordonnes = sorted(
-        dossier_sequences.keys(),
-        key=lambda d: pd.to_datetime(
-            dossier_sequences[d]["date_debut"], format="%d/%m/%Y", errors="coerce"
-        ),
-    )
-
-    empty_legs = []
-    for i in range(len(dossiers_ordonnes) - 1):
-        dos_actuel  = dossiers_ordonnes[i]
-        dos_suivant = dossiers_ordonnes[i + 1]
-        seq_act     = dossier_sequences[dos_actuel]
-        seq_suiv    = dossier_sequences[dos_suivant]
-
-        coords_fin   = geo_cache.get((seq_act["loc_de"],  seq_act["cp_de"],  seq_act["pays_de"]))
-        coords_debut = geo_cache.get((seq_suiv["loc_ch"], seq_suiv["cp_ch"], seq_suiv["pays_ch"]))
-
-        if coords_fin and coords_debut:
-            if progress_cb:
-                progress_cb(f"⚡ Km à vide : {seq_act['loc_de']} → {seq_suiv['loc_ch']}...")
-            res     = calculate_route([coords_fin, coords_debut])
-            km_vide = res["km"] if res else None
-        else:
-            km_vide = None
-
-        empty_legs.append({
-            "dossier_depart":  dos_actuel,
-            "dossier_arrivee": dos_suivant,
-            "from_addr":       seq_act["addr_de"],
-            "from_localite":   seq_act["loc_de"],
-            "to_addr":         seq_suiv["addr_ch"],
-            "to_localite":     seq_suiv["loc_ch"],
-            "km_vide":         km_vide,
-        })
-
-    # ── Assemblage ──
-    for _, row in df_ch.iterrows():
-        dos = row["dossier"]
-
-        km_vide_total = sum(
-            leg["km_vide"] for leg in empty_legs
-            if leg["dossier_depart"] == dos and leg["km_vide"] is not None
-        )
-        vide_details = [leg for leg in empty_legs if leg["dossier_depart"] == dos]
-
-        results.append({
-            "dossier":          dos,
-            "chauffeur":        chauffeur,
-            "tracteur":         row.get("tracteur", ""),
-            "remorque":         row.get("remorque", ""),
-            "date_debut":       row["date_debut"],
-            "date_fin":         row["date_fin"],
-            "client":           row.get("client",      ""),
-            "etat_vente":       row.get("etat_vente",  ""),
-            "stops_texte":      row["stops_texte"],
-            "nb_stops":         row["nb_stops"],
-            "localite_charg":   row.get("localite_charg",   ""),
-            "localite_decharg": row.get("localite_decharg", ""),
-            "cp_decharg":       row.get("cp_decharg",       ""),
-            "pays_decharg":     row.get("pays_decharg",     ""),
-            "dept_decharg":     row.get("dept_decharg",     None),
-            "prix_transport":   row["prix_transport"],
-            "total_vente":      row["total_vente"],
-            "km_total":         dossier_km.get(dos),
-            "km_vide":          km_vide_total if km_vide_total > 0 else None,
-            "vide_details":     vide_details,
-        })
-
-    return results
+    return df_dept[cols].rename(columns=DEPT_RENAME)
 
 
 # ══════════════════════════════════════════════════════════════════
 #  EXPORT EXCEL
 # ══════════════════════════════════════════════════════════════════
 
-def export_excel(df_result, df_vide, df_dept=None):
-    output = io.BytesIO()
-
-    try:
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-
-            # ── Feuille principale ──
-            col_rename = {
-                "chauffeur":        "Chauffeur",
-                "tracteur":         "Tracteur",
-                "remorque":         "Remorque",
-                "dossier":          "N° Dossier",
-                "date_debut":       "Date début",
-                "date_fin":         "Date fin",
-                "client":           "Client",
-                "etat_vente":       "État vente",
-                "localite_decharg": "Ville déchargement",
-                "dept_decharg":     "Dépt déch.",
-                "nb_stops":         "Nb stops",
-                "stops_texte":      "Séquence stops",
-                "km_total":         "KM Chargés",
-                "km_vide":          "KM À Vide",
-                "prix_transport":   "Prix Transport (€)",
-                "total_vente":      "Total Vente (€)",
-            }
-            cols_dispo = [c for c in col_rename if c in df_result.columns]
-            df_export  = df_result[cols_dispo].copy()
-
-            if "km_total" in df_result.columns and "km_vide" in df_result.columns:
-                df_export["km_complet"]  = df_result["km_total"].fillna(0) + df_result["km_vide"].fillna(0)
-                df_export["rentabilite"] = (
-                    df_result["total_vente"] / df_export["km_complet"].replace(0, np.nan)
-                ).round(2)
-                col_rename["km_complet"]  = "KM Complet"
-                col_rename["rentabilite"] = "Rentabilité €/km"
-                cols_dispo = [c for c in col_rename if c in df_export.columns]
-                df_export  = df_export[cols_dispo]
-
-            df_export = df_export.rename(columns=col_rename).fillna("")
-            df_export.to_excel(writer, sheet_name="Missions & CA", index=False)
-            _style_sheet(writer.sheets["Missions & CA"], len(df_export))
-
-            # ── Rentabilité par département ──
-            if df_dept is not None and not df_dept.empty:
-                df_dept_exp = format_dept_table(df_dept, avec_km=True).fillna("")
-                df_dept_exp.to_excel(writer, sheet_name="Renta Départements", index=False)
-                _style_sheet(writer.sheets["Renta Départements"], len(df_dept_exp))
-
-            # ── Résumé chauffeurs ──
-            df_resume = df_result.groupby("chauffeur", as_index=False).agg(
-                Dossiers       = ("dossier",        "count"),
-                KM_Charges     = ("km_total",        "sum"),
-                KM_Vide        = ("km_vide",          "sum"),
-                Prix_Transport = ("prix_transport",   "sum"),
-                Total_Vente    = ("total_vente",      "sum"),
-            ).round(1)
-            df_resume["KM Complet"]       = df_resume["KM_Charges"] + df_resume["KM_Vide"]
-            df_resume["% KM Vide"]        = (
-                df_resume["KM_Vide"] / df_resume["KM Complet"].replace(0, np.nan) * 100
-            ).round(1)
-            df_resume["Rentabilité €/km"] = (
-                df_resume["Total_Vente"] / df_resume["KM Complet"].replace(0, np.nan)
-            ).round(2)
-            df_resume = df_resume.rename(columns={
-                "chauffeur":      "Chauffeur",
-                "Dossiers":       "Nb Dossiers",
-                "KM_Charges":     "KM Chargés",
-                "KM_Vide":        "KM À Vide",
-                "Prix_Transport": "Prix Transport (€)",
-                "Total_Vente":    "Total Vente (€)",
-            }).fillna("")
-            df_resume.to_excel(writer, sheet_name="Résumé Chauffeurs", index=False)
-            _style_sheet(writer.sheets["Résumé Chauffeurs"], len(df_resume))
-
-            # ── KM à vide détail ──
-            if not df_vide.empty:
-                vide_rename = {
-                    "chauffeur":       "Chauffeur",
-                    "dossier_depart":  "Dossier départ",
-                    "dossier_arrivee": "Dossier arrivée",
-                    "from_localite":   "Ville départ",
-                    "to_localite":     "Ville arrivée",
-                    "km_vide":         "KM à vide",
-                }
-                df_vide_exp = df_vide[[c for c in vide_rename if c in df_vide.columns]].copy()
-                df_vide_exp = df_vide_exp.rename(columns=vide_rename).fillna("")
-                df_vide_exp.to_excel(writer, sheet_name="KM À Vide Détail", index=False)
-                _style_sheet(writer.sheets["KM À Vide Détail"], len(df_vide_exp))
-
-    except Exception as e:
-        st.error(f"❌ Erreur génération Excel : {e}")
-        return b""
-
-    return output.getvalue()
-
-
-def _style_sheet(ws, nb_rows):
-    HEADER_FILL = PatternFill("solid", fgColor="1F3864")
-    HEADER_FONT = Font(bold=True, color="FFFFFF")
-    ALT_FILL    = PatternFill("solid", fgColor="EEF2F7")
-
+def _style(ws, nb_rows):
     for cell in ws[1]:
-        cell.fill      = HEADER_FILL
-        cell.font      = HEADER_FONT
+        cell.fill      = PatternFill("solid", fgColor="1F3864")
+        cell.font      = Font(bold=True, color="FFFFFF")
         cell.alignment = Alignment(horizontal="center")
-
-    for row_idx in range(2, nb_rows + 2):
-        if row_idx % 2 == 0:
-            for cell in ws[row_idx]:
-                cell.fill = ALT_FILL
-
+    for i in range(2, nb_rows + 2):
+        if i % 2 == 0:
+            for cell in ws[i]:
+                cell.fill = PatternFill("solid", fgColor="EEF2F7")
     for col in ws.columns:
-        max_len = max((len(str(c.value or "")) for c in col), default=10)
-        ws.column_dimensions[get_column_letter(col[0].column)].width = min(max_len + 4, 60)
+        w = max((len(str(c.value or "")) for c in col), default=10)
+        ws.column_dimensions[get_column_letter(col[0].column)].width = min(w + 4, 55)
+
+
+def export_excel(df_dept, df_detail, base_col="total_vente"):
+    out = io.BytesIO()
+    try:
+        with pd.ExcelWriter(out, engine="openpyxl") as wr:
+            if not df_dept.empty:
+                d = format_dept(df_dept, avec_km=True, base_col=base_col).fillna("")
+                d.to_excel(wr, sheet_name="Renta Départements", index=False)
+                _style(wr.sheets["Renta Départements"], len(d))
+
+            det_rename = {
+                "dossier":          "N° Dossier",
+                "date_charg":       "Date chargement",
+                "client":           "Client",
+                "type_transport":   "Type transport",
+                "localite_charg":   "Ville chargement",
+                "pays_charg":       "Pays charg.",
+                "localite_decharg": "Ville déchargement",
+                "cp_decharg":       "CP déch.",
+                "dept_decharg":     "Dépt déch.",
+                "pays_decharg":     "Pays déch.",
+                "km":               "KM Chargés",
+                "prix_transport":   "Prix Transport (€)",
+                "supplements":      "Suppléments (€)",
+                "sg":               "S.G. (€)",
+                "heures_attente":   "Heures attente (€)",
+                "total_vente":      "Total Vente (€)",
+                "renta_base":       "Renta €/km",
+                "etat_vente":       "État vente",
+            }
+            cols = [c for c in det_rename if c in df_detail.columns]
+            dd = df_detail[cols].rename(columns=det_rename).fillna("")
+            dd.to_excel(wr, sheet_name="Détail dossiers", index=False)
+            _style(wr.sheets["Détail dossiers"], len(dd))
+    except Exception as e:
+        st.error(f"❌ Erreur Excel : {e}")
+        return b""
+    return out.getvalue()
 
 
 # ══════════════════════════════════════════════════════════════════
-#  INTERFACE STREAMLIT
+#  INTERFACE
 # ══════════════════════════════════════════════════════════════════
 
-st.set_page_config(page_title="Missions & CA + KM PTV", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Renta Départements (CA)", page_icon="🇫🇷", layout="wide")
 
-st.title("📦 Analyse Missions + CA + Calcul KM")
-st.caption("Consolide les missions, le chiffre d'affaires et calcule les kilomètres via PTV.")
+st.title("🇫🇷 Rentabilité par département")
+st.caption("Analyse à partir du seul fichier CA — km chargés calculés via PTV (chargement → déchargement).")
 
 if not PTV_API_KEY or PTV_API_KEY == "METS_TA_CLE_ICI":
-    st.error("⚠️ Clé PTV_API_KEY non configurée. Le calcul de distances ne fonctionnera pas.")
+    st.error("⚠️ Clé PTV_API_KEY non configurée — le calcul des km ne fonctionnera pas.")
+
+file_ca = st.file_uploader("💶 Fichier CA (.xlsx)", type=["xlsx"])
+
+if not file_ca:
+    st.info(
+        "Charge le fichier CA. Colonnes utilisées : *N° Dossier, Date chargement, "
+        "Localité / C.P. / Pays chargement et déchargement, Client facturation, "
+        "Etat vente, Prix transport, Total des ventes*."
+    )
+    st.warning(
+        "⚠️ **KM à vide indisponibles ici.** Le fichier CA ne contient ni chauffeur ni "
+        "tracteur : impossible de chaîner les dossiers pour détecter les trajets à vide. "
+        "La rentabilité affichée est donc en **€/km chargé**. Pour le €/km complet, "
+        "utilise la page « Analyse Missions + CA + Calcul KM » avec le fichier missions."
+    )
+    st.stop()
+
+with st.spinner("📂 Lecture du fichier..."):
+    df = parse_ca(file_ca)
+
+if df.empty:
+    st.error("Aucune ligne exploitable dans le fichier.")
+    st.stop()
+
+# ── Période ──
+MOIS_FR = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+           "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
+dv = df["date_dt"].dropna()
+if not dv.empty:
+    d_min, d_max = dv.min(), dv.max()
+    periode = (f"{MOIS_FR[d_min.month]} {d_min.year}"
+               if (d_min.month, d_min.year) == (d_max.month, d_max.year)
+               else f"{d_min:%d/%m/%Y} → {d_max:%d/%m/%Y}")
+else:
+    periode = "Période inconnue"
+
+st.markdown(f"### 📊 Aperçu — {periode}")
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("📁 Dossiers",        len(df))
+c2.metric("🇫🇷 Déch. France",   int(df["dept_decharg"].notna().sum()))
+c3.metric("🗺️ Départements",    int(df["dept_decharg"].nunique()))
+c4.metric("👥 Clients",         df["client"].nunique())
+c5.metric("💶 Total Ventes",    f"{df['total_vente'].sum():,.0f} €")
 
 st.divider()
 
-# ── Upload ──
-col_up1, col_up2 = st.columns(2)
-with col_up1:
-    st.markdown("#### 📋 Fichier Missions")
-    file_missions = st.file_uploader("Export missions (.xlsx)", type=["xlsx"], key="missions")
-with col_up2:
-    st.markdown("#### 💶 Fichier CA")
-    file_ca = st.file_uploader("Export CA (.xlsx)", type=["xlsx"], key="ca")
+# ══════════════════════════════════════════════════════════════════
+#  FILTRES
+# ══════════════════════════════════════════════════════════════════
 
-st.divider()
+st.markdown("### 🎛️ Filtres")
 
-# ── Parsing & Consolidation ──
-if file_missions and file_ca:
-
-    with st.spinner("📂 Lecture des fichiers..."):
-        try:
-            df_missions = parse_missions(file_missions)
-            df_ca_raw   = parse_ca(file_ca)
-        except Exception as e:
-            st.error(f"❌ Erreur lecture fichiers : {e}")
-            st.stop()
-
-    df_cons = consolidate(df_missions, df_ca_raw)
-
-    df_cons["_date_dt"] = pd.to_datetime(df_cons["date_debut"], format="%d/%m/%Y", errors="coerce")
-    df_cons_f = df_cons.copy()
-
-    MOIS_FR = ["", "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
-               "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"]
-    dates_valides = df_cons["_date_dt"].dropna()
-    if not dates_valides.empty:
-        d_min = dates_valides.min()
-        d_max = dates_valides.max()
-        if d_min.month == d_max.month and d_min.year == d_max.year:
-            periode_label = f"{MOIS_FR[d_min.month]} {d_min.year}"
-        else:
-            periode_label = f"{d_min.strftime('%d/%m/%Y')} → {d_max.strftime('%d/%m/%Y')}"
-    else:
-        periode_label = "Période inconnue"
-
-    # ── KPIs globaux ──
-    st.markdown(f"### 📊 Aperçu — {periode_label}")
-    ca_total   = df_cons_f["total_vente"].sum()
-    prix_total = df_cons_f["prix_transport"].sum()
-    ca_moy     = ca_total / len(df_cons_f) if len(df_cons_f) > 0 else 0
-
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric("📁 Dossiers",       len(df_cons_f))
-    k2.metric("👨🏻‍✈️ Chauffeurs",     df_cons_f["chauffeur"].nunique())
-    k3.metric("📍 Stops totaux",   int(df_cons_f["nb_stops"].sum()))
-    k4.metric("💶 Prix Transport", f"{prix_total:,.0f} €")
-    k5.metric("💶 Total Ventes",   f"{ca_total:,.0f} €")
-    k6.metric("📈 CA moy/dossier", f"{ca_moy:,.0f} €")
-
-    st.divider()
-
-    # ══════════════════════════════════════════════════════════
-    #  SOURCE DU DÉPARTEMENT DE DÉCHARGEMENT
-    # ══════════════════════════════════════════════════════════
-    st.markdown("### 🇫🇷 Département de déchargement")
-
-    src_c1, src_c2 = st.columns([2, 3])
-    with src_c1:
-        source_dept = st.radio(
-            "Source du lieu de déchargement :",
-            options=["Fichier CA", "Dernier stop DÉCHARGEMENT (missions)"],
-            index=0,
-            horizontal=False,
-            help=(
-                "« Fichier CA » = colonne C.P. déchargement du fichier CA (avec repli sur "
-                "les stops si vide). « Dernier stop » = dernière ligne DÉCHARGEMENT du "
-                "fichier missions — plus fiable pour les tournées multi-livraisons."
-            ),
-        )
-
-    if source_dept.startswith("Fichier CA"):
-        df_cons_f["dept_decharg"] = df_cons_f["dept_ca"]
-    else:
-        df_cons_f["dept_decharg"] = df_cons_f["dept_stop"].fillna(df_cons_f["dept_ca"])
-
-    df_cons_f["dept_label"] = df_cons_f["dept_decharg"].map(
-        lambda c: dept_label(c) if c else "🌍 Hors France / inconnu"
+f1, f2, f3, f4 = st.columns(4)
+with f1:
+    pays_dispo = sorted([p for p in df["pays_decharg"].unique() if p])
+    f_pays = st.multiselect(
+        "Pays de déchargement", options=pays_dispo, default=["F"] if "F" in pays_dispo else [],
+        format_func=lambda p: PAYS_LABELS.get(p, p),
+        placeholder="Tous les pays",
+    )
+with f2:
+    etats = sorted([e for e in df["etat_vente"].unique() if e])
+    f_etat = st.multiselect(
+        "État vente", options=etats, default=[],
+        placeholder="Tous les états",
+    )
+with f3:
+    types = sorted([t for t in df["type_transport"].unique() if t])
+    f_type = st.multiselect(
+        "Type de transport", options=types, default=[],
+        placeholder="Tous les types",
+    )
+with f4:
+    clients = sorted([c for c in df["client"].unique() if c])
+    f_client = st.multiselect(
+        "Client", options=clients, default=[],
+        placeholder="Tous les clients",
     )
 
-    nb_fr   = int(df_cons_f["dept_decharg"].notna().sum())
-    nb_hors = len(df_cons_f) - nb_fr
-    with src_c2:
-        st.info(
-            f"🇫🇷 **{nb_fr} dossiers** déchargés en France "
-            f"(**{df_cons_f['dept_decharg'].nunique()} départements**) · "
-            f"🌍 {nb_hors} hors France ou CP non exploitable."
+g1, g2 = st.columns([2, 3])
+with g1:
+    mois_dispo = sorted([m for m in df["mois"].unique() if m and m != "NaT"])
+    f_mois = st.multiselect(
+        "📅 Mois de chargement", options=mois_dispo, default=[],
+        placeholder="Tous les mois",
+    )
+with g2:
+    base_choix = st.radio(
+        "💰 Base de calcul de la rentabilité",
+        options=list(BASES_CA.keys()),
+        index=0,
+        horizontal=True,
+    )
+    base_col   = BASES_CA[base_choix]
+    base_label = base_choix.split(" ", 1)[1]
+
+_tot_tv  = df["total_vente"].sum()
+_tot_bas = df[base_col].sum()
+st.caption(
+    f"**{base_label}** — {BASES_AIDE[base_col]} "
+    f"Soit {_tot_bas:,.0f} € sur {_tot_tv:,.0f} € facturés "
+    f"({(_tot_bas / _tot_tv * 100 if _tot_tv else 0):.1f} % du total)."
+)
+
+dff = df.copy()
+if f_pays:
+    dff = dff[dff["pays_decharg"].isin(f_pays)]
+if f_etat:
+    dff = dff[dff["etat_vente"].isin(f_etat)]
+if f_type:
+    dff = dff[dff["type_transport"].isin(f_type)]
+if f_client:
+    dff = dff[dff["client"].isin(f_client)]
+if f_mois:
+    dff = dff[dff["mois"].isin(f_mois)]
+
+st.info(
+    f"**{len(dff)} dossiers** retenus · "
+    f"**{dff[base_col].sum():,.0f} €** ({base_label}) · "
+    f"**{int(dff['dept_decharg'].nunique())} départements** de déchargement."
+)
+
+if dff.empty:
+    st.stop()
+
+st.divider()
+
+# ══════════════════════════════════════════════════════════════════
+#  CALCUL PTV
+# ══════════════════════════════════════════════════════════════════
+
+st.markdown("### 🗺️ Calcul des KM (PTV)")
+
+pts_uniques = len({
+    p for p in
+    list(zip(dff["localite_charg"], dff["cp_charg"], dff["pays_charg"])) +
+    list(zip(dff["localite_decharg"], dff["cp_decharg"], dff["pays_decharg"]))
+    if p[0] or p[1]
+})
+st.caption(
+    f"≈ {pts_uniques} points à géocoder et jusqu'à {len(dff)} trajets — "
+    f"le cache évite de recalculer entre deux exécutions."
+)
+
+cb1, cb2 = st.columns([1, 3])
+with cb1:
+    go = st.button("🚀 Lancer le calcul PTV", type="primary")
+with cb2:
+    if st.button("🗑️ Vider le cache PTV"):
+        st.session_state.pop("_geo_ca", None)
+        st.session_state.pop("_route_ca", None)
+        st.session_state.pop("_res_ca", None)
+        st.success("Cache vidé.")
+
+if go:
+    bar    = st.progress(0.0)
+    status = st.empty()
+    t0     = time.time()
+    res, echecs = run_ptv(dff, status, bar)
+    bar.progress(1.0)
+    status.success(
+        f"✅ Terminé en {time.time() - t0:.0f}s — "
+        f"{res['km'].notna().sum()}/{len(res)} dossiers avec km."
+    )
+    st.session_state["_res_ca"] = res
+    if echecs:
+        with st.expander(f"⚠️ {len(echecs)} points non géocodés"):
+            st.dataframe(
+                pd.DataFrame(echecs, columns=["Localité", "CP", "Pays"]),
+                use_container_width=True,
+            )
+
+# ══════════════════════════════════════════════════════════════════
+#  RÉSULTATS
+# ══════════════════════════════════════════════════════════════════
+
+res = st.session_state.get("_res_ca")
+
+if res is None:
+    st.warning(
+        "Lance le calcul PTV pour obtenir la rentabilité €/km. "
+        "En attendant, voici le CA par département :"
+    )
+    dep0 = build_dept_stats(dff, base_col)
+    if not dep0.empty:
+        st.dataframe(
+            format_dept(dep0, avec_km=False, base_col=base_col),
+            use_container_width=True, height=500,
         )
-        if nb_hors:
-            with st.expander(f"🔎 Voir les {nb_hors} dossiers sans département"):
-                st.dataframe(
-                    df_cons_f[df_cons_f["dept_decharg"].isna()][
-                        ["dossier", "chauffeur", "localite_decharg", "cp_decharg",
-                         "pays_decharg", "total_vente"]
-                    ].rename(columns={
-                        "dossier":          "N° Dossier",
-                        "chauffeur":        "Chauffeur",
-                        "localite_decharg": "Ville déch.",
-                        "cp_decharg":       "CP",
-                        "pays_decharg":     "Pays",
-                        "total_vente":      "Total Vente (€)",
-                    }),
-                    use_container_width=True,
-                    height=250,
+    st.stop()
+
+# Réapplique les filtres courants sur le résultat mis en cache
+res = res[res["dossier"].isin(dff["dossier"])].copy()
+
+# Rentabilité par dossier recalculée sur la base retenue
+res["renta_base"] = (
+    pd.to_numeric(res[base_col], errors="coerce") /
+    pd.to_numeric(res["km"], errors="coerce").replace(0, np.nan)
+).round(2)
+
+st.divider()
+st.markdown(f"### 📈 Résultats — base : {base_label}")
+
+km_tot    = pd.to_numeric(res["km"], errors="coerce").fillna(0).sum()
+base_tot  = res[base_col].sum()
+ca_tot    = res["total_vente"].sum()
+pt_tot    = res["prix_transport"].sum()
+renta     = base_tot / km_tot if km_tot else 0
+renta_tv  = ca_tot / km_tot if km_tot else 0
+sans_km   = int(res["km"].isna().sum())
+
+r1, r2, r3, r4, r5 = st.columns(5)
+r1.metric("📏 KM Chargés",     f"{km_tot:,.0f} km")
+r2.metric("🚚 Prix Transport", f"{pt_tot:,.0f} €")
+r3.metric("💶 Total Ventes",   f"{ca_tot:,.0f} €")
+r4.metric(
+    "📈 Renta globale", f"{renta:.2f} €/km",
+    delta=(None if base_col == "total_vente"
+           else f"{renta - renta_tv:+.2f} vs total ventes"),
+    delta_color="off",
+)
+r5.metric("⚠️ Sans km",        sans_km)
+
+if sans_km:
+    st.caption(f"{sans_km} dossier(s) sans km (géocodage ou routage échoué) — exclus des moyennes €/km.")
+
+tab1, tab2, tab3 = st.tabs([
+    "🇫🇷 Par département",
+    "📋 Détail dossiers",
+    "👥 Par client",
+])
+
+with tab1:
+    dep = build_dept_stats(res, base_col)
+
+    if dep.empty:
+        st.info("Aucun déchargement en France dans la sélection.")
+    else:
+        t1, t2, t3 = st.columns([1, 1, 2])
+        with t1:
+            min_dos = st.number_input(
+                "Nb dossiers min", min_value=1, max_value=50, value=1, step=1,
+                help="Masque les départements trop peu représentés.",
+            )
+        with t2:
+            tri = st.selectbox(
+                "Trier par",
+                ["Renta €/km", "CA retenu (€)", "Nb Dossiers", "KM Chargés",
+                 "CA retenu moy/dossier (€)", "Dépt"],
+                index=0,
+            )
+        with t3:
+            asc = st.radio("Ordre", ["Décroissant", "Croissant"],
+                           horizontal=True, index=0) == "Croissant"
+
+        depv = dep[dep["nb_dossiers"] >= min_dos].copy()
+
+        if depv.empty:
+            st.warning("Aucun département au-dessus du seuil.")
+        else:
+            col_tri = {v: k for k, v in DEPT_RENAME.items()}.get(tri, "renta")
+            depv = depv.sort_values(col_tri, ascending=asc, na_position="last").reset_index(drop=True)
+
+            val = depv[depv["renta"].notna()]
+            if not val.empty:
+                best  = val.sort_values("renta", ascending=False).iloc[0]
+                worst = val.sort_values("renta", ascending=True).iloc[0]
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("🥇 Meilleur", f"{best['renta']:.2f} €/km",
+                          f"{best['dept_decharg']} — {best['nom_dept']}")
+                m2.metric("🥉 Moins bon", f"{worst['renta']:.2f} €/km",
+                          f"{worst['dept_decharg']} — {worst['nom_dept']}")
+                m3.metric("🗺️ Départements", len(depv))
+                m4.metric("📁 Dossiers", int(depv["nb_dossiers"].sum()))
+
+            st.dataframe(
+                format_dept(depv, avec_km=True, base_col=base_col),
+                use_container_width=True, height=520,
+                column_config={
+                    "Renta €/km":                st.column_config.NumberColumn(format="%.2f €"),
+                    "Total Vente (€)":           st.column_config.NumberColumn(format="%.0f €"),
+                    "Prix Transport (€)":        st.column_config.NumberColumn(format="%.0f €"),
+                    "CA retenu (€)":             st.column_config.NumberColumn(format="%.0f €"),
+                    "CA retenu moy/dossier (€)": st.column_config.NumberColumn(format="%.0f €"),
+                    "% du CA retenu":            st.column_config.NumberColumn(format="%.1f %%"),
+                },
+            )
+
+            ch = depv[depv["renta"].notna()].copy()
+            if not ch.empty:
+                ch["Dépt"] = ch["dept_decharg"] + " " + ch["nom_dept"]
+                st.bar_chart(ch.set_index("Dépt")["renta"], height=320)
+                st.caption(
+                    f"Rentabilité €/km chargé par département de déchargement — "
+                    f"base : {base_label}."
                 )
 
-    # ── Aperçu CA par département (avant PTV) ──
-    df_dept_ca = build_dept_stats(df_cons_f)
-    if not df_dept_ca.empty:
-        with st.expander("💶 CA par département (sans km — lance le PTV pour la rentabilité)"):
+            st.markdown("##### 🔍 Détail d'un département")
+            dep_sel = st.selectbox(
+                "Département", options=depv["dept_decharg"].tolist(),
+                format_func=dept_label,
+            )
+            det = res[res["dept_decharg"] == dep_sel]
             st.dataframe(
-                format_dept_table(df_dept_ca, avec_km=False),
-                use_container_width=True,
-                height=380,
+                det[[c for c in [
+                    "dossier", "date_charg", "client", "localite_charg", "pays_charg",
+                    "localite_decharg", "cp_decharg", "km", "prix_transport",
+                    "supplements", "sg", "total_vente", "renta_base",
+                ] if c in det.columns]].rename(columns={
+                    "dossier":          "N° Dossier",
+                    "date_charg":       "Date",
+                    "client":           "Client",
+                    "localite_charg":   "Ville charg.",
+                    "pays_charg":       "Pays charg.",
+                    "localite_decharg": "Ville déch.",
+                    "cp_decharg":       "CP",
+                    "km":               "KM",
+                    "prix_transport":   "Prix Transport €",
+                    "supplements":      "Suppl. €",
+                    "sg":               "S.G. €",
+                    "total_vente":      "Total Vente €",
+                    "renta_base":       "€/km",
+                }),
+                use_container_width=True, height=320,
             )
 
-    st.divider()
-
-    # ══════════════════════════════════════════════════════════
-    #  TABLEAU CONSOLIDÉ
-    # ══════════════════════════════════════════════════════════
-    st.markdown("### 📋 Tableau consolidé")
-
-    # ── Listes pour les filtres ──
-    chauffeurs_dispo = sorted([
-        c for c in df_cons_f["chauffeur"].dropna().unique()
-        if c and c != "nan"
-    ])
-    remorques_dispo = sorted([
-        str(r).strip() for r in df_cons_f["remorque"].dropna().unique()
-        if str(r).strip() and str(r).strip() not in ("nan", "")
-    ]) if "remorque" in df_cons_f.columns else []
-    tracteurs_dispo = sorted([
-        str(t).strip() for t in df_cons_f["tracteur"].dropna().unique()
-        if str(t).strip() and str(t).strip() not in ("nan", "")
-    ]) if "tracteur" in df_cons_f.columns else []
-    depts_dispo = sorted([
-        d for d in df_cons_f["dept_decharg"].dropna().unique() if d
-    ])
-
-    # ── Filtres ──
-    fc1, fc2, fc3, fc4 = st.columns(4)
-    with fc1:
-        filtre_chauffeur = st.multiselect(
-            "👨🏻‍✈️ Chauffeur :",
-            options=chauffeurs_dispo,
-            default=[],
-            placeholder="Tous les chauffeurs",
-        )
-    with fc2:
-        filtre_tracteur = st.multiselect(
-            "🚜 Tracteur :",
-            options=tracteurs_dispo,
-            default=[],
-            placeholder="Tous les tracteurs",
-        )
-    with fc3:
-        filtre_remorque = st.multiselect(
-            "🚛 Remorque :",
-            options=remorques_dispo,
-            default=[],
-            placeholder="Toutes les remorques",
-        )
-    with fc4:
-        filtre_dept = st.multiselect(
-            "🇫🇷 Département déch. :",
-            options=depts_dispo,
-            default=[],
-            format_func=dept_label,
-            placeholder="Tous les départements",
-        )
-
-    # ── Application des filtres ──
-    df_display = df_cons_f.copy()
-    if filtre_chauffeur:
-        df_display = df_display[df_display["chauffeur"].isin(filtre_chauffeur)]
-    if filtre_remorque and "remorque" in df_display.columns:
-        df_display = df_display[df_display["remorque"].isin(filtre_remorque)]
-    if filtre_tracteur and "tracteur" in df_display.columns:
-        df_display = df_display[df_display["tracteur"].isin(filtre_tracteur)]
-    if filtre_dept:
-        df_display = df_display[df_display["dept_decharg"].isin(filtre_dept)]
-
-    # ── KPIs de la sélection ──
-    if filtre_chauffeur or filtre_remorque or filtre_tracteur or filtre_dept:
-        _sel_label = []
-        if filtre_chauffeur:
-            _sel_label.append(f"{len(filtre_chauffeur)} chauffeur(s)")
-        if filtre_remorque:
-            _sel_label.append(f"{len(filtre_remorque)} remorque(s)")
-        if filtre_tracteur:
-            _sel_label.append(f"{len(filtre_tracteur)} tracteur(s)")
-        if filtre_dept:
-            _sel_label.append(f"{len(filtre_dept)} département(s)")
-        st.markdown(f"##### 📊 Aperçu — {', '.join(_sel_label)}")
-
-        fk1, fk2, fk3, fk4, fk5, fk6 = st.columns(6)
-        _tv = df_display["total_vente"].sum()
-        _pt = df_display["prix_transport"].sum()
-        _nd = len(df_display)
-        fk1.metric("📁 Dossiers",       _nd)
-        fk2.metric("📍 Stops",          int(df_display["nb_stops"].sum()))
-        fk3.metric("💶 Prix Transport", f"{_pt:,.0f} €")
-        fk4.metric("💶 Total Ventes",   f"{_tv:,.0f} €")
-        fk5.metric("📈 CA moy/dossier", f"{(_tv / _nd if _nd else 0):,.0f} €")
-
-        if "df_result" in st.session_state:
-            _dr_f = st.session_state["df_result"].copy()
-            _dr_f["dept_decharg"] = _dr_f["dossier"].map(
-                df_cons_f.set_index("dossier")["dept_decharg"]
-            )
-            if filtre_chauffeur:
-                _dr_f = _dr_f[_dr_f["chauffeur"].isin(filtre_chauffeur)]
-            if filtre_remorque and "remorque" in _dr_f.columns:
-                _dr_f = _dr_f[_dr_f["remorque"].isin(filtre_remorque)]
-            if filtre_tracteur and "tracteur" in _dr_f.columns:
-                _dr_f = _dr_f[_dr_f["tracteur"].isin(filtre_tracteur)]
-            if filtre_dept:
-                _dr_f = _dr_f[_dr_f["dept_decharg"].isin(filtre_dept)]
-            _km   = pd.to_numeric(_dr_f["km_total"], errors="coerce").fillna(0).sum() + \
-                    pd.to_numeric(_dr_f["km_vide"],  errors="coerce").fillna(0).sum()
-            _rent = _dr_f["total_vente"].sum() / _km if _km > 0 else 0
-            fk6.metric("⚡ Rentabilité", f"{_rent:.2f} €/km")
-        else:
-            fk6.metric("⚡ Rentabilité", "— (après PTV)")
-
-    cols_show = [
-        "dossier", "chauffeur", "tracteur", "remorque",
-        "date_debut", "date_fin", "client", "etat_vente",
-        "localite_decharg", "dept_label",
-        "nb_stops", "stops_texte", "prix_transport", "total_vente",
-    ]
+with tab2:
     st.dataframe(
-        df_display[[c for c in cols_show if c in df_display.columns]].rename(columns={
+        res[[c for c in [
+            "dossier", "date_charg", "client", "type_transport",
+            "localite_charg", "pays_charg", "localite_decharg", "cp_decharg",
+            "dept_label", "km", "prix_transport", "supplements", "sg",
+            "heures_attente", "total_vente", "renta_base", "etat_vente",
+        ] if c in res.columns]].rename(columns={
             "dossier":          "N° Dossier",
-            "chauffeur":        "Chauffeur",
-            "tracteur":         "Tracteur",
-            "remorque":         "Remorque",
-            "date_debut":       "Date début",
-            "date_fin":         "Date fin",
+            "date_charg":       "Date chargement",
             "client":           "Client",
-            "etat_vente":       "État vente",
-            "localite_decharg": "Ville déchargement",
+            "type_transport":   "Type",
+            "localite_charg":   "Ville charg.",
+            "pays_charg":       "Pays charg.",
+            "localite_decharg": "Ville déch.",
+            "cp_decharg":       "CP déch.",
             "dept_label":       "Département déch.",
-            "nb_stops":         "Nb stops",
-            "stops_texte":      "Séquence stops",
-            "prix_transport":   "Prix Transport (€)",
-            "total_vente":      "Total Vente (€)",
+            "km":               "KM Chargés",
+            "prix_transport":   "Prix Transport €",
+            "supplements":      "Suppl. €",
+            "sg":               "S.G. €",
+            "heures_attente":   "Attente €",
+            "total_vente":      "Total Vente €",
+            "renta_base":       "€/km",
+            "etat_vente":       "État vente",
         }),
-        use_container_width=True,
-        height=400,
+        use_container_width=True, height=520,
     )
+    st.caption(f"La colonne €/km est calculée sur : {base_label}.")
 
-    st.divider()
+with tab3:
+    res["_base"] = pd.to_numeric(res[base_col], errors="coerce").fillna(0.0)
+    cl = res.groupby("client", as_index=False).agg(
+        nb_dossiers = ("dossier",        "count"),
+        km          = ("km",             "sum"),
+        prix        = ("prix_transport", "sum"),
+        ca          = ("total_vente",    "sum"),
+        base        = ("_base",          "sum"),
+        nb_depts    = ("dept_decharg",   "nunique"),
+    )
+    cl["renta"]    = (cl["base"] / cl["km"].replace(0, np.nan)).round(2)
+    cl["ca_moyen"] = (cl["base"] / cl["nb_dossiers"]).round(0)
+    cl["km"]       = cl["km"].round(0)
+    cl = cl.sort_values("base", ascending=False)
+    if base_col in ("total_vente", "prix_transport"):
+        cl = cl.drop(columns=["base"])
+    st.dataframe(
+        cl.rename(columns={
+            "client":      "Client",
+            "nb_dossiers": "Nb Dossiers",
+            "nb_depts":    "Nb Dépts livrés",
+            "km":          "KM Chargés",
+            "prix":        "Prix Transport €",
+            "ca":          "Total Vente €",
+            "base":        "CA retenu €",
+            "ca_moyen":    "CA retenu moy/dossier €",
+            "renta":       "Renta €/km",
+        }),
+        use_container_width=True, height=480,
+    )
+    st.caption(f"Rentabilité calculée sur : {base_label}.")
 
-    # ══════════════════════════════════════════════════════════
-    #  CALCUL KM via PTV
-    # ══════════════════════════════════════════════════════════
-    st.markdown("### 🗺️ Calcul KM via PTV")
+st.divider()
 
-    ptv_c1, ptv_c2, ptv_c3, ptv_c4 = st.columns(4)
-    with ptv_c1:
-        chauffeurs_ptv = st.multiselect(
-            "🚛 Chauffeurs :",
-            options=chauffeurs_dispo,
-            default=[],
-            placeholder="Sélectionner des chauffeurs...",
-        )
-    with ptv_c2:
-        remorques_ptv = st.multiselect(
-            "🔗 Remorques :",
-            options=remorques_dispo,
-            default=[],
-            placeholder="Toutes les remorques",
-        )
-    with ptv_c3:
-        tracteurs_ptv = st.multiselect(
-            "🚜 Tracteurs :",
-            options=tracteurs_dispo,
-            default=[],
-            placeholder="Tous les tracteurs",
-        )
-    with ptv_c4:
-        depts_ptv = st.multiselect(
-            "🇫🇷 Départements :",
-            options=depts_dispo,
-            default=[],
-            format_func=dept_label,
-            placeholder="Tous les départements",
-        )
+dep_final = build_dept_stats(res, base_col)
+_suffixe  = {"total_vente": "ventes", "prix_transport": "prix_transport",
+             "prix_sg": "prix_sg", "prix_supp": "prix_supp"}[base_col]
 
-    # ── Construire la liste des chauffeurs à calculer ──
-    chauffeurs_a_calculer = list(chauffeurs_ptv)
-
-    if remorques_ptv and "remorque" in df_cons_f.columns:
-        ch_remorque = (
-            df_cons_f[df_cons_f["remorque"].isin(remorques_ptv)]["chauffeur"]
-            .dropna().unique().tolist()
-        )
-        chauffeurs_a_calculer = list(set(chauffeurs_a_calculer + ch_remorque))
-
-    if tracteurs_ptv and "tracteur" in df_cons_f.columns:
-        ch_tracteur = (
-            df_cons_f[df_cons_f["tracteur"].isin(tracteurs_ptv)]["chauffeur"]
-            .dropna().unique().tolist()
-        )
-        chauffeurs_a_calculer = list(set(chauffeurs_a_calculer + ch_tracteur))
-
-    if depts_ptv:
-        ch_dept = (
-            df_cons_f[df_cons_f["dept_decharg"].isin(depts_ptv)]["chauffeur"]
-            .dropna().unique().tolist()
-        )
-        chauffeurs_a_calculer = list(set(chauffeurs_a_calculer + ch_dept))
-
-    chauffeurs_a_calculer = [c for c in chauffeurs_a_calculer if c and c != "nan"]
-    nb_dossiers_ptv = len(df_cons_f[df_cons_f["chauffeur"].isin(chauffeurs_a_calculer)])
-
-    if chauffeurs_a_calculer:
-        extras = []
-        if remorques_ptv:
-            extras.append(f"{len(remorques_ptv)} remorque(s)")
-        if tracteurs_ptv:
-            extras.append(f"{len(tracteurs_ptv)} tracteur(s)")
-        if depts_ptv:
-            extras.append(f"{len(depts_ptv)} département(s)")
-        extras_str = f", {', '.join(extras)}" if extras else ""
-        st.info(
-            f"ℹ️ Calcul pour **{nb_dossiers_ptv} dossiers** "
-            f"({len(chauffeurs_a_calculer)} chauffeur(s){extras_str})."
-        )
-        if depts_ptv:
-            st.caption(
-                "⚠️ Le calcul PTV porte sur **tous** les dossiers des chauffeurs concernés "
-                "(nécessaire pour chaîner les km à vide). Le filtre département s'applique "
-                "ensuite à l'analyse."
-            )
-
-    btn_ptv = st.button(
-        "🚀 Lancer le calcul PTV",
-        disabled=(not chauffeurs_a_calculer),
+e1, e2 = st.columns(2)
+with e1:
+    st.download_button(
+        "📥 Rapport Excel",
+        data=export_excel(dep_final, res, base_col=base_col),
+        file_name=f"Renta_Departements_{_suffixe}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
     )
-
-    if btn_ptv and chauffeurs_a_calculer:
-        all_results = []
-        all_vide    = []
-
-        progress_bar = st.progress(0)
-        status_text  = st.empty()
-        total_ch     = len(chauffeurs_a_calculer)
-
-        for ch_idx, chauffeur in enumerate(chauffeurs_a_calculer):
-            status_text.text(f"⏳ Chauffeur {ch_idx+1}/{total_ch} : {chauffeur}")
-
-            def _progress(msg):
-                status_text.text(msg)
-
-            try:
-                res = compute_ptv_for_driver(df_cons_f, chauffeur, progress_cb=_progress)
-                all_results.extend(res)
-
-                for r in res:
-                    for leg in r.get("vide_details", []):
-                        all_vide.append({
-                            "chauffeur":       chauffeur,
-                            "dossier_depart":  leg["dossier_depart"],
-                            "dossier_arrivee": leg["dossier_arrivee"],
-                            "from_localite":   leg["from_localite"],
-                            "to_localite":     leg["to_localite"],
-                            "km_vide":         leg["km_vide"],
-                        })
-            except Exception as e:
-                st.error(f"❌ Erreur chauffeur {chauffeur} : {e}")
-
-            progress_bar.progress(int((ch_idx + 1) / total_ch * 100))
-
-        status_text.success("✅ Calcul PTV terminé !")
-        progress_bar.progress(100)
-
-        st.session_state["df_result"] = pd.DataFrame(all_results)
-        st.session_state["df_vide"]   = pd.DataFrame(all_vide)
-
-    # ── Affichage résultats PTV ──
-    if "df_result" in st.session_state and not st.session_state["df_result"].empty:
-        df_result = st.session_state["df_result"].copy()
-        df_vide   = st.session_state.get("df_vide", pd.DataFrame())
-
-        # Re-mappe le département selon la source choisie (sans relancer le PTV)
-        _map_dept = df_cons_f.set_index("dossier")["dept_decharg"]
-        df_result["dept_decharg"] = df_result["dossier"].map(_map_dept)
-        df_result["dept_label"]   = df_result["dept_decharg"].map(
-            lambda c: dept_label(c) if c else "🌍 Hors France"
-        )
-
-        # Filtre département appliqué aux résultats
-        if depts_ptv:
-            df_result_f = df_result[df_result["dept_decharg"].isin(depts_ptv)].copy()
-        else:
-            df_result_f = df_result.copy()
-
-        st.divider()
-        st.markdown("### 📈 Résultats KM")
-        if depts_ptv:
-            st.caption(
-                f"Filtré sur {len(depts_ptv)} département(s) de déchargement — "
-                f"{len(df_result_f)} dossier(s) sur {len(df_result)}."
-            )
-
-        km_total_sum    = pd.to_numeric(df_result_f["km_total"], errors="coerce").fillna(0).sum()
-        km_vide_sum     = pd.to_numeric(df_result_f["km_vide"],  errors="coerce").fillna(0).sum()
-        _km_complet     = km_total_sum + km_vide_sum
-        pct_vide        = (km_vide_sum / _km_complet * 100) if _km_complet > 0 else 0
-        _ca_ptv         = df_result_f["total_vente"].sum()
-        _rent_ptv       = _ca_ptv / _km_complet if _km_complet > 0 else 0
-
-        kp1, kp2, kp3, kp4, kp5, kp6 = st.columns(6)
-        kp1.metric("📏 KM Chargés",       f"{km_total_sum:,.0f} km")
-        kp2.metric("⚡ KM À Vide",         f"{km_vide_sum:,.0f} km")
-        kp3.metric("🔄 KM Total complet", f"{_km_complet:,.0f} km")
-        kp4.metric("% À Vide",             f"{pct_vide:.1f}%")
-        kp5.metric("💶 CA Total",          f"{_ca_ptv:,.0f} €")
-        kp6.metric("📈 Rentabilité",       f"{_rent_ptv:.2f} €/km")
-
-        tab1, tab2, tab3, tab4 = st.tabs([
-            "🇫🇷 Rentabilité par département",
-            "📋 Détail dossiers",
-            "👤 Résumé par chauffeur",
-            "⚡ Détail KM à vide",
-        ])
-
-        # ── TAB 1 : rentabilité par département ──
-        with tab1:
-            df_dept = build_dept_stats(df_result_f)
-
-            if df_dept.empty:
-                st.info(
-                    "Aucun déchargement en France identifié dans les résultats. "
-                    "Vérifie la colonne « C.P. déchargement » du fichier CA ou bascule "
-                    "la source sur « Dernier stop DÉCHARGEMENT »."
-                )
-            else:
-                dt_c1, dt_c2, dt_c3 = st.columns([1, 1, 2])
-                with dt_c1:
-                    min_dossiers = st.number_input(
-                        "Nb dossiers min", min_value=1, max_value=50, value=1, step=1,
-                        help="Masque les départements avec trop peu de dossiers (bruit).",
-                    )
-                with dt_c2:
-                    tri_par = st.selectbox(
-                        "Trier par",
-                        options=[
-                            "Renta €/km complet",
-                            "Renta €/km chargé",
-                            "Total Vente (€)",
-                            "Nb Dossiers",
-                            "KM Complet",
-                            "% KM Vide",
-                            "Dépt",
-                        ],
-                        index=0,
-                    )
-                with dt_c3:
-                    ordre_asc = st.radio(
-                        "Ordre",
-                        options=["Décroissant", "Croissant"],
-                        horizontal=True,
-                        index=0,
-                    ) == "Croissant"
-
-                df_dept_v = df_dept[df_dept["nb_dossiers"] >= min_dossiers].copy()
-
-                if df_dept_v.empty:
-                    st.warning("Aucun département ne passe le seuil de dossiers minimum.")
-                else:
-                    _tri_map = {v: k for k, v in DEPT_COL_RENAME.items()}
-                    col_tri  = _tri_map.get(tri_par, "renta_complet")
-                    df_dept_v = df_dept_v.sort_values(
-                        col_tri, ascending=ordre_asc, na_position="last"
-                    ).reset_index(drop=True)
-
-                    # ── Top / Flop ──
-                    _valides = df_dept_v[df_dept_v["renta_complet"].notna()]
-                    if not _valides.empty:
-                        best  = _valides.sort_values("renta_complet", ascending=False).iloc[0]
-                        worst = _valides.sort_values("renta_complet", ascending=True).iloc[0]
-                        tf1, tf2, tf3, tf4 = st.columns(4)
-                        tf1.metric(
-                            "🥇 Meilleur département",
-                            f"{best['renta_complet']:.2f} €/km",
-                            f"{best['dept_decharg']} — {best['nom_dept']}",
-                        )
-                        tf2.metric(
-                            "🥉 Moins rentable",
-                            f"{worst['renta_complet']:.2f} €/km",
-                            f"{worst['dept_decharg']} — {worst['nom_dept']}",
-                        )
-                        tf3.metric("🗺️ Départements", len(df_dept_v))
-                        tf4.metric(
-                            "📁 Dossiers analysés",
-                            int(df_dept_v["nb_dossiers"].sum()),
-                        )
-
-                    st.dataframe(
-                        format_dept_table(df_dept_v, avec_km=True),
-                        use_container_width=True,
-                        height=520,
-                        column_config={
-                            "Renta €/km complet": st.column_config.NumberColumn(format="%.2f €"),
-                            "Renta €/km chargé":  st.column_config.NumberColumn(format="%.2f €"),
-                            "% KM Vide":          st.column_config.NumberColumn(format="%.1f %%"),
-                            "Total Vente (€)":    st.column_config.NumberColumn(format="%.0f €"),
-                            "Prix Transport (€)": st.column_config.NumberColumn(format="%.0f €"),
-                            "CA moy/dossier (€)": st.column_config.NumberColumn(format="%.0f €"),
-                        },
-                    )
-
-                    # ── Graphique ──
-                    _chart = df_dept_v[df_dept_v["renta_complet"].notna()].copy()
-                    if not _chart.empty:
-                        _chart["Dépt"] = _chart["dept_decharg"] + " " + _chart["nom_dept"]
-                        st.bar_chart(
-                            _chart.set_index("Dépt")["renta_complet"],
-                            height=320,
-                        )
-                        st.caption("Rentabilité €/km complet (chargé + à vide) par département de déchargement.")
-
-                    st.download_button(
-                        "📥 Export CSV départements",
-                        data=format_dept_table(df_dept_v, avec_km=True)
-                             .to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"),
-                        file_name="Renta_par_departement.csv",
-                        mime="text/csv",
-                    )
-
-                    # ── Détail d'un département ──
-                    st.markdown("##### 🔍 Détail d'un département")
-                    _dep_choix = st.selectbox(
-                        "Département",
-                        options=df_dept_v["dept_decharg"].tolist(),
-                        format_func=dept_label,
-                    )
-                    _det = df_result_f[df_result_f["dept_decharg"] == _dep_choix]
-                    st.dataframe(
-                        _det[[c for c in [
-                            "dossier", "chauffeur", "date_debut", "client",
-                            "localite_charg", "localite_decharg",
-                            "km_total", "km_vide", "prix_transport", "total_vente",
-                        ] if c in _det.columns]].rename(columns={
-                            "dossier":          "N° Dossier",
-                            "chauffeur":        "Chauffeur",
-                            "date_debut":       "Date",
-                            "client":           "Client",
-                            "localite_charg":   "Ville charg.",
-                            "localite_decharg": "Ville déch.",
-                            "km_total":         "KM Chargés",
-                            "km_vide":          "KM À Vide",
-                            "prix_transport":   "Prix Transport €",
-                            "total_vente":      "Total Vente €",
-                        }),
-                        use_container_width=True,
-                        height=300,
-                    )
-
-        # ── TAB 2 : détail dossiers ──
-        with tab2:
-            cols_res = [
-                "dossier", "chauffeur", "tracteur", "date_debut", "client",
-                "localite_decharg", "dept_label",
-                "stops_texte", "km_total", "km_vide", "prix_transport", "total_vente",
-            ]
-            st.dataframe(
-                df_result_f[[c for c in cols_res if c in df_result_f.columns]].rename(columns={
-                    "dossier":          "N° Dossier",
-                    "chauffeur":        "Chauffeur",
-                    "tracteur":         "Tracteur",
-                    "date_debut":       "Date",
-                    "client":           "Client",
-                    "localite_decharg": "Ville déchargement",
-                    "dept_label":       "Département déch.",
-                    "stops_texte":      "Séquence",
-                    "km_total":         "KM Total",
-                    "km_vide":          "KM À Vide",
-                    "prix_transport":   "Prix Transport €",
-                    "total_vente":      "Total Vente €",
-                }),
-                use_container_width=True,
-                height=400,
-            )
-
-        # ── TAB 3 : résumé chauffeurs ──
-        with tab3:
-            df_resume_ptv = df_result_f.groupby("chauffeur", as_index=False).agg(
-                Dossiers       = ("dossier",        "count"),
-                KM_Total       = ("km_total",        "sum"),
-                KM_Vide        = ("km_vide",          "sum"),
-                Prix_Transport = ("prix_transport",   "sum"),
-                Total_Vente    = ("total_vente",      "sum"),
-            ).round(1)
-            df_resume_ptv["KM Complet"]       = df_resume_ptv["KM_Total"] + df_resume_ptv["KM_Vide"]
-            df_resume_ptv["% KM Vide"]        = (
-                df_resume_ptv["KM_Vide"] / df_resume_ptv["KM Complet"].replace(0, np.nan) * 100
-            ).round(1)
-            df_resume_ptv["Rentabilité €/km"] = (
-                df_resume_ptv["Total_Vente"] / df_resume_ptv["KM Complet"].replace(0, np.nan)
-            ).round(2)
-            df_resume_ptv.columns = [
-                "Chauffeur", "Nb Dossiers", "KM Chargés", "KM À Vide",
-                "Prix Transport €", "Total Vente €",
-                "KM Complet", "% KM Vide", "Rentabilité €/km",
-            ]
-            st.dataframe(df_resume_ptv, use_container_width=True)
-
-        # ── TAB 4 : km à vide ──
-        with tab4:
-            if not df_vide.empty:
-                st.dataframe(
-                    df_vide.rename(columns={
-                        "chauffeur":       "Chauffeur",
-                        "dossier_depart":  "Dossier départ",
-                        "dossier_arrivee": "Dossier arrivée",
-                        "from_localite":   "Ville départ",
-                        "to_localite":     "Ville arrivée",
-                        "km_vide":         "KM à vide",
-                    }),
-                    use_container_width=True,
-                )
-            else:
-                st.info("Aucun trajet à vide détecté.")
-
-        st.divider()
-        excel_bytes = export_excel(
-            df_result_f, df_vide, df_dept=build_dept_stats(df_result_f)
-        )
+with e2:
+    if not dep_final.empty:
         st.download_button(
-            label="📥 Télécharger le rapport Excel",
-            data=excel_bytes,
-            file_name="Rapport_Missions_CA_KM.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
+            "📥 CSV départements",
+            data=format_dept(dep_final, base_col=base_col)
+                 .to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig"),
+            file_name=f"Renta_departements_{_suffixe}.csv",
+            mime="text/csv",
         )
 
-elif file_missions and not file_ca:
-    st.info("📂 Fichier missions chargé. En attente du fichier CA...")
-
-elif file_ca and not file_missions:
-    st.info("📂 Fichier CA chargé. En attente du fichier missions...")
-
-else:
-    st.markdown("""
-    #### Comment utiliser cet outil
-
-    1. **Chargez le fichier Missions** (export avec N°Dossier, Activité, stops, chauffeur)
-    2. **Chargez le fichier CA** (export avec N°Dossier, Prix transport, Total vente)
-    3. Choisissez la **source du département de déchargement** (fichier CA ou dernier stop
-       DÉCHARGEMENT du fichier missions)
-    4. Consultez le **tableau consolidé** par dossier, filtrable par département
-    5. Sélectionnez les chauffeurs et **lancez le calcul PTV** pour obtenir :
-       - Les km totaux par dossier (toute la chaîne de stops)
-       - Les km à vide entre chaque déchargement et le rechargement suivant
-       - La **rentabilité €/km par département de déchargement**
-    6. **Téléchargez le rapport Excel** (onglet « Renta Départements » inclus)
-
-    > ⚙️ La clé PTV doit être configurée dans le fichier `.env` (`PTV_API_KEY`).
-    """)
+st.caption(
+    f"ℹ️ Rentabilité en **€/km chargé** sur la base « {base_label} », trajet direct "
+    "chargement → déchargement calculé par PTV (profil EUR_TRAILER_TRUCK 44t). "
+    "Les km à vide nécessitent le fichier missions (chauffeur + chronologie)."
+)
