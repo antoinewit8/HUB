@@ -838,10 +838,11 @@ def explode_depts(df, base_col, regle, km_col):
     return pd.DataFrame(rows)
 
 
-def build_dept_stats(df_exp):
+def build_dept_stats(df_exp, par_type=False):
     if df_exp.empty:
         return pd.DataFrame()
-    g = df_exp.groupby("dept", as_index=False).agg(
+    cles = ["dept", "type_dossier"] if par_type else ["dept"]
+    g = df_exp.groupby(cles, as_index=False).agg(
         nb_dossiers    = ("dossier",        "nunique"),
         poids          = ("poids",          "sum"),
         km             = ("km",             "sum"),
@@ -864,7 +865,8 @@ def build_dept_stats(df_exp):
 
 
 DEPT_RENAME = {
-    "dept": "Dépt", "nom_dept": "Département", "nb_dossiers": "Nb Dossiers",
+    "dept": "Dépt", "nom_dept": "Département", "type_dossier": "Type",
+    "nb_dossiers": "Nb Dossiers",
     "poids": "Dossiers pondérés", "nb_clients": "Nb Clients",
     "km": "KM", "km_moyen": "KM moy/dossier",
     "prix_transport": "Prix Transport (€)", "total_vente": "Total Vente (€)",
@@ -872,9 +874,9 @@ DEPT_RENAME = {
     "pct_ca": "% du CA retenu", "renta": "Renta €/km",
 }
 
-DEPT_ORDER = ["dept", "nom_dept", "nb_dossiers", "poids", "nb_clients", "km",
-              "km_moyen", "prix_transport", "total_vente", "base",
-              "ca_moyen", "pct_ca", "renta"]
+DEPT_ORDER = ["dept", "nom_dept", "type_dossier", "nb_dossiers", "poids",
+              "nb_clients", "km", "km_moyen", "prix_transport", "total_vente",
+              "base", "ca_moyen", "pct_ca", "renta"]
 
 
 def format_dept(df_dept, base_col="total_vente", regle="dominant", avec_km=True):
@@ -1209,7 +1211,22 @@ tabs = st.tabs(["🇫🇷 Par département", "⚖️ Lot sec vs Groupage",
 # ── Par département ──
 with tabs[0]:
     exp = explode_depts(res, base_col, regle, km_col)
-    dep = build_dept_stats(exp)
+
+    s1, s2 = st.columns([1, 3])
+    with s1:
+        par_type = st.checkbox(
+            "⚖️ Séparer lot sec / groupage", value=False,
+            help="Une ligne par département ET par type, au lieu d'une moyenne "
+                 "qui mélange les deux.",
+        )
+    with s2:
+        if par_type:
+            st.caption(
+                "Chaque département apparaît une fois par type présent. "
+                "Un département sans groupage n'aura qu'une ligne."
+            )
+
+    dep = build_dept_stats(exp, par_type=par_type)
 
     if dep.empty:
         st.info("Aucun déchargement en France dans la sélection.")
@@ -1235,12 +1252,13 @@ with tabs[0]:
             if not val.empty:
                 b_ = val.sort_values("renta", ascending=False).iloc[0]
                 w_ = val.sort_values("renta", ascending=True).iloc[0]
+                _sfx = (lambda r: f" ({r['type_dossier']})") if par_type else (lambda r: "")
                 q1, q2, q3, q4 = st.columns(4)
                 q1.metric("🥇 Meilleur", f"{b_['renta']:.2f} €/km",
-                          f"{b_['dept']} — {b_['nom_dept']}")
+                          f"{b_['dept']} — {b_['nom_dept']}{_sfx(b_)}")
                 q2.metric("🥉 Moins bon", f"{w_['renta']:.2f} €/km",
-                          f"{w_['dept']} — {w_['nom_dept']}")
-                q3.metric("🗺️ Départements", len(depv))
+                          f"{w_['dept']} — {w_['nom_dept']}{_sfx(w_)}")
+                q3.metric("🗺️ Départements", depv["dept"].nunique())
                 q4.metric("📁 Dossiers", int(depv["nb_dossiers"].sum()))
 
             st.dataframe(
@@ -1259,6 +1277,8 @@ with tabs[0]:
             ch = depv[depv["renta"].notna()].copy()
             if not ch.empty:
                 ch["Dépt"] = ch["dept"] + " " + ch["nom_dept"]
+                if par_type:
+                    ch["Dépt"] = ch["Dépt"] + " · " + ch["type_dossier"]
                 st.bar_chart(ch.set_index("Dépt")["renta"], height=320)
 
             st.download_button(
@@ -1268,7 +1288,7 @@ with tabs[0]:
                 "Renta_departements.csv", "text/csv")
 
             st.markdown("##### 🔍 Détail d'un département")
-            dsel = st.selectbox("Département", depv["dept"].tolist(),
+            dsel = st.selectbox("Département", sorted(depv["dept"].unique()),
                                 format_func=dept_label)
             det = res[res["depts"].map(lambda L: dsel in (L or []))]
             st.dataframe(
@@ -1394,7 +1414,7 @@ with tabs[4]:
 st.divider()
 
 exp_f = explode_depts(res, base_col, regle, km_col)
-dep_f = build_dept_stats(exp_f)
+dep_f = build_dept_stats(exp_f, par_type=locals().get("par_type", False))
 comp_f = None
 try:
     comp_f = comp
