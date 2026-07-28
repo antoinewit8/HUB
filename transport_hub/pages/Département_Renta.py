@@ -390,7 +390,7 @@ def parse_ca(file):
     df["pays_decharg"] = df["pays_decharg"].str.upper()
 
     df["date_dt"] = pd.to_datetime(df["date_charg"], errors="coerce")
-    df["mois"]    = df["date_dt"].dt.to_period("M").astype(str)
+    df["mois"]    = df["date_dt"].dt.strftime("%Y-%m").fillna("").astype(str)
 
     # Département : recalculé depuis CP + pays (fiable), repli sur la colonne source
     df["dept_decharg"] = df.apply(
@@ -702,7 +702,10 @@ with f4:
 
 g1, g2 = st.columns([2, 3])
 with g1:
-    mois_dispo = sorted([m for m in df["mois"].unique() if m and m != "NaT"])
+    mois_dispo = sorted({
+        str(m) for m in df["mois"].dropna().unique()
+        if str(m) not in ("", "NaT", "nan", "None")
+    })
     f_mois = st.multiselect(
         "📅 Mois de chargement", options=mois_dispo, default=[],
         placeholder="Tous les mois",
