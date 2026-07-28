@@ -491,52 +491,60 @@ def _pt(row):
     return (row["localite"], row["code_postal"], row["code_pays"])
 
 
+@st.cache_data(show_spinner="🧩 Analyse des dossiers...")
 def build_dossiers(df_ca, df_stops):
     """Assemble un dossier par ligne : stops ordonnés, classification, départements."""
     infos = {}
 
-    if df_stops is not None:
-        for dos, grp in df_stops.groupby("dossier", sort=False):
-            grp = grp.sort_values("dt", kind="stable")
+    if df_stops is not None and not df_stops.empty:
+        # Seuls les dossiers présents dans le CA nous intéressent ici
+        sub = df_stops[df_stops["dossier"].isin(set(df_ca["dossier"]))]
+        sub = sub.sort_values(["dossier", "dt"], kind="stable")
 
-            st_ch = grp[grp["act"] == "CHARGEMENT"]
-            st_de = grp[grp["act"] == "DECHARGEMENT"]
+        for dos, grp in sub.groupby("dossier", sort=False):
+            act   = grp["act"].tolist()
+            loc   = grp["localite"].tolist()
+            cp    = grp["code_postal"].tolist()
+            pays  = grp["code_pays"].tolist()
+            keys  = grp["lieu_key"].tolist()
+            pts   = list(zip(loc, cp, pays))
+
+            idx_ch = [i for i, a in enumerate(act) if a == "CHARGEMENT"]
+            idx_de = [i for i, a in enumerate(act) if a == "DECHARGEMENT"]
 
             # Points de route : tout sauf AUTRE, doublons consécutifs supprimés
             route, prev = [], None
-            for _, r in grp[grp["act"] != "AUTRE"].iterrows():
-                k = r["lieu_key"]
-                if k and k != prev:
-                    route.append(_pt(r))
-                    prev = k
+            for i, a in enumerate(act):
+                if a == "AUTRE":
+                    continue
+                if keys[i] and keys[i] != prev:
+                    route.append(pts[i])
+                    prev = keys[i]
 
-            depts = [extract_departement(r["code_postal"], r["code_pays"])
-                     for _, r in st_de.iterrows()]
-            depts_ok = [d for d in depts if d]
-
+            depts_ok = [d for d in
+                        (extract_departement(cp[i], pays[i]) for i in idx_de) if d]
             if depts_ok:
-                cnt  = Counter(depts_ok)
-                top  = max(cnt.values())
-                ex   = [d for d, n in cnt.items() if n == top]
-                # égalité → le dernier livré
+                cnt = Counter(depts_ok)
+                top = max(cnt.values())
+                ex  = {d for d, n in cnt.items() if n == top}
                 principal = next(d for d in reversed(depts_ok) if d in ex)
             else:
                 principal = None
 
             def _first(col):
-                v = [x for x in grp[col] if x]
+                v = [x for x in grp[col].tolist() if x]
                 return v[0] if v else ""
 
             infos[dos] = {
-                "n_charg":     len(st_ch),
-                "n_decharg":   len(st_de),
-                "lieux_charg": st_ch["lieu_key"].nunique(),
-                "lieux_dech":  st_de["lieu_key"].nunique(),
-                "n_transit":   int((grp["act"] == "TRANSIT").sum()),
-                "n_technique": int((grp["act"] == "TECHNIQUE").sum()),
+                "n_charg":     len(idx_ch),
+                "n_decharg":   len(idx_de),
+                "lieux_charg": len({keys[i] for i in idx_ch}),
+                "lieux_dech":  len({keys[i] for i in idx_de}),
+                "n_transit":   act.count("TRANSIT"),
+                "n_technique": act.count("TECHNIQUE"),
                 "route_pts":   route,
-                "pts_charg":   [_pt(r) for _, r in st_ch.iterrows()],
-                "pts_dech":    [_pt(r) for _, r in st_de.iterrows()],
+                "pts_charg":   [pts[i] for i in idx_ch],
+                "pts_dech":    [pts[i] for i in idx_de],
                 "depts":       depts_ok,
                 "dept_principal": principal,
                 "nb_depts":    len(set(depts_ok)),
@@ -546,13 +554,13 @@ def build_dossiers(df_ca, df_stops):
                 "dt_debut":    grp["dt"].min(),
                 "dt_fin":      grp["dt"].max(),
                 "villes_ch":   " + ".join(dict.fromkeys(
-                    [r["localite"] for _, r in st_ch.iterrows() if r["localite"]])),
+                    [loc[i] for i in idx_ch if loc[i]])),
                 "villes_de":   " → ".join(dict.fromkeys(
-                    [r["localite"] for _, r in st_de.iterrows() if r["localite"]])),
+                    [loc[i] for i in idx_de if loc[i]])),
             }
 
     rows = []
-    for _, ca in df_ca.iterrows():
+    for ca in df_ca.to_dict("records"):
         dos = ca["dossier"]
         i   = infos.get(dos)
 
@@ -626,54 +634,56 @@ def build_dossiers(df_ca, df_stops):
 #  KM À VIDE — chaînage par tracteur sur TOUT le fichier missions
 # ══════════════════════════════════════════════════════════════════
 
-def build_empty_legs(df_stops, dossiers_cibles, cle="tracteur", max_jours=3):
-    """Pour chaque dossier cible : dernier déchargement → premier chargement
-    du dossier suivant du même tracteur, sur l'ensemble du fichier missions."""
-    if df_stops is None:
+@st.cache_data(show_spinner="🔗 Chaînage des tracteurs...")
+def compute_bornes(df_stops, cle="tracteur"):
+    """Premier chargement et dernier déchargement de CHAQUE dossier du fichier
+    missions (11 000+), vectorisé. Sert de base au calcul des trajets à vide."""
+    if df_stops is None or df_stops.empty:
+        return pd.DataFrame()
+
+    d = df_stops[df_stops["act"].isin(("CHARGEMENT", "DECHARGEMENT"))]
+    d = d.sort_values(["dossier", "dt"], kind="stable")
+    cols = ["dt", "localite", "code_postal", "code_pays", "lieu_key"]
+
+    ch = d[d["act"] == "CHARGEMENT"].groupby("dossier", sort=False)[cols].first()
+    de = d[d["act"] == "DECHARGEMENT"].groupby("dossier", sort=False)[cols].last()
+    b  = ch.join(de, how="inner", lsuffix="_ch", rsuffix="_de")
+    if b.empty:
+        return pd.DataFrame()
+
+    tr = (df_stops[df_stops[cle] != ""]
+          .sort_values(["dossier", "dt"], kind="stable")
+          .groupby("dossier", sort=False)[cle].first())
+    b["cle"] = b.index.map(tr).fillna("")
+    return b.reset_index()
+
+
+def build_empty_legs(bornes, dossiers_cibles, max_jours=3):
+    """Dernier déchargement d'un dossier → premier chargement du dossier suivant
+    du même tracteur. Le rattachement se fait au dossier de départ."""
+    if bornes is None or bornes.empty:
         return []
 
-    bornes = []
-    for dos, grp in df_stops.groupby("dossier", sort=False):
-        grp = grp.sort_values("dt", kind="stable")
-        ch  = grp[grp["act"] == "CHARGEMENT"]
-        de  = grp[grp["act"] == "DECHARGEMENT"]
-        if ch.empty or de.empty:
-            continue
-        vals = [v for v in grp[cle] if v]
-        bornes.append({
-            "dossier":  dos,
-            "cle":      vals[0] if vals else "",
-            "debut":    ch.iloc[0]["dt"],
-            "fin":      de.iloc[-1]["dt"],
-            "pt_debut": _pt(ch.iloc[0]),
-            "pt_fin":   _pt(de.iloc[-1]),
-            "key_debut": ch.iloc[0]["lieu_key"],
-            "key_fin":   de.iloc[-1]["lieu_key"],
-        })
-
-    df_b = pd.DataFrame(bornes)
-    if df_b.empty:
-        return []
-    df_b = df_b[df_b["cle"] != ""].sort_values(["cle", "debut"], kind="stable")
-
+    b = bornes[bornes["cle"] != ""].sort_values(["cle", "dt_ch"], kind="stable")
     cibles, legs = set(dossiers_cibles), []
-    for _, grp in df_b.groupby("cle", sort=False):
+
+    for _, grp in b.groupby("cle", sort=False):
         recs = grp.to_dict("records")
-        for a, b in zip(recs, recs[1:]):
+        for a, nxt in zip(recs, recs[1:]):
             if a["dossier"] not in cibles:
                 continue
-            if pd.isna(a["fin"]) or pd.isna(b["debut"]):
+            if pd.isna(a["dt_de"]) or pd.isna(nxt["dt_ch"]):
                 continue
-            gap = (b["debut"] - a["fin"]).total_seconds() / 86400
+            gap = (nxt["dt_ch"] - a["dt_de"]).total_seconds() / 86400
             if gap < 0 or gap > max_jours:
                 continue
             legs.append({
                 "dossier":      a["dossier"],
-                "dossier_next": b["dossier"],
+                "dossier_next": nxt["dossier"],
                 "cle":          a["cle"],
-                "pt_from":      a["pt_fin"],
-                "pt_to":        b["pt_debut"],
-                "meme_lieu":    a["key_fin"] == b["key_debut"],
+                "pt_from":      (a["localite_de"], a["code_postal_de"], a["code_pays_de"]),
+                "pt_to":        (nxt["localite_ch"], nxt["code_postal_ch"], nxt["code_pays_ch"]),
+                "meme_lieu":    a["lieu_key_de"] == nxt["lieu_key_ch"],
                 "gap_jours":    round(gap, 2),
             })
     return legs
@@ -1129,7 +1139,8 @@ st.divider()
 
 st.markdown("### 🗺️ Calcul PTV")
 
-legs = build_empty_legs(df_stops, set(dff["dossier"]), "tracteur", max_jours)
+bornes = compute_bornes(df_stops, "tracteur") if df_stops is not None else pd.DataFrame()
+legs = build_empty_legs(bornes, set(dff["dossier"]), max_jours)
 nb_pts = len({p for r in dff["route_pts"] for p in r if p[0] or p[1]})
 st.caption(
     f"≈ {nb_pts} points à géocoder · {len(dff)} itinéraires chargés · "
