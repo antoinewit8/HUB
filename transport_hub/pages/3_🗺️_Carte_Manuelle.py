@@ -1,169 +1,80 @@
+"""
+Carte Manuelle — la page n'affiche plus que la carte.
+
+Le départ, l'arrivée, les étapes et les options se définissent directement dans
+map.html. Aucun widget Streamlit : pas de rerun, donc pas d'état perdu ni de
+marqueur fantôme.
+"""
+
+import os
+import time
+from pathlib import Path
+
+import requests
 import streamlit as st
 import streamlit.components.v1 as components
-import requests
-import time
-import os
 from dotenv import load_dotenv
-from pathlib import Path
 from jinja2 import Template
 
-env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
-
-MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://hub-m36x.onrender.com")
+load_dotenv(dotenv_path=Path(__file__).parent.parent / ".env")
+MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://hub-m36x.onrender.com").rstrip("/")
 
 st.set_page_config(page_title="Carte Manuelle", page_icon="🗺️", layout="wide")
 
-# ─── CSS AGRESSIF ─────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(
+    """
     <style>
-        .block-container { 
-            padding: 0 !important; 
-            margin: 0 !important;
-            max-width: 100% !important;
-        }
-        header { display: none !important; }
-        #MainMenu { display: none !important; }
-        footer { display: none !important; }
-        section[data-testid="stMain"] > div:first-child {
-            padding: 0 !important;
-        }
-        div[data-testid="stVerticalBlock"] {
-            gap: 0rem !important;
-        }
-        iframe {
-            display: block !important;
-            border: none !important;
-        }
-        iframe[title="components.html"] {
-            height: 100vh !important;
-            min-height: 100vh !important;
-            width: 100% !important;
-        }
+      .block-container { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+      header, #MainMenu, footer { display: none !important; }
+      section[data-testid="stMain"] > div:first-child { padding: 0 !important; }
+      div[data-testid="stVerticalBlock"] { gap: 0 !important; }
+      iframe[title="streamlit.components.v1.html"],
+      iframe[title="components.html"] {
+          display: block !important; border: none !important;
+          width: 100% !important; height: calc(100vh - 8px) !important;
+      }
     </style>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
-# Pays reconnus (FR + EN + variantes) : si le texte se termine par l'un d'eux,
-# on insère une virgule au lieu de forcer la Belgique.
-_PAYS_CONNUS = {
-    "france", "belgique", "belgium", "belgie",
-    "italie", "italia", "italy",
-    "espagne", "espana", "spain",
-    "allemagne", "deutschland", "germany",
-    "pays-bas", "nederland", "netherlands", "holland",
-    "luxembourg", "suisse", "switzerland", "schweiz",
-    "autriche", "austria", "portugal",
-    "royaume-uni", "angleterre", "england", "uk",
-}
 
-def format_location(loc: str) -> str:
-    loc = loc.strip()
-    if not loc:
-        return loc
-    # L'utilisateur a déjà mis une virgule → on respecte son format
-    if "," in loc:
-        return loc
-    # Le dernier mot est un pays connu (ex: "Vercelli Italie") → on insère la virgule
-    mots = loc.split()
-    if len(mots) >= 2 and mots[-1].lower().strip(".") in _PAYS_CONNUS:
-        return f"{' '.join(mots[:-1])}, {mots[-1]}"
-    # Ville seule sans pays (ex: "Liège") → défaut Belgique
-    return f"{loc}, Belgium"
-
-# ─── Warm Up ──────────────────────────────────────────────────────────────────
-def warm_up_server() -> bool:
-    for attempt in range(1, 7):
+@st.cache_data(ttl=600, show_spinner=False)
+def warm_up_server(url: str) -> bool:
+    """Render s'endort sur le plan gratuit : on le réveille une fois par session."""
+    for _ in range(3):
         try:
-            r = requests.get(f"{MAP_SERVER_URL}/health", timeout=10)
-            if r.status_code == 200:
+            if requests.get(f"{url}/health", timeout=12).status_code == 200:
                 return True
-        except:
+        except requests.RequestException:
             pass
-        time.sleep(10)
+        time.sleep(4)
     return False
 
-if "server_ready" not in st.session_state:
-    with st.spinner("🔌 Démarrage du serveur carte..."):
-        st.session_state["server_ready"] = warm_up_server()
 
-if "calc" not in st.session_state:
-    st.session_state["calc"] = None
+with st.spinner("Réveil du serveur carte…"):
+    server_ready = warm_up_server(MAP_SERVER_URL)
 
-# ─── CARTE ────────────────────────────────────────────────────────────────────
-if st.session_state["calc"]:
-    calc     = st.session_state["calc"]
-    _origine = st.session_state.get("origine", "")
-    _dest    = st.session_state.get("dest",    "")
+try:
+    map_html_path = Path(__file__).parent.parent / "map.html"
+    template = Template(map_html_path.read_text(encoding="utf-8"))
 
-    try:
-        map_html_path = Path(__file__).parent.parent / "map.html"
-        with open(map_html_path, "r", encoding="utf-8") as f:
-            html_template = f.read()
+    # Carte vide : map.html gère lui-même départ, arrivée, étapes et options.
+    html_final = template.render(
+        route={"origin": "", "dest": "", "polyline": []},
+        route_id="manual",
+        server_url=MAP_SERVER_URL,
+    )
+    components.html(html_final, height=1000, scrolling=False)
 
-        template   = Template(html_template)
-        html_final = template.render(
-            route={
-                "origin":            _origine,
-                "dest":              _dest,
-                "polyline":          calc.get("polyline", []),
-                "polyline_current":  calc.get("polyline", []),
-                "polyline_original": calc.get("polyline", []),
-                "distance_km":       calc.get("distance_km", ""),
-                "duration_h":        calc.get("duration_h", ""),
-                "prix_peage":        calc.get("prix_peage", 0.0),
-            },
-            route_id   = calc.get("route_id", "manual"),
-            server_url = MAP_SERVER_URL
-        )
+except FileNotFoundError:
+    st.error("map.html introuvable à la racine du projet.")
+except Exception as e:
+    st.error(f"Erreur chargement map.html : {e}")
 
-        components.html(html_final, height=1250, scrolling=False)
-
-    except Exception as e:
-        st.error(f"❌ Erreur chargement map.html : {e}")
-
-else:
-    # ─── Formulaire ───────────────────────────────────────────────────────────
-    with st.form("form_carte", clear_on_submit=False):
-        st.markdown("### 🗺️ Calculer un itinéraire")
-        c1, c2 = st.columns(2)
-        with c1:
-            origine = st.text_input("📍 Départ", placeholder="Ex : Liège, Belgium")
-        with c2:
-            destination = st.text_input("🏁 Arrivée", placeholder="Ex : Nieuport, Belgium")
-
-        c3, c4, c5 = st.columns([1, 1, 2])
-        with c3:
-            avoid_tolls = st.checkbox("🚫 Éviter péages")
-        with c4:
-            avoid_highways = st.checkbox("🚫 Éviter autoroutes")
-        with c5:
-            submitted = st.form_submit_button("🗺️ Calculer l'itinéraire", use_container_width=True)
-
-    if submitted:
-        if not origine.strip() or not destination.strip():
-            st.error("❌ Renseignez le départ et l'arrivée.")
-        else:
-            with st.spinner("⏳ Calcul en cours..."):
-                try:
-                    payload = {
-                        "origin":         format_location(origine),
-                        "dest":           format_location(destination),
-                        "avoid_tolls":    avoid_tolls,
-                        "avoid_highways": avoid_highways
-                    }
-                    resp = requests.post(
-                        f"{MAP_SERVER_URL}/api/recalculate",
-                        json=payload,
-                        timeout=60
-                    )
-
-                    if resp.status_code == 200:
-                        st.session_state["calc"]    = resp.json()
-                        st.session_state["origine"] = format_location(origine)
-                        st.session_state["dest"]    = format_location(destination)
-                        st.rerun()
-                    else:
-                        st.error(f"❌ Erreur serveur ({resp.status_code}) : {resp.text[:200]}")
-                except Exception as e:
-                    st.error(f"❌ Connexion impossible : {e}")
+if not server_ready:
+    st.warning(
+        f"Le serveur carte ({MAP_SERVER_URL}) n'a pas répondu au réveil. "
+        "Le premier calcul peut échouer, relancez-le une fois.",
+        icon="⚠️",
+    )
