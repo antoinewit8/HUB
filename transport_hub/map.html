@@ -1307,6 +1307,60 @@
         document.getElementById('save-modal-overlay').addEventListener('click', function (e) {
             if (e.target === this) closeSaveModal();
         });
+
+        // ═══════════════════════════════════════════════════════
+        //  PLEIN ÉCRAN
+        // ═══════════════════════════════════════════════════════
+        // Le CSS injecté côté Streamlit ne suffit pas : le conteneur qui entoure
+        // l'iframe change de data-testid d'une version à l'autre, donc les
+        // sélecteurs ratent leur cible et il reste une bande sous la carte.
+        // L'iframe étant en srcdoc, elle partage l'origine de la page : on
+        // remonte la chaîne des parents et on fixe la hauteur nous-mêmes.
+        (function fitToParent() {
+            let frame;
+            try { frame = window.frameElement; } catch (e) { frame = null; }
+            if (!frame) return;   // ouvert hors Streamlit : rien à faire
+
+            const doc = frame.ownerDocument;
+            const win = doc.defaultView;
+
+            function apply() {
+                try {
+                    const top = frame.getBoundingClientRect().top + (win.scrollY || 0);
+                    const h = Math.max(420, Math.round(win.innerHeight - top - 2));
+
+                    frame.style.height = h + 'px';
+                    frame.style.width = '100%';
+                    frame.style.display = 'block';
+                    frame.style.border = 'none';
+
+                    // Les conteneurs intermédiaires gardent sinon la hauteur
+                    // passée à components.html, ce qui laisse le fond du thème
+                    // visible en dessous.
+                    let el = frame.parentElement, depth = 0;
+                    while (el && el !== doc.body && depth < 8) {
+                        el.style.height = h + 'px';
+                        el.style.minHeight = '0';
+                        el.style.marginBottom = '0';
+                        el.style.paddingBottom = '0';
+                        el = el.parentElement;
+                        depth++;
+                    }
+
+                    doc.documentElement.style.overflow = 'hidden';
+                    doc.body.style.overflow = 'hidden';
+
+                    if (typeof map !== 'undefined' && map && map.resize) map.resize();
+                } catch (e) {
+                    console.warn('Redimensionnement auto indisponible:', e);
+                }
+            }
+
+            apply();
+            win.addEventListener('resize', apply);
+            // Streamlit finit de poser sa mise en page après le premier rendu.
+            [200, 600, 1500].forEach(d => setTimeout(apply, d));
+        })();
     </script>
 </body>
 </html>
