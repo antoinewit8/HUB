@@ -21,17 +21,39 @@ MAP_SERVER_URL = os.environ.get("MAP_SERVER_URL", "https://hub-m36x.onrender.com
 
 st.set_page_config(page_title="Carte Manuelle", page_icon="🗺️", layout="wide")
 
+# La hauteur doit être forcée sur TOUTE la chaîne de conteneurs. Ne la mettre que
+# sur l'iframe laisse le wrapper du composant à la hauteur passée à
+# components.html : c'est cet écart qui produisait la bande sombre en bas.
 st.markdown(
     """
     <style>
-      .block-container { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
+      html, body, .stApp { height: 100%; overflow: hidden; background: #f4f6f8; }
       header, #MainMenu, footer { display: none !important; }
+
+      section[data-testid="stMain"] { padding: 0 !important; }
       section[data-testid="stMain"] > div:first-child { padding: 0 !important; }
-      div[data-testid="stVerticalBlock"] { gap: 0 !important; }
+
+      .block-container {
+          padding: 0 !important; margin: 0 !important;
+          max-width: 100% !important; height: 100vh !important;
+      }
+
+      div[data-testid="stVerticalBlock"],
+      div[data-testid="stVerticalBlockBorderWrapper"] {
+          gap: 0 !important; height: 100% !important;
+      }
+
+      /* Le conteneur d'élément qui porte l'iframe du composant */
+      div[data-testid="element-container"]:has(iframe) { height: 100vh !important; }
+      div[data-testid="stCustomComponentV1"],
+      div[data-testid="stIFrame"] {
+          height: 100vh !important; width: 100% !important; display: block !important;
+      }
+
       iframe[title="streamlit.components.v1.html"],
       iframe[title="components.html"] {
+          height: 100vh !important; width: 100% !important;
           display: block !important; border: none !important;
-          width: 100% !important; height: calc(100vh - 8px) !important;
       }
     </style>
     """,
@@ -55,6 +77,15 @@ def warm_up_server(url: str) -> bool:
 with st.spinner("Réveil du serveur carte…"):
     server_ready = warm_up_server(MAP_SERVER_URL)
 
+# L'avertissement passe AVANT la carte : placé après, il ajoute un bloc sous
+# l'iframe et recrée une bande vide.
+if not server_ready:
+    st.warning(
+        f"Le serveur carte ({MAP_SERVER_URL}) n'a pas répondu au réveil. "
+        "Le premier calcul peut échouer, relancez-le une fois.",
+        icon="⚠️",
+    )
+
 try:
     map_html_path = Path(__file__).parent.parent / "map.html"
     template = Template(map_html_path.read_text(encoding="utf-8"))
@@ -65,16 +96,9 @@ try:
         route_id="manual",
         server_url=MAP_SERVER_URL,
     )
-    components.html(html_final, height=1000, scrolling=False)
+    components.html(html_final, height=900, scrolling=False)
 
 except FileNotFoundError:
     st.error("map.html introuvable à la racine du projet.")
 except Exception as e:
     st.error(f"Erreur chargement map.html : {e}")
-
-if not server_ready:
-    st.warning(
-        f"Le serveur carte ({MAP_SERVER_URL}) n'a pas répondu au réveil. "
-        "Le premier calcul peut échouer, relancez-le une fois.",
-        icon="⚠️",
-    )
