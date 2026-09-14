@@ -563,59 +563,111 @@
             };
         }
 
-        const fmtLL = p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`;
-
-        // Premier calcul : /api/recalculate, l'endpoint que la page Streamlit
-        // utilisait déjà. Il renvoie un route_id qu'on réutilise ensuite.
-        async function _viaRecalculate(pts) {
-            const via = pts.slice(1, -1);
-            const body = Object.assign({
-                origin: fmtLL(pts[0]),
-                dest:   fmtLL(pts[pts.length - 1]),
-                origin_coords: [pts[0].lat, pts[0].lng],
-                dest_coords:   [pts[pts.length - 1].lat, pts[pts.length - 1].lng],
-                via:       via.map(p => [p.lat, p.lng]),
-                waypoints: via.map(fmtLL)
-            }, options());
-
-            const r = await fetch(`${serverUrl}/api/recalculate`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body)
-            });
-            if (!r.ok) throw new Error(`recalculate ${r.status} — ${(await r.text()).slice(0, 120)}`);
-            return r.json();
+        // Distance approximative en km entre deux points (contrôle de cohérence).
+        function _distKm(a, b) {
+            const R = 6371, toRad = d => d * Math.PI / 180;
+            const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+            const h = Math.sin(dLat / 2) ** 2
+                    + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+            return 2 * R * Math.asin(Math.sqrt(h));
         }
 
-        // Recalcul après déplacement : endpoint historique, en coordonnées.
+        // Le serveur peut répondre 200 avec un tracé qui n'a rien à voir avec la
+        // demande : c'est ce qui arrive quand son géocodeur avale "51.92,4.47"
+        // comme du texte et renvoie une ville au hasard. On refuse tout tracé
+        // dont les extrémités sont à plus de 30 km des points demandés.
+        const MAX_ECART_KM = 30;
+
+        function _checkRoute(data, pts) {
+            const poly = data.polyline;
+            const first = { lat: poly[0][0],               lng: poly[0][1] };
+            const last  = { lat: poly[poly.length - 1][0], lng: poly[poly.length - 1][1] };
+            const a = _distKm(first, pts[0]);
+            const b = _distKm(last,  pts[pts.length - 1]);
+            if (a > MAX_ECART_KM || b > MAX_ECART_KM) {
+                throw new Error(
+                    `tracé hors sujet (départ à ${a.toFixed(0)} km, arrivée à ${b.toFixed(0)} km ` +
+                    `des points demandés)`);
+            }
+            return data;
+        }
+
+        const fmtLL2 = p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`;
+
+        // 1) Endpoint historique du glisser-déposer : il travaille nativement en
+        //    coordonnées, donc pas de géocodage à traverser.
         async function _viaDrag(pts) {
             const body = Object.assign({ route_id: routeId, waypoints: pts }, options());
             const r = await fetch(`${serverUrl}/api/recalculate_drag`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body)
             });
-            if (!r.ok) throw new Error(`recalculate_drag ${r.status} — ${(await r.text()).slice(0, 120)}`);
-            return r.json();
+            if (!r.ok) throw new Error(`recalculate_drag ${r.status} — ${(await r.text()).slice(0, 110)}`);
+            const d = await r.json();
+            if (!d.polyline || d.polyline.length < 2) throw new Error('recalculate_drag : aucun tracé');
+            return _checkRoute(d, pts);
         }
 
-        // Les deux endpoints sont tentés dans l'ordre le plus probable, et on
-        // remonte les deux messages d'erreur si aucun ne passe.
+        // 2) /api/recalculate en coordonnées. Ne marche que si le serveur sait
+        //    reconnaître un couple "lat,lon" avant de géocoder.
+        async function _viaRecalculate(pts) {
+            const via = pts.slice(1, -1);
+            const body = Object.assign({
+                origin: fmtLL2(pts[0]),
+                dest:   fmtLL2(pts[pts.length - 1]),
+                origin_coords: [pts[0].lat, pts[0].lng],
+                dest_coords:   [pts[pts.length - 1].lat, pts[pts.length - 1].lng],
+                via:       via.map(p => [p.lat, p.lng]),
+                waypoints: via.map(fmtLL2)
+            }, options());
+
+            const r = await fetch(`${serverUrl}/api/recalculate`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!r.ok) throw new Error(`recalculate ${r.status} — ${(await r.text()).slice(0, 110)}`);
+            const d = await r.json();
+            if (!d.polyline || d.polyline.length < 2) throw new Error('recalculate : aucun tracé');
+            return _checkRoute(d, pts);
+        }
+
+        // 3) /api/recalculate avec les libellés d'adresse, quand les points
+        //    viennent de la recherche. Dernier recours si le serveur refuse les
+        //    coordonnées.
+        async function _viaLabels(pts) {
+            const looksLikeCoords = t => /^\s*-?\d+\.?\d*\s*,\s*-?\d+\.?\d*\s*$/.test(t || '');
+            if (!origin.label || !dest.label
+                || looksLikeCoords(origin.label) || looksLikeCoords(dest.label)) {
+                throw new Error('libellés : pas d\'adresse disponible');
+            }
+            const body = Object.assign({ origin: origin.label, dest: dest.label }, options());
+            const r = await fetch(`${serverUrl}/api/recalculate`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!r.ok) throw new Error(`recalculate/libellés ${r.status}`);
+            const d = await r.json();
+            if (!d.polyline || d.polyline.length < 2) throw new Error('recalculate/libellés : aucun tracé');
+            return _checkRoute(d, pts);
+        }
+
         async function requestRoute() {
             const pts = allPoints();
-            const order = (routeKnown || waypoints.length)
-                ? [['recalculate_drag', _viaDrag], ['recalculate', _viaRecalculate]]
-                : [['recalculate', _viaRecalculate], ['recalculate_drag', _viaDrag]];
-
+            const attempts = [
+                ['recalculate_drag', _viaDrag],
+                ['recalculate',      _viaRecalculate],
+                ['libellés',         _viaLabels]
+            ];
             const errors = [];
-            for (const [name, fn] of order) {
+            for (const [name, fn] of attempts) {
                 try {
-                    const data = await fn(pts);
-                    if (data && data.polyline && data.polyline.length > 1) return data;
-                    errors.push(`${name} : aucun tracé`);
+                    return await fn(pts);
                 } catch (e) {
-                    errors.push(e.message);
+                    errors.push(`${name} → ${e.message}`);
+                    console.warn('Tentative', name, e);
                 }
             }
-            throw new Error(errors.join(' | '));
+            throw new Error(errors.join(' ; '));
         }
 
         let calcTimer = null;
