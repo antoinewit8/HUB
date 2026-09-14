@@ -895,53 +895,113 @@
             return { head: head || h.country, sub, full: [head, sub].filter(Boolean).join(', ') };
         }
 
+        // Trace de la dernière recherche, affichée sous la liste de résultats.
+        let lastGeoSource = '';
+
+        // 1) Nominatim : tri par importance (la ville passe devant la rue) et
+        //    filtre pays natif via countrycodes.
+        function _mapNomType(it) {
+            const t = it.type, c = it.class;
+            if (c === 'place') {
+                if (t === 'suburb' || t === 'neighbourhood') return 'district';
+                if (TYPE_RANK[t] !== undefined) return t;
+                return 'locality';
+            }
+            if (c === 'boundary' || c === 'administrative') return 'municipality';
+            if (c === 'highway') return 'street';
+            if (it.addresstype === 'house' || t === 'house') return 'house';
+            return TYPE_RANK[t] !== undefined ? t : 'other';
+        }
+
+        async function _nominatim(q, cc) {
+            let url = 'https://nominatim.openstreetmap.org/search'
+                    + '?format=jsonv2&addressdetails=1&limit=10&accept-language=fr'
+                    + '&q=' + encodeURIComponent(q);
+            if (cc) url += '&countrycodes=' + cc.toLowerCase();
+
+            const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            if (!r.ok) throw new Error('Nominatim HTTP ' + r.status);
+            const j = await r.json();
+
+            return (j || []).map(it => {
+                const a = it.address || {};
+                return {
+                    lat: +it.lat, lng: +it.lon,
+                    name: it.name || a.city || a.town || a.village || a.road
+                          || (it.display_name || '').split(',')[0],
+                    street: a.road || '',
+                    housenumber: a.house_number || '',
+                    postcode: a.postcode || '',
+                    city: a.city || a.town || a.village || a.municipality || a.county || '',
+                    country: a.country || '',
+                    cc: (a.country_code || '').toUpperCase(),
+                    type: _mapNomType(it),
+                    src: 'OSM'
+                };
+            });
+        }
+
+        // 2) Photon : secours si Nominatim est injoignable ou muet.
+        async function _photon(q) {
+            const r = await fetch('https://photon.komoot.io/api/?lang=fr&limit=20&q=' + encodeURIComponent(q));
+            if (!r.ok) throw new Error('Photon HTTP ' + r.status);
+            const j = await r.json();
+            return (j.features || []).map(f => {
+                const h = _photonHit(f);
+                h.src = 'Photon';
+                return h;
+            });
+        }
+
+        // 3) Géocodeur du serveur : dernier recours seulement. Il est biaisé
+        //    Belgique/France, c'est lui qui sortait "Rue de Rotterdam, Liège".
+        async function _serverGeocode(q) {
+            const res = await fetch(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`);
+            if (!res.ok) throw new Error('Serveur HTTP ' + res.status);
+            const d = await res.json();
+            const items = Array.isArray(d) ? d : (d.results || (d.lat != null ? [d] : []));
+            return items
+                .filter(it => it && it.lat != null && (it.lng != null || it.lon != null))
+                .map(it => ({
+                    lat: +it.lat, lng: +(it.lng ?? it.lon),
+                    name: it.label || it.name || q, street: '', housenumber: '',
+                    postcode: '', city: '', country: it.country || '',
+                    cc: (it.countrycode || '').toUpperCase(),
+                    type: 'other', src: 'Serveur'
+                }));
+        }
+
         async function geocodeQuery(q, cc) {
             let hits = [];
+            const notes = [];
+            lastGeoSource = '';
 
-            try {
-                const r = await fetch('https://photon.komoot.io/api/?lang=fr&limit=20&q=' + encodeURIComponent(q));
-                if (r.ok) {
-                    const j = await r.json();
-                    hits = (j.features || []).map(_photonHit);
-                }
-            } catch (e) {
-                console.warn('Photon indisponible:', e);
-            }
-
-            // Secours : géocodeur du serveur, uniquement si Photon n'a rien donné
-            if (!hits.length) {
+            for (const [name, fn] of [['OSM', () => _nominatim(q, cc)],
+                                      ['Photon', () => _photon(q)],
+                                      ['Serveur', () => _serverGeocode(q)]]) {
                 try {
-                    const res = await fetch(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`);
-                    if (res.ok) {
-                        const d = await res.json();
-                        const items = Array.isArray(d) ? d : (d.results || (d.lat != null ? [d] : []));
-                        hits = items
-                            .filter(it => it && it.lat != null && (it.lng != null || it.lon != null))
-                            .map(it => ({
-                                lat: +it.lat, lng: +(it.lng ?? it.lon),
-                                name: it.label || it.name || q, street: '', housenumber: '',
-                                postcode: '', city: '', country: it.country || '',
-                                cc: (it.countrycode || '').toUpperCase(), type: 'other'
-                            }));
-                    }
+                    const res = await fn();
+                    if (res && res.length) { hits = res; lastGeoSource = name; break; }
+                    notes.push(name + ' : 0 résultat');
                 } catch (e) {
-                    console.warn('geocode serveur indisponible:', e);
+                    notes.push(name + ' : ' + e.message);
+                    console.warn('Géocodeur', name, e);
                 }
             }
 
-            if (cc) hits = hits.filter(h => h.cc === cc);
+            if (notes.length) console.warn('Géocodage —', notes.join(' | '));
+            if (!hits.length) { lastGeoSource = notes.join(' · '); return []; }
+
+            if (cc) hits = hits.filter(h => !h.cc || h.cc === cc);
 
             const nq = _norm(q.split(',')[0]);
             hits.sort((a, b) => {
-                // 1. nom strictement identique à la saisie
                 const ea = _norm(a.name) === nq ? 0 : 1;
                 const eb = _norm(b.name) === nq ? 0 : 1;
                 if (ea !== eb) return ea - eb;
-                // 2. ville avant rue avant numéro
                 const ra = TYPE_RANK[a.type] ?? 10;
                 const rb = TYPE_RANK[b.type] ?? 10;
                 if (ra !== rb) return ra - rb;
-                // 3. nom commençant par la saisie
                 const sa = _norm(a.name).startsWith(nq) ? 0 : 1;
                 const sb = _norm(b.name).startsWith(nq) ? 0 : 1;
                 return sa - sb;
@@ -977,6 +1037,8 @@
                         ? `❌ Rien trouvé pour « ${q} » dans ce pays`
                         : '❌ Adresse introuvable';
                     errEl.style.display = 'block';
+                    document.getElementById('search-hint').textContent =
+                        'Géocodeurs : ' + (lastGeoSource || 'aucune réponse');
                     return;
                 }
 
@@ -997,6 +1059,8 @@
                         </div>`;
                 }).join('');
                 listEl.classList.add('show');
+                document.getElementById('search-hint').textContent =
+                    `${searchHits.length} résultat(s) · source : ${lastGeoSource}`;
 
             } catch (e) {
                 console.error('Erreur geocode:', e);
