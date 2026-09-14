@@ -120,12 +120,24 @@
 
         /* FIX : liste de résultats, l'ancienne version ne prenait que le premier
            résultat sans jamais le montrer. */
-        #search-results { margin-top: 8px; display: none; }
+        #search-results { margin-top: 8px; display: none; max-height: 260px; overflow-y: auto; }
         #search-results.show { display: block; }
         .sr-item { padding: 8px 9px; border: 1px solid #e9ecef; border-radius: 6px;
-            margin-bottom: 5px; font-size: 12.5px; cursor: pointer; background: white; }
+            margin-bottom: 5px; font-size: 12.5px; cursor: pointer; background: white;
+            display: flex; align-items: center; gap: 8px; }
         .sr-item:hover { background: #eaf4fb; border-color: #3498db; }
-        .sr-sub { color: #95a5a6; font-size: 11.5px; }
+        .sr-main { flex: 1; min-width: 0; }
+        .sr-sub { color: #95a5a6; font-size: 11.5px; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; }
+        .sr-cc { font-size: 11px; font-weight: bold; color: #5d6d7e; background: #ecf0f1;
+            border-radius: 4px; padding: 3px 6px; flex-shrink: 0; }
+        .sr-type { font-size: 10.5px; color: #7f8c8d; background: #f4f6f8;
+            border: 1px solid #e9ecef; border-radius: 10px; padding: 1px 7px; flex-shrink: 0; }
+        #search-country { width: 100%; padding: 8px 9px; margin-bottom: 7px;
+            border: 1px solid #dce1e7; border-radius: 6px; font-size: 13px;
+            background: white; color: #34495e; box-sizing: border-box; outline: none; }
+        #search-country:focus { border-color: #3498db; }
+        #search-hint { font-size: 11.5px; color: #95a5a6; margin-top: 6px; }
 
         .search-popup .maplibregl-popup-content { padding: 12px; border-radius: 8px; font-family: 'Segoe UI', Arial, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.2); min-width: 180px; }
         .popup-label { font-size: 13px; font-weight: bold; color: #2c3e50; margin-bottom: 10px; word-break: break-word; }
@@ -227,10 +239,38 @@
 
         <div id="search-box">
             <h4>🔍 Rechercher une adresse</h4>
-            <input id="search-input" type="text" placeholder="Ex : 14 rue de la Paix, Paris" autocomplete="off" />
+            <select id="search-country">
+                <option value="">🌍 Tous les pays</option>
+                <option value="BE">Belgique</option>
+                <option value="FR">France</option>
+                <option value="LU">Luxembourg</option>
+                <option value="NL">Pays-Bas</option>
+                <option value="DE">Allemagne</option>
+                <option value="IT">Italie</option>
+                <option value="ES">Espagne</option>
+                <option value="PT">Portugal</option>
+                <option value="GB">Royaume-Uni</option>
+                <option value="CH">Suisse</option>
+                <option value="AT">Autriche</option>
+                <option value="DK">Danemark</option>
+                <option value="SE">Suède</option>
+                <option value="NO">Norvège</option>
+                <option value="FI">Finlande</option>
+                <option value="PL">Pologne</option>
+                <option value="CZ">Tchéquie</option>
+                <option value="SK">Slovaquie</option>
+                <option value="HU">Hongrie</option>
+                <option value="SI">Slovénie</option>
+                <option value="HR">Croatie</option>
+                <option value="RO">Roumanie</option>
+                <option value="BG">Bulgarie</option>
+                <option value="IE">Irlande</option>
+            </select>
+            <input id="search-input" type="text" placeholder="Randers · Rotterdam · 14 rue de la Paix, Paris" autocomplete="off" />
             <button id="search-btn" onclick="searchAddress()">Rechercher</button>
             <div id="search-error">❌ Adresse introuvable</div>
             <div id="search-results"></div>
+            <div id="search-hint">Villes et communes remontent avant les rues. Cliquez un résultat pour le placer.</div>
         </div>
 
         <div class="instructions">
@@ -808,35 +848,112 @@
 
         let searchMarker = null, searchPopup = null, searchHits = [];
 
-        // FIX : si /api/geocode n'existe pas ou renvoie une erreur, on bascule sur
-        // Photon (CORS ouvert) au lieu d'afficher "Adresse introuvable".
-        async function geocodeQuery(q) {
+        // FIX : /api/geocode est biaisé Belgique/France. Interrogé en premier, il
+        // renvoyait "Rue de Rotterdam, Liège" avant la ville de Rotterdam, et ne
+        // trouvait pas Randers. Photon passe en source principale, avec un tri
+        // explicite et un filtre pays ; le serveur ne sert plus que de secours.
+
+        function _norm(s) {
+            return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+        }
+
+        // Une ville doit toujours passer devant une rue portant le même nom.
+        const TYPE_RANK = {
+            city: 0, town: 1, municipality: 1, village: 2, hamlet: 3, locality: 3,
+            district: 4, county: 5, state: 6, country: 7,
+            street: 8, house: 9, other: 10
+        };
+        const TYPE_LABEL = {
+            city: 'ville', town: 'ville', municipality: 'commune', village: 'village',
+            hamlet: 'lieu-dit', locality: 'lieu-dit', district: 'quartier',
+            county: 'région', state: 'région', country: 'pays',
+            street: 'rue', house: 'adresse', other: ''
+        };
+
+        function _photonHit(f) {
+            const p = f.properties || {};
+            return {
+                lat: f.geometry.coordinates[1],
+                lng: f.geometry.coordinates[0],
+                name: p.name || p.street || '',
+                street: p.street || '',
+                housenumber: p.housenumber || '',
+                postcode: p.postcode || '',
+                city: p.city || p.county || p.state || '',
+                country: p.country || '',
+                cc: (p.countrycode || '').toUpperCase(),
+                type: p.type || p.osm_value || 'other'
+            };
+        }
+
+        function hitLabel(h) {
+            const head = h.housenumber && h.street
+                ? `${h.housenumber} ${h.street}`
+                : (h.name || h.street || h.city);
+            const sub = [h.postcode, h.city !== head ? h.city : '', h.country]
+                .filter(Boolean).join(', ');
+            return { head: head || h.country, sub, full: [head, sub].filter(Boolean).join(', ') };
+        }
+
+        async function geocodeQuery(q, cc) {
+            let hits = [];
+
             try {
-                const res = await fetch(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`);
-                if (res.ok) {
-                    const d = await res.json();
-                    const items = Array.isArray(d) ? d : (d.results || (d.lat != null ? [d] : []));
-                    const out = items
-                        .filter(it => it && it.lat != null && (it.lng != null || it.lon != null))
-                        .map(it => ({ lat: +it.lat, lng: +(it.lng ?? it.lon), label: it.label || it.name || q }));
-                    if (out.length) return out;
+                const r = await fetch('https://photon.komoot.io/api/?lang=fr&limit=20&q=' + encodeURIComponent(q));
+                if (r.ok) {
+                    const j = await r.json();
+                    hits = (j.features || []).map(_photonHit);
                 }
             } catch (e) {
-                console.warn('geocode serveur indisponible, bascule Photon:', e);
+                console.warn('Photon indisponible:', e);
             }
 
-            const r = await fetch('https://photon.komoot.io/api/?lang=fr&limit=6&q=' + encodeURIComponent(q));
-            if (!r.ok) return [];
-            const j = await r.json();
-            return (j.features || []).map(f => {
-                const p = f.properties || {};
-                const label = [
-                    p.name,
-                    [p.postcode, p.city || p.county || p.state].filter(Boolean).join(' '),
-                    p.country
-                ].filter(Boolean).join(', ');
-                return { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], label: label || q };
+            // Secours : géocodeur du serveur, uniquement si Photon n'a rien donné
+            if (!hits.length) {
+                try {
+                    const res = await fetch(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`);
+                    if (res.ok) {
+                        const d = await res.json();
+                        const items = Array.isArray(d) ? d : (d.results || (d.lat != null ? [d] : []));
+                        hits = items
+                            .filter(it => it && it.lat != null && (it.lng != null || it.lon != null))
+                            .map(it => ({
+                                lat: +it.lat, lng: +(it.lng ?? it.lon),
+                                name: it.label || it.name || q, street: '', housenumber: '',
+                                postcode: '', city: '', country: it.country || '',
+                                cc: (it.countrycode || '').toUpperCase(), type: 'other'
+                            }));
+                    }
+                } catch (e) {
+                    console.warn('geocode serveur indisponible:', e);
+                }
+            }
+
+            if (cc) hits = hits.filter(h => h.cc === cc);
+
+            const nq = _norm(q.split(',')[0]);
+            hits.sort((a, b) => {
+                // 1. nom strictement identique à la saisie
+                const ea = _norm(a.name) === nq ? 0 : 1;
+                const eb = _norm(b.name) === nq ? 0 : 1;
+                if (ea !== eb) return ea - eb;
+                // 2. ville avant rue avant numéro
+                const ra = TYPE_RANK[a.type] ?? 10;
+                const rb = TYPE_RANK[b.type] ?? 10;
+                if (ra !== rb) return ra - rb;
+                // 3. nom commençant par la saisie
+                const sa = _norm(a.name).startsWith(nq) ? 0 : 1;
+                const sb = _norm(b.name).startsWith(nq) ? 0 : 1;
+                return sa - sb;
             });
+
+            const seen = new Set();
+            return hits.filter(h => {
+                const k = `${h.cc}|${_norm(h.name)}|${h.lat.toFixed(3)}|${h.lng.toFixed(3)}`;
+                if (seen.has(k)) return false;
+                seen.add(k);
+                return true;
+            }).slice(0, 8);
         }
 
         async function searchAddress() {
@@ -852,19 +969,35 @@
             btn.disabled = true; btn.innerText = '⏳ Recherche...';
 
             try {
-                searchHits = await geocodeQuery(q);
-                if (!searchHits.length) { errEl.style.display = 'block'; return; }
+                const cc = document.getElementById('search-country').value;
+                searchHits = await geocodeQuery(q, cc);
 
-                if (searchHits.length === 1) {
-                    _placeSearchPin(0);
-                } else {
-                    listEl.innerHTML = searchHits.map((h, i) => `
-                        <div class="sr-item" onclick="_placeSearchPin(${i})">
-                            <div>${h.label}</div>
-                            <div class="sr-sub">${h.lat.toFixed(4)}, ${h.lng.toFixed(4)}</div>
-                        </div>`).join('');
-                    listEl.classList.add('show');
+                if (!searchHits.length) {
+                    errEl.textContent = cc
+                        ? `❌ Rien trouvé pour « ${q} » dans ce pays`
+                        : '❌ Adresse introuvable';
+                    errEl.style.display = 'block';
+                    return;
                 }
+
+                // FIX : plus d'auto-sélection du premier résultat. La liste est
+                // toujours affichée, avec le pays et le type, pour qu'un homonyme
+                // ne soit jamais choisi à ta place.
+                listEl.innerHTML = searchHits.map((h, i) => {
+                    const L = hitLabel(h);
+                    const t = TYPE_LABEL[h.type] || '';
+                    return `
+                        <div class="sr-item" onclick="_placeSearchPin(${i})" title="${L.full}">
+                            <div class="sr-main">
+                                <div>${L.head}</div>
+                                <div class="sr-sub">${L.sub || h.lat.toFixed(3) + ', ' + h.lng.toFixed(3)}</div>
+                            </div>
+                            ${t ? `<span class="sr-type">${t}</span>` : ''}
+                            ${h.cc ? `<span class="sr-cc">${h.cc}</span>` : ''}
+                        </div>`;
+                }).join('');
+                listEl.classList.add('show');
+
             } catch (e) {
                 console.error('Erreur geocode:', e);
                 errEl.style.display = 'block';
@@ -893,7 +1026,7 @@
             searchPopup = new maplibregl.Popup({ className: 'search-popup', closeButton: false, maxWidth: '240px' })
                 .setLngLat([hit.lng, hit.lat])
                 .setHTML(`
-                    <div class="popup-label">📍 ${hit.label}</div>
+                    <div class="popup-label">📍 ${hitLabel(hit).full}</div>
                     <button class="popup-btn popup-btn-origin"   onclick="_applySearchResult(${index},'origin')">🟢 Définir comme départ</button>
                     <button class="popup-btn popup-btn-dest"     onclick="_applySearchResult(${index},'dest')">🔴 Définir comme arrivée</button>
                     <button class="popup-btn popup-btn-waypoint" onclick="_applySearchWaypoint(${index})">🔵 Ajouter comme étape</button>
@@ -907,7 +1040,7 @@
             _cancelSearchPin();
             if (role === 'origin') originMarker.setLngLat([hit.lng, hit.lat]);
             else                   destMarker.setLngLat([hit.lng, hit.lat]);
-            toast((role === 'origin' ? 'Départ' : 'Arrivée') + ' : ' + hit.label, 'info');
+            toast((role === 'origin' ? 'Départ' : 'Arrivée') + ' : ' + hitLabel(hit).full, 'info');
             await recalculateRoute();
         }
 
@@ -915,7 +1048,7 @@
             const hit = searchHits[index];
             if (!hit) return;
             _cancelSearchPin();
-            addWaypoint({ lng: hit.lng, lat: hit.lat }, hit.label);
+            addWaypoint({ lng: hit.lng, lat: hit.lat }, hitLabel(hit).head);
         }
 
         function _cancelSearchPin() {
