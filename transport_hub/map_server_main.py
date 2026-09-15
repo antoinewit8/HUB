@@ -4,13 +4,14 @@ Déployable sur Render.com (gratuit) → URL publique permanente.
 """
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
-import uvicorn, uuid, json, os, httpx, pathlib
+import uvicorn, uuid, json, os, re, httpx, pathlib
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,6 +19,15 @@ load_dotenv()
 BASE_DIR = pathlib.Path(__file__).resolve().parent
 
 app = FastAPI(title="Arcelor Route Map Server")
+
+# La carte appelle ces endpoints depuis le navigateur, dans une iframe Streamlit
+# dont l'origine est "null". Sans CORS ouvert, tous les fetch sont bloqués.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(exist_ok=True)
@@ -133,6 +143,9 @@ class RouteRecalc(BaseModel):
     dest:           str
     avoid_tolls:    bool = False
     avoid_highways: bool = False
+    # Étapes posées sur la carte : [[lat, lng], ...] ou [{"lat":..,"lng":..}, ...].
+    # Sans ce champ, les étapes ajoutées côté carte étaient ignorées.
+    via:            list = []
 
 class WaypointItem(BaseModel):
     lat: float
@@ -192,6 +205,57 @@ def _extract_toll(ptv: dict) -> float:
         return toll_data.get("convertedPrice", {}).get("price", 0)
     return 0
 
+def _extract_toll_by_country(ptv: dict) -> list:
+    """
+    Ventilation du péage par pays : [{"country": "DE", "price": 112.4}, ...].
+
+    PTV fournit en principe toll.costs.countries. Si ce bloc manque, on
+    agrège les sections de péage (d'où TOLL_SECTIONS dans les results).
+    Les prix convertis sont prioritaires sur les prix en devise nationale,
+    sinon on additionnerait des DKK avec des EUR.
+    """
+    def _prix(obj):
+        if isinstance(obj, (int, float)):
+            return float(obj)
+        if not isinstance(obj, dict):
+            return None
+        conv = obj.get("convertedPrice")
+        if isinstance(conv, dict) and conv.get("price") is not None:
+            return float(conv["price"])
+        if obj.get("price") is not None:
+            return float(obj["price"])
+        return None
+
+    toll  = ptv.get("toll") or {}
+    costs = toll.get("costs") or {}
+
+    pays = costs.get("countries") or toll.get("countries")
+    if pays:
+        lignes = []
+        for c in pays:
+            cc = c.get("countryCode") or c.get("country")
+            montant = _prix(c)
+            if cc and montant is not None:
+                lignes.append({"country": cc, "price": round(montant, 2)})
+        if lignes:
+            return sorted(lignes, key=lambda x: -x["price"])
+
+    agrege = {}
+    for sec in toll.get("sections") or []:
+        cc = (sec.get("countryCode")
+              or (sec.get("tollSystem") or {}).get("countryCode")
+              or (sec.get("tollSystem") or {}).get("country"))
+        if not cc:
+            continue
+        c = sec.get("costs")
+        montant = sum(_prix(x) or 0.0 for x in c) if isinstance(c, list) else (_prix(c) or 0.0)
+        agrege[cc] = agrege.get(cc, 0.0) + montant
+
+    return sorted(
+        [{"country": cc, "price": round(v, 2)} for cc, v in agrege.items()],
+        key=lambda x: -x["price"],
+    )
+
 def _decode_polyline(encoded: str) -> list:
     """Décode Google encoded polyline → [[lat, lon], ...]."""
     coords, index, lat, lng = [], 0, 0, 0
@@ -213,28 +277,83 @@ def _decode_polyline(encoded: str) -> list:
         coords.append([lat / 1e5, lng / 1e5])
     return coords
 
-async def _geocode(address: str) -> Optional[list]:
-    """Géocode une adresse via PTV → [lat, lng]."""
+_COORD_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*$")
+
+def _parse_coords(texte: str) -> Optional[list]:
+    """
+    "51.922500,4.479000" → [51.9225, 4.479].
+
+    Sans ce test, une paire de coordonnées partait au géocodeur comme du
+    texte : il renvoyait un lieu arbitraire et l'itinéraire n'avait plus
+    aucun rapport avec les points demandés.
+    """
+    m = _COORD_RE.match(texte or "")
+    if not m:
+        return None
+    lat, lng = float(m.group(1)), float(m.group(2))
+    if -90 <= lat <= 90 and -180 <= lng <= 180:
+        return [lat, lng]
+    return None
+
+
+async def _geocode_many(q: str, country: str = "", limit: int = 8) -> list:
+    """
+    Géocodage PTV → liste de résultats exploitables.
+
+    countryFilter n'est plus imposé. L'ancienne valeur codée en dur
+    (FRA,BEL,LUX,DEU,ESP) rendait introuvable tout ce qui sortait de ces
+    cinq pays : Rotterdam tombait sur une rue belge, Randers sur rien.
+    """
+    coords = _parse_coords(q)
+    if coords:
+        return [{"lat": coords[0], "lng": coords[1], "label": q, "countrycode": ""}]
+
+    params = {"searchText": q}
+    if country:
+        params["countryFilter"] = country
+
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             "https://api.myptv.com/geocoding/v1/locations/by-text",
             headers={"apiKey": PTV_API_KEY},
-            params={"searchText": address, "countryFilter": "FRA,BEL,LUX,DEU,ESP"},
+            params=params,
             timeout=15,
         )
     if resp.status_code != 200:
+        print(f"GEOCODE ERROR {resp.status_code}: {resp.text[:300]}")
+        return []
+
+    sorties = []
+    for loc in resp.json().get("locations", [])[:limit]:
+        pos = loc.get("referencePosition") or {}
+        if pos.get("latitude") is None:
+            continue
+        addr = loc.get("address") or {}
+        label = (loc.get("formattedAddress")
+                 or ", ".join(filter(None, [addr.get("street"), addr.get("postalCode"),
+                                            addr.get("city"), addr.get("country")]))
+                 or q)
+        sorties.append({
+            "lat": pos["latitude"],
+            "lng": pos["longitude"],
+            "label": label,
+            "countrycode": (addr.get("countryCode") or "").upper(),
+        })
+    return sorties
+
+
+async def _geocode(address: str) -> Optional[list]:
+    """Géocode une adresse ou une paire de coordonnées via PTV → [lat, lng]."""
+    resultats = await _geocode_many(address, limit=1)
+    if not resultats:
         return None
-    results = resp.json().get("locations", [])
-    if not results:
-        return None
-    loc = results[0]["referencePosition"]
-    return [loc["latitude"], loc["longitude"]]
+    return [resultats[0]["lat"], resultats[0]["lng"]]
 
 async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: bool) -> dict:
     """Appel PTV routing v1 GET — waypoints répétés en query string."""
     query_params = [
         ("profile", "EUR_TRAILER_TRUCK"),
-        ("results", "POLYLINE,TOLL_COSTS"),
+        ("results", "POLYLINE,TOLL_COSTS,TOLL_SECTIONS"),
         ("options[currency]", "EUR"),
     ]
 
@@ -328,10 +447,18 @@ async def recalculate(data: RouteRecalc):
     if not origin_coords or not dest_coords:
         raise HTTPException(status_code=400, detail="Géocodage impossible")
 
-    pref_wps = find_pref_waypoints(data.origin, data.dest)
+    # Les étapes explicites de l'utilisateur priment sur les jalons préférentiels.
+    etapes = []
+    for wp in (data.via or []):
+        if isinstance(wp, dict) and wp.get("lat") is not None:
+            etapes.append({"lat": float(wp["lat"]), "lng": float(wp.get("lng", wp.get("lon")))})
+        elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
+            etapes.append({"lat": float(wp[0]), "lng": float(wp[1])})
+
+    pref_wps = [] if etapes else find_pref_waypoints(data.origin, data.dest)
 
     waypoints_list = [f"{origin_coords[0]},{origin_coords[1]}"]
-    for wp in pref_wps:
+    for wp in (etapes or pref_wps):
         waypoints_list.append(f"{wp['lat']},{wp['lng']}")
     waypoints_list.append(f"{dest_coords[0]},{dest_coords[1]}")
 
@@ -342,13 +469,14 @@ async def recalculate(data: RouteRecalc):
     coords     = _extract_polyline(ptv)
 
     return {
-        "distance_km":    round(distance_m / 1000, 1),
-        "duration_h":     round(duration_s / 3600, 2),
-        "prix_peage":     round(prix_peage, 2),
-        "polyline":       coords,
-        "origin":         data.origin,
-        "dest":           data.dest,
-        "pref_waypoints": pref_wps,
+        "distance_km":     round(distance_m / 1000, 1),
+        "duration_h":      round(duration_s / 3600, 2),
+        "prix_peage":      round(prix_peage, 2),
+        "toll_by_country": _extract_toll_by_country(ptv),
+        "polyline":        coords,
+        "origin":          data.origin,
+        "dest":            data.dest,
+        "pref_waypoints":  pref_wps,
     }
 
 
@@ -419,10 +547,11 @@ async def recalculate_drag(data: RecalcDragRequest):
             print(f"Erreur maj Firebase: {e}")
 
     return {
-        "distance_km": round(distance_m / 1000, 1),
-        "duration_h":  round(duration_s / 3600, 2),
-        "prix_peage":  round(prix_peage, 2),
-        "polyline":    coords,
+        "distance_km":     round(distance_m / 1000, 1),
+        "duration_h":      round(duration_s / 3600, 2),
+        "prix_peage":      round(prix_peage, 2),
+        "toll_by_country": _extract_toll_by_country(ptv),
+        "polyline":        coords,
     }
 
 
@@ -473,13 +602,21 @@ async def reset_route(route_id: str):
         raise HTTPException(500, f"Erreur reset: {e}")
     
 @app.get("/api/geocode")
-async def geocode(q: str):
+async def geocode(q: str, country: str = ""):
+    """
+    `country` est optionnel : codes ISO3 séparés par des virgules (ex. "NLD,DNK").
+    Le premier résultat reste en racine pour les appelants existants.
+    """
     if not q or len(q) < 3:
         raise HTTPException(400, "Requête trop courte")
-    coords = await _geocode(q)
-    if not coords:
+    resultats = await _geocode_many(q, country=country)
+    if not resultats:
         raise HTTPException(404, "Adresse introuvable")
-    return {"lat": coords[0], "lng": coords[1], "label": q}
+    premier = resultats[0]
+    return {
+        "lat": premier["lat"], "lng": premier["lng"], "label": premier["label"],
+        "results": resultats,
+    }
 
 
 
