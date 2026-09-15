@@ -800,9 +800,24 @@
             const rows = parseTollByCountry(lastRouteData);
 
             if (!rows) {
-                box.innerHTML = '<p class="tc-none">Le serveur ne renvoie que le total. '
-                    + 'Pour la ventilation, ajoutez un champ <code>toll_by_country</code> '
-                    + 'à la réponse de <code>/api/recalculate</code>.</p>';
+                // Trois situations distinctes, trois messages : sinon impossible de
+                // savoir si c'est le serveur, PTV, ou simplement un trajet sans péage.
+                const d = lastRouteData || {};
+                const cle = ('toll_by_country' in d) || ('peages_par_pays' in d)
+                         || ('toll_countries' in d) || (d.toll && (d.toll.countries || d.toll.costs));
+                const total = parseFloat(d.prix_peage);
+
+                if (!cle) {
+                    box.innerHTML = '<p class="tc-none">Le serveur ne renvoie que le total. '
+                        + 'Ajoutez <code>toll_by_country</code> à la réponse de '
+                        + '<code>/api/recalculate</code> et <code>/api/recalculate_drag</code>.</p>';
+                } else if (!isNaN(total) && total > 0) {
+                    box.innerHTML = '<p class="tc-none">Le serveur répond, mais PTV n\'a renvoyé '
+                        + 'aucune ventilation pour ce trajet. Vérifiez que <code>results</code> '
+                        + 'contient <code>TOLL_COSTS,TOLL_SECTIONS</code>.</p>';
+                } else {
+                    box.innerHTML = '<p class="tc-none">Aucun péage sur ce trajet.</p>';
+                }
                 return;
             }
 
