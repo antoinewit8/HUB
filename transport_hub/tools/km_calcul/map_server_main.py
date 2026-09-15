@@ -143,6 +143,9 @@ class RouteRecalc(BaseModel):
     avoid_tolls:    bool = False
     avoid_highways: bool = False
     super_pref:     bool = False
+    # Etapes posees sur la carte : [[lat, lng], ...] ou [{"lat":..,"lng":..}, ...].
+    # Sans ce champ, les etapes ajoutees cote carte etaient ignorees.
+    via:            list = []
 
 class WaypointItem(BaseModel):
     lat: float
@@ -196,6 +199,56 @@ def _extract_distance_duration(ptv: dict):
         duration_s = ptv.get("travelTime", 0)
     return distance_m, duration_s
 
+def _extract_toll_by_country(ptv: dict) -> list:
+    """
+    Ventilation du peage par pays : [{"country": "DE", "price": 112.4}, ...].
+
+    PTV fournit en principe toll.costs.countries. Si ce bloc manque, on agrege
+    les sections de peage, d'ou l'ajout de TOLL_SECTIONS dans les results.
+    Les prix convertis priment sur les prix en devise nationale, sinon on
+    additionne des DKK avec des EUR.
+    """
+    def _prix(obj):
+        if isinstance(obj, (int, float)):
+            return float(obj)
+        if not isinstance(obj, dict):
+            return None
+        conv = obj.get("convertedPrice")
+        if isinstance(conv, dict) and conv.get("price") is not None:
+            return float(conv["price"])
+        if obj.get("price") is not None:
+            return float(obj["price"])
+        return None
+
+    toll  = ptv.get("toll") or {}
+    costs = toll.get("costs") or {}
+
+    pays = costs.get("countries") or toll.get("countries")
+    if pays:
+        lignes = []
+        for c in pays:
+            cc = c.get("countryCode") or c.get("country")
+            montant = _prix(c)
+            if cc and montant is not None:
+                lignes.append({"country": cc, "price": round(montant, 2)})
+        if lignes:
+            return sorted(lignes, key=lambda x: -x["price"])
+
+    agrege = {}
+    for sec in toll.get("sections") or []:
+        cc = (sec.get("countryCode")
+              or (sec.get("tollSystem") or {}).get("countryCode")
+              or (sec.get("tollSystem") or {}).get("country"))
+        if not cc:
+            continue
+        c = sec.get("costs")
+        montant = sum(_prix(x) or 0.0 for x in c) if isinstance(c, list) else (_prix(c) or 0.0)
+        agrege[cc] = agrege.get(cc, 0.0) + montant
+
+    return sorted([{"country": cc, "price": round(v, 2)} for cc, v in agrege.items()],
+                  key=lambda x: -x["price"])
+
+
 def _extract_toll(ptv: dict) -> float:
     """Extrait le prix de péage depuis la réponse PTV."""
     toll_data = ptv.get("toll", {}).get("costs", {})
@@ -224,7 +277,8 @@ def _decode_polyline(encoded: str) -> list:
         coords.append([lat / 1e5, lng / 1e5])
     return coords
 
-_BROAD_COUNTRY_FILTER = "FR,BE,LU,DE,ES,NL,GB,IT,CH,AT,PT"
+_BROAD_COUNTRY_FILTER = ("FR,BE,LU,DE,ES,NL,GB,IT,CH,AT,PT,"
+                         "DK,SE,NO,FI,PL,CZ,SK,HU,SI,HR,RO,BG,IE,GR,EE,LV,LT")
 
 _COUNTRY_WORDS = {
     "france": "FR",
@@ -249,8 +303,31 @@ def _country_filter_for(text: str) -> str:
             return iso
     return _BROAD_COUNTRY_FILTER
 
+_COORD_RE = re.compile(r"^\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*$")
+
+def _parse_coords(texte: str) -> Optional[list]:
+    """
+    "51.922500,4.479000" -> [51.9225, 4.479].
+
+    Sans ce test, une paire de coordonnees partait au geocodeur comme du texte :
+    il renvoyait le lieu le plus proche dans le filtre pays autorise, et
+    l'itineraire n'avait plus aucun rapport avec les points demandes.
+    """
+    m = _COORD_RE.match(texte or "")
+    if not m:
+        return None
+    lat, lng = float(m.group(1)), float(m.group(2))
+    if -90 <= lat <= 90 and -180 <= lng <= 180:
+        return [lat, lng]
+    return None
+
+
 async def _geocode(address: str) -> Optional[list]:
-    """Géocode une adresse via PTV → [lat, lng]."""
+    """Géocode une adresse ou une paire de coordonnées via PTV → [lat, lng]."""
+    coords = _parse_coords(address)
+    if coords:
+        return coords
+
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             "https://api.myptv.com/geocoding/v1/locations/by-text",
@@ -270,7 +347,7 @@ async def _call_ptv(waypoints_list: list, avoid_tolls: bool, avoid_highways: boo
     """Appel PTV routing v1 GET — waypoints répétés en query string."""
     query_params = [
         ("profile", "EUR_TRAILER_TRUCK"),
-        ("results", "POLYLINE,TOLL_COSTS"),
+        ("results", "POLYLINE,TOLL_COSTS,TOLL_SECTIONS"),
         ("options[currency]", "EUR"),
     ]
 
@@ -315,35 +392,56 @@ async def health():
     return {"status": "ok"}
 
 @app.get("/api/geocode")
-async def api_geocode(q: str):
+async def api_geocode(q: str, country: str = ""):
     """Route API pour la recherche d'adresse depuis le frontend."""
     if not q:
         raise HTTPException(status_code=400, detail="Requête vide")
-        
+
+    coords = _parse_coords(q)
+    if coords:
+        un = {"lat": coords[0], "lng": coords[1], "label": q, "countrycode": ""}
+        return {**un, "results": [un]}
+
+    # `country` optionnel : codes ISO2 separes par des virgules (ex. "NL,DK").
+    filtre = country or _country_filter_for(q)
+
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             "https://api.myptv.com/geocoding/v1/locations/by-text",
             headers={"apiKey": PTV_API_KEY},
-            params={"searchText": q, "countryFilter": _country_filter_for(q)},
+            params={"searchText": q, "countryFilter": filtre},
             timeout=15,
         )
-        
+
     if resp.status_code != 200:
         raise HTTPException(status_code=500, detail="Erreur avec l'API PTV")
-        
+
     results = resp.json().get("locations", [])
     if not results:
         raise HTTPException(status_code=404, detail="Adresse introuvable")
-        
-    best_match = results[0]
-    loc = best_match["referencePosition"]
-    label = best_match.get("address", {}).get("formattedAddress", q)
 
-    return {
-        "lat": loc["latitude"],
-        "lng": loc["longitude"],
-        "label": label
-    }
+    # On renvoie desormais plusieurs candidats : le frontend choisit, au lieu
+    # de subir le premier resultat sans savoir de quel pays il vient.
+    sorties = []
+    for loc in results[:8]:
+        pos = loc.get("referencePosition") or {}
+        if pos.get("latitude") is None:
+            continue
+        addr = loc.get("address") or {}
+        label = (addr.get("formattedAddress")
+                 or loc.get("formattedAddress")
+                 or ", ".join(filter(None, [addr.get("street"), addr.get("postalCode"),
+                                            addr.get("city"), addr.get("country")]))
+                 or q)
+        sorties.append({
+            "lat": pos["latitude"], "lng": pos["longitude"], "label": label,
+            "countrycode": (addr.get("countryCode") or "").upper(),
+        })
+
+    if not sorties:
+        raise HTTPException(status_code=404, detail="Adresse introuvable")
+
+    return {**sorties[0], "results": sorties}
 
 # ── Créer une route ──────────────────────────────────────────────────────────
 @app.post("/api/create_route")
@@ -391,10 +489,18 @@ async def recalculate(data: RouteRecalc):
     if not origin_coords or not dest_coords:
         raise HTTPException(status_code=400, detail="Géocodage impossible")
 
-    pref_wps = find_pref_waypoints(data.origin, data.dest, super_mode=data.super_pref)
+    # Les etapes explicites de l'utilisateur priment sur les jalons preferentiels.
+    etapes = []
+    for wp in (data.via or []):
+        if isinstance(wp, dict) and wp.get("lat") is not None:
+            etapes.append({"lat": float(wp["lat"]), "lng": float(wp.get("lng", wp.get("lon")))})
+        elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
+            etapes.append({"lat": float(wp[0]), "lng": float(wp[1])})
+
+    pref_wps = [] if etapes else find_pref_waypoints(data.origin, data.dest, super_mode=data.super_pref)
 
     waypoints_list = [f"{origin_coords[0]},{origin_coords[1]}"]
-    for wp in pref_wps:
+    for wp in (etapes or pref_wps):
         waypoints_list.append(f"{wp['lat']},{wp['lng']}")
     waypoints_list.append(f"{dest_coords[0]},{dest_coords[1]}")
 
@@ -405,13 +511,14 @@ async def recalculate(data: RouteRecalc):
     coords     = _extract_polyline(ptv)
 
     return {
-        "distance_km":    round(distance_m / 1000, 1),
-        "duration_h":     round(duration_s / 3600, 2),
-        "prix_peage":     round(prix_peage, 2),
-        "polyline":       coords,
-        "origin":         data.origin,
-        "dest":           data.dest,
-        "pref_waypoints": pref_wps,
+        "distance_km":     round(distance_m / 1000, 1),
+        "duration_h":      round(duration_s / 3600, 2),
+        "prix_peage":      round(prix_peage, 2),
+        "toll_by_country": _extract_toll_by_country(ptv),
+        "polyline":        coords,
+        "origin":          data.origin,
+        "dest":            data.dest,
+        "pref_waypoints":  pref_wps,
     }
 
 
@@ -462,10 +569,11 @@ async def recalculate_drag(data: RecalcDragRequest):
             print(f"Erreur maj Firebase: {e}")
 
     return {
-        "distance_km": round(distance_m / 1000, 1),
-        "duration_h":  round(duration_s / 3600, 2),
-        "prix_peage":  round(prix_peage, 2),
-        "polyline":    coords,
+        "distance_km":     round(distance_m / 1000, 1),
+        "duration_h":      round(duration_s / 3600, 2),
+        "prix_peage":      round(prix_peage, 2),
+        "toll_by_country": _extract_toll_by_country(ptv),
+        "polyline":        coords,
     }
 
 
