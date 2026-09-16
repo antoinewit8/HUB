@@ -56,68 +56,47 @@ vehicle[numberOfAxles]=5"""
 
 def toll_by_country(ptv: dict) -> list:
     """
-    Ventilation du péage par pays : [{"country": "DE", "price": 112.4}, ...].
+    Ventilation du péage par pays : [{"country": "BE", "price": 43.35}, ...].
 
-    Ordre de lecture :
-      1. toll.costs.countries          (détail natif PTV)
-      2. toll.sections agrégées        (pays sur la section, sur son tollSystem,
-                                        ou via costs[].tollSystemIndex → toll.systems)
-    Les prix convertis (EUR) priment toujours sur la devise nationale.
-    `price` peut être un nombre ou un objet {"price": x, "currency": "DKK"} :
-    les deux formes sont gérées.
+    Structure PTV Developer v1 constatée (réponse du 16/09/2026) :
+      toll.costs.countries[] = {countryCode, price: {price, currency},
+                                convertedPrice: {price, currency}}
+      toll.sections[]        = {countryCode, tollSystemIndex, displayName,
+                                costs: [{price, currency, convertedPrice: {...}}]}
+      toll.systems[]         = {name, operatorName, tariffVersion}  (pas de pays)
+
+    1. toll.costs.countries (détail natif, somme = total PTV)
+    2. repli : agrégation de toll.sections par countryCode
+    Le prix converti (EUR, via options[currency]=EUR) prime toujours.
     """
-    def _num(v):
-        if isinstance(v, (int, float)):
-            return float(v)
-        if isinstance(v, dict) and isinstance(v.get("price"), (int, float)):
-            return float(v["price"])
-        return None
-
-    def _prix(obj):
-        if isinstance(obj, (int, float)):
-            return float(obj)
+    def _montant(obj):
         if not isinstance(obj, dict):
             return None
-        conv = _num(obj.get("convertedPrice"))
-        if conv is not None:
-            return conv
-        return _num(obj.get("price"))
-
-    toll = (ptv or {}).get("toll") or {}
-    costs = toll.get("costs") or {}
-    systems = toll.get("systems") or []
-
-    # 1. Détail natif
-    pays = costs.get("countries") or toll.get("countries")
-    if pays:
-        agrege = {}
-        for c in pays:
-            cc = c.get("countryCode") or c.get("country")
-            montant = _prix(c)
-            if cc and montant is not None:
-                agrege[cc] = agrege.get(cc, 0.0) + montant
-        if agrege:
-            return sorted(({"country": k, "price": round(v, 2)} for k, v in agrege.items()),
-                          key=lambda x: -x["price"])
-
-    # 2. Agrégation des sections
-    def _pays_systeme(idx):
-        if isinstance(idx, int) and 0 <= idx < len(systems):
-            s = systems[idx] or {}
-            return s.get("countryCode") or s.get("country")
+        for cle in ("convertedPrice", "price"):
+            v = obj.get(cle)
+            if isinstance(v, dict):
+                v = v.get("price")
+            if isinstance(v, (int, float)):
+                return float(v)
         return None
 
+    toll = (ptv or {}).get("toll") or {}
     agrege = {}
-    for sec in toll.get("sections") or []:
-        ts = sec.get("tollSystem") or {}
-        cc_sec = sec.get("countryCode") or ts.get("countryCode") or ts.get("country")
-        lignes = sec.get("costs")
-        lignes = lignes if isinstance(lignes, list) else [lignes] if lignes else []
-        for ligne in lignes:
-            cc = cc_sec or _pays_systeme((ligne or {}).get("tollSystemIndex"))
-            montant = _prix(ligne)
-            if cc and montant is not None:
-                agrege[cc] = agrege.get(cc, 0.0) + montant
+
+    for c in (toll.get("costs") or {}).get("countries") or []:
+        cc, m = c.get("countryCode"), _montant(c)
+        if cc and m is not None:
+            agrege[cc] = agrege.get(cc, 0.0) + m
+
+    if not agrege:
+        for sec in toll.get("sections") or []:
+            cc = sec.get("countryCode")
+            if not cc:
+                continue
+            for ligne in sec.get("costs") or []:
+                m = _montant(ligne)
+                if m is not None:
+                    agrege[cc] = agrege.get(cc, 0.0) + m
 
     return sorted(({"country": k, "price": round(v, 2)} for k, v in agrege.items()),
                   key=lambda x: -x["price"])
@@ -190,24 +169,26 @@ def table_sections(ptv: dict) -> pd.DataFrame:
     systems = toll.get("systems") or []
     rows = []
     for i, sec in enumerate(toll.get("sections") or []):
-        lignes = sec.get("costs")
-        lignes = lignes if isinstance(lignes, list) else [lignes] if lignes else [{}]
-        for ligne in lignes:
-            ligne = ligne or {}
-            idx = ligne.get("tollSystemIndex")
-            sys_ = systems[idx] if isinstance(idx, int) and 0 <= idx < len(systems) else {}
-            conv = ligne.get("convertedPrice") or {}
-            prix = ligne.get("price")
+        idx = sec.get("tollSystemIndex")
+        sys_ = systems[idx] if isinstance(idx, int) and 0 <= idx < len(systems) else {}
+        for ligne in sec.get("costs") or [{}]:
+            conv = (ligne or {}).get("convertedPrice") or {}
             rows.append({
                 "section": i,
-                "libellé": sec.get("displayName") or sys_.get("name") or "",
-                "pays (section)": sec.get("countryCode") or "",
-                "pays (système)": (sys_ or {}).get("countryCode") or "",
-                "prix": prix.get("price") if isinstance(prix, dict) else prix,
-                "devise": prix.get("currency") if isinstance(prix, dict) else ligne.get("currency"),
+                "pays": sec.get("countryCode") or "",
+                "libellé": sec.get("displayName") or "",
+                "système": sys_.get("name") or "",
+                "tarif": sys_.get("tariffVersion") or "",
+                "km": round((sec.get("calculatedDistance") or 0) / 1000, 1),
+                "prix": (ligne or {}).get("price"),
+                "devise": (ligne or {}).get("currency"),
                 "prix EUR": conv.get("price"),
+                "approximé": sec.get("approximated"),
             })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if not df.empty and df["km"].gt(0).any():
+        df["€/km"] = (df["prix EUR"].fillna(df["prix"]) / df["km"].where(df["km"] > 0)).round(3)
+    return df
 
 
 def appel_ptv(points, api_key, results, vehicle_lines, avoid_tolls):
@@ -422,6 +403,18 @@ with tab_diag:
             constats.append(("ko", f"PTV facture {total:.2f} € mais aucune ventilation n'est "
                                    "exploitable. Envoyez-moi le JSON brut de l'onglet PTV direct."))
 
+    if ptv_ok:
+        j = ptv["json"]
+        if (j.get("toll") or {}).get("costs", {}).get("containsApproximatedSections"):
+            constats.append(("ko", "PTV signale des sections de péage approximées : montant indicatif."))
+        if j.get("violated"):
+            constats.append(("ko", "violated = true : le trajet enfreint une restriction du profil "
+                                   "véhicule (tonnage, interdiction PL…). Montant à prendre avec prudence."))
+        for w in j.get("warnings") or []:
+            det = w.get("details") or {}
+            constats.append(("info", f"Avertissement PTV {w.get('warningCode')} "
+                                     + (f"({', '.join(f'{k}: {v}' for k, v in det.items())})" if det else "")))
+
     if srv is None:
         constats.append(("info", "Serveur cartes non testé."))
     elif not srv_ok:
@@ -551,4 +544,4 @@ with tab_code:
                                                      "def _extract_toll_by_country(", 1)
     st.code(src, language="python")
     st.markdown("Dans l'appel PTV du serveur, `results` doit contenir "
-                "`POLYLINE,TOLL_COSTS,TOLL_SECTIONS,TOLL_SYSTEMS` et `options[currency]` valoir `EUR`.")
+                "`POLYLINE,TOLL_COSTS` (TOLL_SECTIONS en option, pour le repli) et `options[currency]` valoir `EUR`.")
