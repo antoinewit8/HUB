@@ -80,9 +80,10 @@
         .stat-row.clickable:hover .badge { background: #d6e9f8; }
         .caret { font-size: 10px; color: #7f8c8d; margin-left: 5px; transition: transform 0.2s; display: inline-block; }
         .caret.open { transform: rotate(90deg); }
-        #toll-detail { display: none; margin: 2px 0 12px 0; padding: 11px 12px;
+        #toll-detail, #km-detail { display: none; margin: 2px 0 12px 0; padding: 11px 12px;
             background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px; }
-        #toll-detail.show { display: block; }
+        #toll-detail.show, #km-detail.show { display: block; }
+        .tc-fill.km { background: #16a085; }
         .tc-row { margin-bottom: 9px; }
         .tc-head { display: flex; justify-content: space-between; align-items: baseline;
             font-size: 12.5px; color: #34495e; margin-bottom: 3px; }
@@ -243,7 +244,11 @@
 
             <div id="stats-box">
                 <div id="route-state" class="state-original">Itinéraire calculé</div>
-                <div class="stat-row">Distance <span class="badge badge-blue" id="dist">—</span></div>
+                <div class="stat-row clickable" onclick="toggleKmDetail()" title="Kilomètres par pays">
+                    <span>Distance <span class="caret" id="km-caret">▶</span></span>
+                    <span class="badge badge-blue" id="dist">—</span>
+                </div>
+                <div id="km-detail"></div>
                 <div class="stat-row">Durée    <span class="badge"            id="dur">—</span></div>
                 <div class="stat-row clickable" onclick="toggleTollDetail()" title="Détail par pays">
                     <span>Péage <span class="caret" id="toll-caret">▶</span></span>
@@ -747,6 +752,7 @@
             document.getElementById('dur').textContent  = (d.duration_h  ?? '—') + ' h';
             document.getElementById('toll').textContent = (d.prix_peage  ?? '—') + ' €';
             renderTollDetail();
+            renderKmDetail();
         }
 
         // ═══════════════════════════════════════════════════════
@@ -844,6 +850,78 @@
                    <span class="tc-name">Total</span>
                    <span class="tc-amount">${total.toFixed(2).replace('.', ',')} €</span>
                </div>`;
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  KILOMÈTRES PAR PAYS
+        // ═══════════════════════════════════════════════════════
+
+        function parseKmByCountry(d) {
+            if (!d) return null;
+            const raw = d.km_by_country ?? d.distance_by_country ?? null;
+            if (!raw) return null;
+            let rows = [];
+            if (Array.isArray(raw)) {
+                rows = raw.map(it => ({
+                    cc: String(it.country ?? it.countryCode ?? '').toUpperCase().trim(),
+                    km: Number(it.km ?? it.distance_km ?? NaN)
+                }));
+            } else if (typeof raw === 'object') {
+                rows = Object.entries(raw).map(([k, v]) => ({
+                    cc: String(k).toUpperCase().trim(),
+                    km: Number(typeof v === 'object' ? (v.km ?? NaN) : v)
+                }));
+            }
+            rows = rows.filter(r => r.cc && !Number.isNaN(r.km) && r.km > 0);
+            rows.sort((a, b) => b.km - a.km);
+            return rows.length ? rows : null;
+        }
+
+        const fmtKm = v => v.toLocaleString('fr-BE', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+        function renderKmDetail() {
+            const box = document.getElementById('km-detail');
+            const d = lastRouteData || {};
+            const rows = parseKmByCountry(d);
+
+            if (!rows) {
+                box.innerHTML = ('km_by_country' in d)
+                    ? '<p class="tc-none">PTV n\'a renvoyé aucun événement de frontière pour ce trajet. '
+                      + 'Vérifiez que <code>results</code> contient <code>BORDER_EVENTS,WAYPOINT_EVENTS</code>.</p>'
+                    : '<p class="tc-none">Le serveur ne renvoie pas encore <code>km_by_country</code>.</p>';
+                return;
+            }
+
+            const total = rows.reduce((s, r) => s + r.km, 0);
+            const max   = Math.max(...rows.map(r => r.km), 0.1);
+
+            box.innerHTML = rows.map(r => {
+                const nom = r.cc === '??' ? 'Pays non identifié' : (PAYS_NOM[r.cc] || r.cc);
+                const pct = total > 0 ? (r.km / total * 100) : 0;
+                return `
+                    <div class="tc-row">
+                        <div class="tc-head">
+                            <span class="tc-name">${nom}</span>
+                            <span class="tc-amount">${fmtKm(r.km)} km
+                                <span style="color:#95a5a6;font-weight:normal;">
+                                    ${pct.toFixed(0)} %</span></span>
+                        </div>
+                        <div class="tc-bar">
+                            <div class="tc-fill km" style="width:${(r.km / max * 100).toFixed(1)}%"></div>
+                        </div>
+                    </div>`;
+            }).join('')
+            + `<div class="tc-head" style="border-top:1px solid #e4e9ef;padding-top:8px;margin-top:4px;">
+                   <span class="tc-name">Total</span>
+                   <span class="tc-amount">${fmtKm(total)} km</span>
+               </div>`;
+        }
+
+        function toggleKmDetail() {
+            const box = document.getElementById('km-detail');
+            const caret = document.getElementById('km-caret');
+            const open = box.classList.toggle('show');
+            caret.classList.toggle('open', open);
         }
 
         function toggleTollDetail() {
