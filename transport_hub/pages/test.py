@@ -30,7 +30,9 @@ try:
 except Exception:
     pass  # déjà défini par le hub
 
-RESULT_SCHEMA = "peages_v1"
+RESULT_SCHEMA = "peages_v2"
+# Même logique que pages/3_Carte_Manuelle.py : secret/env MAP_SERVER_URL, sinon ce défaut
+CARTE_DEFAULT_URL = "https://hub-m36x.onrender.com"
 PTV_URL = "https://api.myptv.com/routing/v1/routes"
 NAVY, ROYAL = "#003087", "#0057A8"
 
@@ -344,8 +346,24 @@ def appel_serveur(server_url, points, avoid_tolls):
     except ValueError:
         rep = {"_texte_brut": r.text[:3000]}
     sondes = [sonde_geocode(base, body["origin"], o), sonde_geocode(base, body["dest"], d)]
+
+    # /api/recalculate_drag : c'est l'endpoint que la carte appelle EN PREMIER
+    drag = {"status": None, "json": {}, "erreur": None}
+    try:
+        rd = requests.post(base + "/api/recalculate_drag", json={
+            "route_id": "manual",
+            "waypoints": [{"lat": p[0], "lng": p[1]} for p in points],
+            "avoid_tolls": avoid_tolls, "avoid_highways": False}, timeout=120)
+        drag["status"] = rd.status_code
+        try:
+            drag["json"] = rd.json()
+        except ValueError:
+            drag["erreur"] = rd.text[:300]
+    except Exception as e:
+        drag["erreur"] = str(e)
+
     return {"status": r.status_code, "duree": duree, "json": rep, "body": body,
-            "empreinte": empreinte, "sondes": sondes}
+            "empreinte": empreinte, "sondes": sondes, "drag": drag, "url": base}
 
 
 def df_pays(lignes) -> pd.DataFrame:
@@ -400,7 +418,7 @@ with c1:
 
 with c2:
     key_env = _secret("PTV_API_KEY")
-    srv_env = _secret("MAP_SERVER_URL")
+    srv_env = (_secret("MAP_SERVER_URL") or CARTE_DEFAULT_URL).rstrip("/")
     test_ptv = st.checkbox("Appeler PTV en direct", value=True)
     if key_env:
         st.caption("Clé PTV trouvée dans les secrets / variables d'environnement.")
@@ -411,6 +429,7 @@ with c2:
     test_srv = st.checkbox("Appeler le serveur cartes (/api/recalculate)", value=True)
     server_url = st.text_input("URL du serveur cartes", srv_env,
                                placeholder="https://xxx.onrender.com")
+    st.caption(f"URL utilisée par la Carte Manuelle : {srv_env}")
 
 with st.expander("Paramètres PTV"):
     results = st.text_input("results", "TOLL_COSTS,TOLL_SECTIONS,TOLL_SYSTEMS,BORDER_EVENTS,WAYPOINT_EVENTS",
@@ -539,6 +558,29 @@ with tab_diag:
     else:
         d = srv["json"] if isinstance(srv["json"], dict) else {}
         emp = srv.get("empreinte") or {}
+
+        url_carte = (_secret("MAP_SERVER_URL") or CARTE_DEFAULT_URL).rstrip("/")
+        if srv.get("url") and srv["url"] != url_carte:
+            constats.append(("ko", f"URL testée ({srv['url']}) différente de celle de la Carte Manuelle "
+                                   f"({url_carte}) : le diagnostic ne concerne pas le serveur de la carte."))
+        else:
+            constats.append(("ok", f"URL testée = URL de la Carte Manuelle ({url_carte})."))
+
+        dg = srv.get("drag") or {}
+        dj = dg.get("json") if isinstance(dg.get("json"), dict) else {}
+        if dg.get("status") != 200:
+            constats.append(("ko", f"/api/recalculate_drag (1er appel de la carte) : "
+                                   f"{dg.get('erreur') or 'HTTP ' + str(dg.get('status'))}."))
+        else:
+            manque = [k for k in ("km_by_country", "toll_by_country") if k not in dj]
+            if manque:
+                constats.append(("ko", f"/api/recalculate_drag ne renvoie pas {', '.join(manque)} : "
+                                       "c'est ce que la carte affiche. Ce serveur tourne sur une version "
+                                       "antérieure du fichier."))
+            else:
+                constats.append(("ok", "/api/recalculate_drag renvoie km_by_country et toll_by_country : "
+                                       + ", ".join("%s %.1f km" % (r.get("country"), r.get("km") or 0)
+                                                   for r in dj["km_by_country"]) + "."))
 
         if ptv_ok:
             km_ptv = (ptv["json"].get("distance") or 0) / 1000
@@ -737,7 +779,11 @@ with tab_srv:
                        ensure_ascii=False, indent=2),
             file_name="diagnostic_serveur_cartes.json", mime="application/json")
 
-        st.markdown("**Réponse du serveur** (tracé masqué)")
+        with st.expander("Réponse de /api/recalculate_drag (appel de la carte)"):
+            st.code(json.dumps(sans_polyline((srv.get("drag") or {}).get("json") or {}),
+                               ensure_ascii=False, indent=2)[:8000], language="json")
+
+        st.markdown("**Réponse de /api/recalculate** (tracé masqué)")
         st.code(json.dumps(sans_polyline(d), ensure_ascii=False, indent=2)[:15000], language="json")
         with st.expander("Corps envoyé à /api/recalculate"):
             st.code(json.dumps(srv["body"], ensure_ascii=False, indent=2), language="json")
