@@ -215,6 +215,28 @@ def appel_ptv(points, api_key, results, vehicle_lines, avoid_tolls):
     return {"status": r.status_code, "duree": duree, "json": body, "params": params}
 
 
+def empreinte_serveur(base: str) -> dict:
+    """
+    Identifie la version qui tourne sur Render sans y avoir accès :
+    la version patchée a ajouté le paramètre `country` à /api/geocode.
+    """
+    out = {"openapi": False, "endpoints": [], "geocode_country": None, "erreur": None}
+    try:
+        r = requests.get(base + "/openapi.json", timeout=30)
+        if r.status_code != 200:
+            out["erreur"] = f"/openapi.json → HTTP {r.status_code}"
+            return out
+        spec = r.json()
+        out["openapi"] = True
+        paths = spec.get("paths") or {}
+        out["endpoints"] = sorted(paths)
+        params = ((paths.get("/api/geocode") or {}).get("get") or {}).get("parameters") or []
+        out["geocode_country"] = any(p.get("name") == "country" for p in params)
+    except Exception as e:
+        out["erreur"] = str(e)
+    return out
+
+
 def appel_serveur(server_url, points, avoid_tolls):
     base = server_url.rstrip("/")
     try:
@@ -232,6 +254,7 @@ def appel_serveur(server_url, points, avoid_tolls):
         "avoid_tolls": avoid_tolls,
         "avoid_highways": False,
     }
+    empreinte = empreinte_serveur(base)
     t0 = time.time()
     r = requests.post(base + "/api/recalculate", json=body, timeout=120)
     duree = time.time() - t0
@@ -239,7 +262,8 @@ def appel_serveur(server_url, points, avoid_tolls):
         rep = r.json()
     except ValueError:
         rep = {"_texte_brut": r.text[:3000]}
-    return {"status": r.status_code, "duree": duree, "json": rep, "body": body}
+    return {"status": r.status_code, "duree": duree, "json": rep, "body": body,
+            "empreinte": empreinte}
 
 
 def df_pays(lignes) -> pd.DataFrame:
@@ -421,10 +445,24 @@ with tab_diag:
         constats.append(("ko", f"Serveur cartes : {srv.get('erreur') or 'HTTP ' + str(srv.get('status'))}."))
     else:
         d = srv["json"] if isinstance(srv["json"], dict) else {}
+        emp = srv.get("empreinte") or {}
         if "toll_by_country" not in d:
-            constats.append(("ko", "Le serveur ne renvoie pas toll_by_country : la version déployée "
-                                   "sur Render n'est pas celle patchée. Vérifier le fichier "
-                                   "tools/km_calcul/map_server_main.py et le dernier déploiement."))
+            if emp.get("geocode_country") is True:
+                constats.append(("ko", "Le serveur tourne bien en version patchée (geocode accepte "
+                                       "`country`), mais /api/recalculate renvoie une réponse sans "
+                                       "toll_by_country. Cause probable : réponse servie depuis un "
+                                       "cache de routes antérieur au patch, ou `return` anticipé "
+                                       "avant l'ajout de la clé."))
+            elif emp.get("geocode_country") is False:
+                constats.append(("ko", "Le serveur tourne sur l'ANCIENNE version (geocode sans "
+                                       "`country`). Le patch n'est pas déployé : commit non poussé, "
+                                       "build Render en échec, ou Start Command qui lance un autre "
+                                       "fichier que tools/km_calcul/map_server_main.py."))
+            else:
+                constats.append(("ko", "Le serveur ne renvoie pas toll_by_country et sa version n'a "
+                                       "pas pu être identifiée ("
+                                       + (emp.get("erreur") or "openapi indisponible")
+                                       + "). Vérifier le dernier déploiement Render."))
         elif not d["toll_by_country"]:
             constats.append(("ko" if lignes_ptv else "ok",
                              "toll_by_country présent mais vide"
@@ -514,6 +552,15 @@ with tab_srv:
             m3.metric("prix_peage", f"{float(pp):.2f} €")
         except (TypeError, ValueError):
             m3.metric("prix_peage", str(pp))
+
+        emp = srv.get("empreinte") or {}
+        with st.expander("Version du serveur (openapi.json)", expanded=not ("toll_by_country" in d)):
+            st.write({
+                "openapi lisible": emp.get("openapi"),
+                "geocode accepte country (= patch)": emp.get("geocode_country"),
+                "endpoints": emp.get("endpoints"),
+                "erreur": emp.get("erreur"),
+            })
 
         present = "toll_by_country" in d
         st.markdown(
