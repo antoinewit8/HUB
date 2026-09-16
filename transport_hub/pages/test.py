@@ -102,6 +102,60 @@ def toll_by_country(ptv: dict) -> list:
                   key=lambda x: -x["price"])
 
 
+def km_by_country(ptv: dict) -> list:
+    """
+    Kilomètres parcourus par pays : [{"country": "BE", "km": 168.2}, ...].
+
+    PTV ne fournit pas ce total : on le reconstitue à partir des événements.
+      - WAYPOINT_EVENTS : le premier événement (distanceFromStart = 0) porte le
+        countryCode du départ.
+      - BORDER_EVENTS   : chaque passage de frontière porte distanceFromStart
+        et border.countryCode = pays dans lequel on entre.
+    La distance totale est découpée entre ces jalons ; la somme des pays est
+    donc égale à la distance de la route (aux arrondis près).
+    """
+    total_m = ptv.get("distance") or 0
+    events = sorted((e for e in (ptv.get("events") or []) if isinstance(e, dict)),
+                    key=lambda e: e.get("distanceFromStart") or 0)
+    if not total_m or not events:
+        return []   # pas d'événements reçus : ventilation inconnue
+
+    def _pays_entree(e):
+        b = e.get("border")
+        if isinstance(b, dict):
+            return b.get("countryCode") or e.get("countryCode")
+        return None
+
+    # Pays de départ : premier événement non-frontière, sinon repli sur la
+    # première section de péage, sinon inconnu
+    depart = None
+    for e in events:
+        if "border" not in e and e.get("countryCode"):
+            depart = e["countryCode"]
+            break
+    if not depart:
+        secs = ((ptv.get("toll") or {}).get("sections") or [])
+        premiere_frontiere = next((e for e in events if "border" in e), None)
+        if secs and not premiere_frontiere:
+            depart = secs[0].get("countryCode")
+    depart = depart or "??"
+
+    agrege, pays, debut = {}, depart, 0
+    for e in events:
+        entree = _pays_entree(e)
+        if not entree:
+            continue
+        d = e.get("distanceFromStart") or 0
+        if d > debut:
+            agrege[pays] = agrege.get(pays, 0) + (d - debut)
+        pays, debut = entree, max(d, debut)
+    if total_m > debut:
+        agrege[pays] = agrege.get(pays, 0) + (total_m - debut)
+
+    return sorted(({"country": k, "km": round(v / 1000, 1)} for k, v in agrege.items() if v > 0),
+                  key=lambda x: -x["km"])
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  OUTILS DE DIAGNOSTIC (page uniquement)
 # ════════════════════════════════════════════════════════════════════════════
@@ -359,7 +413,7 @@ with c2:
                                placeholder="https://xxx.onrender.com")
 
 with st.expander("Paramètres PTV"):
-    results = st.text_input("results", "TOLL_COSTS,TOLL_SECTIONS,TOLL_SYSTEMS",
+    results = st.text_input("results", "TOLL_COSTS,TOLL_SECTIONS,TOLL_SYSTEMS,BORDER_EVENTS,WAYPOINT_EVENTS",
                             help="TOLL_COSTS est indispensable. TOLL_SECTIONS et TOLL_SYSTEMS "
                                  "servent au repli par sections.")
     use_vehicle = st.checkbox("Envoyer les paramètres véhicule", value=False,
@@ -426,6 +480,7 @@ srv = res.get("srv")
 ptv_ok = bool(ptv and ptv["status"] == 200)
 srv_ok = bool(srv and srv.get("status") == 200)
 lignes_ptv = toll_by_country(ptv["json"]) if ptv_ok else None
+km_ptv_pays = km_by_country(ptv["json"]) if ptv_ok else None
 
 tab_diag, tab_ptv, tab_srv, tab_code = st.tabs(
     ["Diagnostic", "PTV direct", "Serveur cartes", "Code à intégrer"])
@@ -457,6 +512,16 @@ with tab_diag:
 
     if ptv_ok:
         j = ptv["json"]
+        dist_ptv = (j.get("distance") or 0) / 1000
+        if not km_ptv_pays:
+            constats.append(("ko", "Aucun km par pays : ajoutez BORDER_EVENTS,WAYPOINT_EVENTS dans results."))
+        else:
+            somme_km = sum(r["km"] for r in km_ptv_pays)
+            inconnu = any(r["country"] == "??" for r in km_ptv_pays)
+            niveau = "ok" if abs(somme_km - dist_ptv) <= 0.3 and not inconnu else "ko"
+            constats.append((niveau, "Km par pays : " + ", ".join("%s %.1f" % (r["country"], r["km"]) for r in km_ptv_pays) 
+                                     + f" = {somme_km:.1f} km pour {dist_ptv:.1f} km de route"
+                                     + (" — pays de départ non identifié" if inconnu else "") + "."))
         if (j.get("toll") or {}).get("costs", {}).get("containsApproximatedSections"):
             constats.append(("ko", "PTV signale des sections de péage approximées : montant indicatif."))
         if j.get("violated"):
@@ -500,6 +565,16 @@ with tab_diag:
                                        f"du point réel ({sd['reçu'][0]:.4f},{sd['reçu'][1]:.4f}) : "
                                        "les coordonnées sont traitées comme une adresse."))
 
+        if "km_by_country" not in d:
+            constats.append(("ko", "Le serveur ne renvoie pas km_by_country : déployer le nouveau "
+                                   "map_server_main.py sur Cartes-bot-."))
+        elif km_ptv_pays is not None:
+            a_ = {r["country"]: r["km"] for r in km_ptv_pays}
+            b_ = {r.get("country"): r.get("km") for r in d["km_by_country"] or []}
+            ecarts = [cc for cc in set(a_) | set(b_) if abs((a_.get(cc) or 0) - (b_.get(cc) or 0)) > 0.5]
+            constats.append(("ko", f"Km par pays serveur ≠ PTV direct sur : {', '.join(sorted(ecarts))}.")
+                            if ecarts else ("ok", "Km par pays identiques entre serveur et PTV direct."))
+
         if "toll_by_country" not in d:
             if emp.get("geocode_country") is True:
                 constats.append(("ko", "Le serveur tourne bien en version patchée (geocode accepte "
@@ -539,6 +614,11 @@ with tab_diag:
     for niveau, txt in constats:
         {"ok": st.success, "ko": st.error, "info": st.info}[niveau](txt)
 
+    if km_ptv_pays:
+        st.markdown("**Kilomètres par pays (PTV direct)**")
+        dfk = pd.DataFrame(km_ptv_pays).rename(columns={"country": "Pays", "km": "Km"})
+        st.bar_chart(dfk.set_index("Pays"), color="#16a085")
+
     if lignes_ptv:
         st.markdown("**Ventilation PTV direct**")
         dfp = df_pays(lignes_ptv).rename(columns={"country": "Pays", "price": "Péage (€)"})
@@ -572,6 +652,19 @@ with tab_ptv:
 
             st.markdown("**toll_by_country** (format attendu par map.html)")
             st.code(json.dumps(lignes_ptv, ensure_ascii=False, indent=2), language="json")
+
+            st.markdown("**km_by_country** (format attendu par map.html)")
+            st.code(json.dumps(km_ptv_pays, ensure_ascii=False, indent=2), language="json")
+            ev = [{"km depuis départ": round((e.get("distanceFromStart") or 0) / 1000, 1),
+                   "pays": e.get("countryCode"),
+                   "type": "frontière" if "border" in e else ", ".join(k for k in e if k not in
+                           ("latitude", "longitude", "distanceFromStart", "travelTimeFromStart",
+                            "countryCode", "utcOffset")) or "—",
+                   "entrée": (e.get("border") or {}).get("countryCode")}
+                  for e in j.get("events") or []]
+            if ev:
+                with st.expander(f"Événements PTV ({len(ev)})"):
+                    st.dataframe(pd.DataFrame(ev), use_container_width=True, hide_index=True)
 
             dfs = table_sections(j)
             if not dfs.empty:
@@ -671,5 +764,7 @@ with tab_code:
     src = inspect.getsource(toll_by_country).replace("def toll_by_country(",
                                                      "def _extract_toll_by_country(", 1)
     st.code(src, language="python")
+    st.code(inspect.getsource(km_by_country).replace("def km_by_country(",
+                                                     "def _extract_km_by_country(", 1), language="python")
     st.markdown("Dans l'appel PTV du serveur, `results` doit contenir "
                 "`POLYLINE,TOLL_COSTS` (TOLL_SECTIONS en option, pour le repli) et `options[currency]` valoir `EUR`.")
