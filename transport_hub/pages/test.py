@@ -237,6 +237,33 @@ def empreinte_serveur(base: str) -> dict:
     return out
 
 
+def sonde_geocode(base: str, texte: str, attendu) -> dict:
+    """Envoie 'lat,lon' à /api/geocode pour voir où le serveur le place réellement."""
+    out = {"envoyé": texte, "attendu": list(attendu), "reçu": None, "écart_km": None, "erreur": None}
+    try:
+        r = requests.get(base + "/api/geocode", params={"q": texte}, timeout=30)
+        if r.status_code != 200:
+            out["erreur"] = f"HTTP {r.status_code} — {r.text[:150]}"
+            return out
+        d = r.json()
+        if isinstance(d.get("results"), list) and d["results"]:
+            d = d["results"][0]
+        lat, lng = d.get("lat"), d.get("lng", d.get("lon"))
+        if isinstance(lat, (int, float)) and isinstance(lng, (int, float)):
+            out["reçu"] = [lat, lng]
+            out["écart_km"] = round(dist_km(attendu, (lat, lng)), 1)
+    except Exception as e:
+        out["erreur"] = str(e)
+    return out
+
+
+def dist_km(a, b) -> float:
+    from math import radians, sin, cos, asin, sqrt
+    la1, lo1, la2, lo2 = map(radians, (a[0], a[1], b[0], b[1]))
+    h = sin((la2 - la1) / 2) ** 2 + cos(la1) * cos(la2) * sin((lo2 - lo1) / 2) ** 2
+    return 6371 * 2 * asin(sqrt(h))
+
+
 def appel_serveur(server_url, points, avoid_tolls):
     base = server_url.rstrip("/")
     try:
@@ -262,8 +289,9 @@ def appel_serveur(server_url, points, avoid_tolls):
         rep = r.json()
     except ValueError:
         rep = {"_texte_brut": r.text[:3000]}
+    sondes = [sonde_geocode(base, body["origin"], o), sonde_geocode(base, body["dest"], d)]
     return {"status": r.status_code, "duree": duree, "json": rep, "body": body,
-            "empreinte": empreinte}
+            "empreinte": empreinte, "sondes": sondes}
 
 
 def df_pays(lignes) -> pd.DataFrame:
@@ -446,6 +474,32 @@ with tab_diag:
     else:
         d = srv["json"] if isinstance(srv["json"], dict) else {}
         emp = srv.get("empreinte") or {}
+
+        if ptv_ok:
+            km_ptv = (ptv["json"].get("distance") or 0) / 1000
+            km_srv = d.get("distance_km")
+            if isinstance(km_srv, (int, float)) and km_ptv > 0:
+                ecart = (km_srv - km_ptv) / km_ptv * 100
+                if abs(ecart) > 5:
+                    constats.append(("ko", f"Le serveur ne calcule pas le même trajet : {km_srv:.1f} km "
+                                           f"contre {km_ptv:.1f} km en PTV direct ({ecart:+.0f} %). "
+                                           "Ses péages sont donc faux, pas seulement non ventilés."))
+                else:
+                    constats.append(("ok", f"Même trajet : {km_srv:.1f} km contre {km_ptv:.1f} km."))
+            t_ptv = total_ptv(ptv["json"])
+            try:
+                t_srv = float(d.get("prix_peage"))
+            except (TypeError, ValueError):
+                t_srv = None
+            if t_ptv is not None and t_srv is not None and abs(t_srv - t_ptv) > 0.5:
+                constats.append(("ko", f"Total péage serveur {t_srv:.2f} € contre {t_ptv:.2f} € en PTV direct."))
+
+        for sd in srv.get("sondes") or []:
+            if sd.get("écart_km") is not None and sd["écart_km"] > 1:
+                constats.append(("ko", f"/api/geocode place « {sd['envoyé']} » à {sd['écart_km']:.0f} km "
+                                       f"du point réel ({sd['reçu'][0]:.4f},{sd['reçu'][1]:.4f}) : "
+                                       "les coordonnées sont traitées comme une adresse."))
+
         if "toll_by_country" not in d:
             if emp.get("geocode_country") is True:
                 constats.append(("ko", "Le serveur tourne bien en version patchée (geocode accepte "
@@ -576,10 +630,37 @@ with tab_srv:
             st.dataframe(comp.rename(columns={"country": "Pays"}),
                          use_container_width=True, hide_index=True)
 
+        if srv.get("sondes"):
+            st.markdown("**Géocodage des coordonnées par le serveur**")
+            st.dataframe(pd.DataFrame(srv["sondes"]), use_container_width=True, hide_index=True)
+
+        st.download_button(
+            "Télécharger le diagnostic serveur (JSON)",
+            json.dumps({"empreinte": emp, "sondes": srv.get("sondes"), "corps": srv["body"],
+                        "reponse": sans_polyline(d),
+                        "ptv_direct": {"distance_km": (ptv["json"].get("distance") or 0) / 1000,
+                                       "total": total_ptv(ptv["json"]),
+                                       "toll_by_country": lignes_ptv} if ptv_ok else None},
+                       ensure_ascii=False, indent=2),
+            file_name="diagnostic_serveur_cartes.json", mime="application/json")
+
         st.markdown("**Réponse du serveur** (tracé masqué)")
         st.code(json.dumps(sans_polyline(d), ensure_ascii=False, indent=2)[:15000], language="json")
         with st.expander("Corps envoyé à /api/recalculate"):
             st.code(json.dumps(srv["body"], ensure_ascii=False, indent=2), language="json")
+
+        st.download_button(
+            "Télécharger le diagnostic serveur (JSON)",
+            json.dumps({
+                "http": srv.get("status"),
+                "empreinte": emp,
+                "cles_reponse": sorted(d.keys()),
+                "toll_by_country_present": "toll_by_country" in d,
+                "reponse_sans_trace": sans_polyline(d),
+                "corps_envoye": srv.get("body"),
+                "ptv_direct_toll_by_country": lignes_ptv,
+            }, ensure_ascii=False, indent=2),
+            file_name="serveur_toll_test.json", mime="application/json")
 
 # ── Code à intégrer ─────────────────────────────────────────────────────────
 with tab_code:
