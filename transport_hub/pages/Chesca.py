@@ -4,12 +4,17 @@ HUB — Carte Chesca
 Colle le message de suivi Chesca : la page parse chaque ligne, géolocalise
 les sites et affiche la carte + le tableau de dispatch.
 
+Formats acceptés (séparateur virgule ou tiret) :
+  GL51CHE – he will be around 10:15 at the unloading place in Sarre Union, we will keep you posted.
+  B205ADN – he is heading unloading in Grunenbach – should be there tomorrow around 11:30
+
 Dépendances : streamlit, pandas, pydeck, requests
 Emplacement : pages/12_🗺️_Carte_Chesca.py
 """
 
 import json
 import re
+import time
 import unicodedata
 from datetime import date
 
@@ -26,7 +31,8 @@ st.set_page_config(page_title="Carte Chesca", page_icon="🗺️", layout="wide"
 
 CARTO_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
-UA = {"User-Agent": "CB-HUB-Chesca/1.0 (dispatch tool)"}
+UA = {"User-Agent": "CB-HUB-Chesca/1.1 (dispatch tool)"}
+PAYS_WEB = "fr,be,lu,de,nl,it,es,pt,at,ch,pl,cz,sk,hu,si,hr,ro,dk,gb,ie"
 
 STATUTS = {
     "sur_dech":    {"label": "Sur place déchargement", "rgb": [240, 162,  60]},
@@ -36,55 +42,105 @@ STATUTS = {
     "route_dech":  {"label": "En route déchargement",  "rgb": [ 79, 179, 201]},
     "route_charg": {"label": "En route chargement",    "rgb": [ 86, 168, 118]},
     "route":       {"label": "En route",               "rgb": [110, 150, 170]},
-    "repos":       {"label": "Repos 45h",              "rgb": [ 95, 121, 130]},
+    "vide":        {"label": "Vide – attente ordre",   "rgb": [236, 214,  92]},
+    "repos":       {"label": "Repos",                  "rgb": [ 95, 121, 130]},
+    "garage":      {"label": "Garage / panne",         "rgb": [205,  82,  62]},
     "inconnu":     {"label": "Position inconnue",      "rgb": [135, 148, 160]},
 }
-ORDRE = ["sur_dech", "sur_charg", "swap", "lavage",
-         "route_dech", "route_charg", "route", "repos", "inconnu"]
+ORDRE = ["sur_dech", "sur_charg", "swap", "lavage", "route_dech", "route_charg",
+         "route", "vide", "repos", "garage", "inconnu"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # RÉFÉRENTIEL DES SITES
-# clé = nom normalisé (minuscule, sans accent, sans tiret)
+# clé = nom normalisé (minuscule, sans accent, tirets/apostrophes → espace)
 # valeur = (libellé propre, pays, lat, lon, alerte éventuelle)
 # ─────────────────────────────────────────────────────────────────────────────
 
 GEO = {
-    "grunenbach":            ("Grünenbach", "DE", 47.6167,  9.9333, ""),
-    "reims":                 ("Reims", "FR", 49.2583,  4.0317, ""),
-    "sottevast":             ("Sottevast", "FR", 49.5333, -1.6167, ""),
-    "clery petit":           ("Cléry-le-Petit", "FR", 49.3667, 5.1667, ""),
-    "clery le petit":        ("Cléry-le-Petit", "FR", 49.3667, 5.1667, ""),
-    "sarre union":           ("Sarre-Union", "FR", 48.9333, 7.0833, ""),
-    "kampen":                ("Kampen", "NL", 52.5553, 5.9111, ""),
-    "bernkastel":            ("Bernkastel-Kues", "DE", 49.9167, 7.0667, ""),
-    "bernkastel kues":       ("Bernkastel-Kues", "DE", 49.9167, 7.0667, ""),
-    "jouy":                  ("Jouy", "FR", 48.5167, 1.5667,
-                              "Homonyme : Jouy (28) retenu — vérifier Jouy-en-Josas / Jouy-aux-Arches"),
-    "la chapelle d andaine": ("La Chapelle-d'Andaine", "FR", 48.5500, -0.4333, ""),
-    "la chapelle dandaine":  ("La Chapelle-d'Andaine", "FR", 48.5500, -0.4333, ""),
-    "belleville":            ("Belleville-sur-Loire", "FR", 47.5117, 2.8500,
-                              "Homonyme : Belleville-sur-Loire retenu — vérifier Belleville-en-Beaujolais"),
-    "mayenne":               ("Mayenne", "FR", 48.3000, -0.6167, ""),
-    "gent":                  ("Gand", "BE", 51.0543, 3.7174, ""),
-    "gand":                  ("Gand", "BE", 51.0543, 3.7174, ""),
-    "woergl":                ("Wörgl", "AT", 47.4833, 12.0667, ""),
-    "worgl":                 ("Wörgl", "AT", 47.4833, 12.0667, ""),
-    "faenza":                ("Faenza", "IT", 44.2853, 11.8833, ""),
-    "nantes":                ("Nantes", "FR", 47.2184, -1.5536, ""),
-    "valence":               ("Valence", "FR", 44.9333, 4.8917, ""),
-    "chevrieres":            ("Chevrières", "FR", 49.3500, 2.6833,
-                              "Homonyme : Chevrières (60) retenu — vérifier Chevrières (42)"),
-    "rouvroy sur audry":     ("Rouvroy-sur-Audry", "FR", 49.8000, 4.4667, ""),
-    "manage":                ("Manage", "BE", 50.5000, 4.2333, ""),
-    "vienne":                ("Vienne", "FR", 45.5254, 4.8745,
-                              "Homonyme : Vienne (38) retenu — vérifier s'il s'agit de Wien (AT)"),
-    "baleycourt":            ("Baleycourt", "FR", 49.1500, 5.3167, ""),
-    "montauban":             ("Montauban", "FR", 44.0181, 1.3556, ""),
-    "langenlonsheim":        ("Langenlonsheim", "DE", 49.9000, 7.9000, ""),
-    "monheim":               ("Monheim am Rhein", "DE", 51.0917, 6.8917,
-                              "Homonyme : Monheim am Rhein retenu — vérifier Monheim (Bavière)"),
-    "dalfsen":               ("Dalfsen", "NL", 52.5089, 6.2578, ""),
-    "werbomont":             ("Werbomont", "BE", 50.3667, 5.6500, ""),
+    # — Allemagne
+    "grunenbach":              ("Grünenbach", "DE", 47.6167,  9.9333, ""),
+    "bernkastel":              ("Bernkastel-Kues", "DE", 49.9167, 7.0667, ""),
+    "bernkastel kues":         ("Bernkastel-Kues", "DE", 49.9167, 7.0667, ""),
+    "langenlonsheim":          ("Langenlonsheim", "DE", 49.9000, 7.9000, ""),
+    "monheim":                 ("Monheim am Rhein", "DE", 51.0917, 6.8917,
+                                "Homonyme : Monheim am Rhein retenu — vérifier Monheim (Bavière)"),
+    "riedlingen":              ("Riedlingen", "DE", 48.1553, 9.4728, ""),
+    "stockach":                ("Stockach", "DE", 47.8514, 9.0114, ""),
+    "velen":                   ("Velen", "DE", 51.8939, 6.9894, ""),
+
+    # — Autriche
+    "woergl":                  ("Wörgl", "AT", 47.4833, 12.0667, ""),
+    "worgl":                   ("Wörgl", "AT", 47.4833, 12.0667, ""),
+
+    # — Belgique
+    "gent":                    ("Gand", "BE", 51.0543, 3.7174, ""),
+    "gand":                    ("Gand", "BE", 51.0543, 3.7174, ""),
+    "manage":                  ("Manage", "BE", 50.5000, 4.2333, ""),
+    "werbomont":               ("Werbomont", "BE", 50.3667, 5.6500, ""),
+    "eupen":                   ("Eupen", "BE", 50.6283, 6.0361, ""),
+    "aalter":                  ("Aalter", "BE", 51.0900, 3.4470, ""),
+    "bruxelles":               ("Bruxelles", "BE", 50.8503, 4.3517, ""),
+    "brussels":                ("Bruxelles", "BE", 50.8503, 4.3517, ""),
+    "brussel":                 ("Bruxelles", "BE", 50.8503, 4.3517, ""),
+
+    # — Espagne
+    "mollerussa":              ("Mollerussa", "ES", 41.6311, 0.8947, ""),
+
+    # — France
+    "reims":                   ("Reims", "FR", 49.2583,  4.0317, ""),
+    "sottevast":               ("Sottevast", "FR", 49.5333, -1.6167, ""),
+    "clery petit":             ("Cléry-le-Petit", "FR", 49.3667, 5.1667, ""),
+    "clery le petit":          ("Cléry-le-Petit", "FR", 49.3667, 5.1667, ""),
+    "sarre union":             ("Sarre-Union", "FR", 48.9333, 7.0833, ""),
+    "jouy":                    ("Jouy", "FR", 48.5167, 1.5667,
+                                "Homonyme : Jouy (28) retenu — vérifier Jouy-en-Josas / Jouy-aux-Arches"),
+    "la chapelle d andaine":   ("La Chapelle-d'Andaine", "FR", 48.5500, -0.4333, ""),
+    "la chapelle dandaine":    ("La Chapelle-d'Andaine", "FR", 48.5500, -0.4333, ""),
+    "belleville":              ("Belleville-sur-Loire", "FR", 47.5117, 2.8500,
+                                "Homonyme : Belleville-sur-Loire retenu — vérifier Belleville-sur-Vie / en-Beaujolais"),
+    "belleville sur loire":    ("Belleville-sur-Loire", "FR", 47.5117, 2.8500, ""),
+    "belleville sur vie":      ("Belleville-sur-Vie", "FR", 46.7833, -1.4333, ""),
+    "mayenne":                 ("Mayenne", "FR", 48.3000, -0.6167, ""),
+    "nantes":                  ("Nantes", "FR", 47.2184, -1.5536, ""),
+    "valence":                 ("Valence", "FR", 44.9333, 4.8917, ""),
+    "chevrieres":              ("Chevrières", "FR", 49.3500, 2.6833,
+                                "Homonyme : Chevrières (60) retenu — vérifier Chevrières (42)"),
+    "rouvroy sur audry":       ("Rouvroy-sur-Audry", "FR", 49.8000, 4.4667, ""),
+    "vienne":                  ("Vienne", "FR", 45.5254, 4.8745,
+                                "Homonyme : Vienne (38) retenu — vérifier s'il s'agit de Wien (AT)"),
+    "baleycourt":              ("Baleycourt", "FR", 49.1500, 5.3167, ""),
+    "montauban":               ("Montauban", "FR", 44.0181, 1.3556, ""),
+    "moneteau":                ("Monéteau", "FR", 47.8494, 3.5808, ""),
+    "sarrebourg":              ("Sarrebourg", "FR", 48.7353, 7.0539, ""),
+    "marges":                  ("Marges", "FR", 45.1470, 5.0390, ""),
+    "corcieux":                ("Corcieux", "FR", 48.1717, 6.8811, ""),
+    "cesson sevigne":          ("Cesson-Sévigné", "FR", 48.1211, -1.6031, ""),
+    "chevigny saint sauveur":  ("Chevigny-Saint-Sauveur", "FR", 47.3000, 5.1350, ""),
+    "chevigny st sauveur":     ("Chevigny-Saint-Sauveur", "FR", 47.3000, 5.1350, ""),
+    "chevigny":                ("Chevigny-Saint-Sauveur", "FR", 47.3000, 5.1350, ""),
+    "isigny sur mer":          ("Isigny-sur-Mer", "FR", 49.3183, -1.1022, ""),
+    "isigny":                  ("Isigny-sur-Mer", "FR", 49.3183, -1.1022, ""),
+    "malestroit":              ("Malestroit", "FR", 47.8097, -2.3831, ""),
+
+    # — Italie
+    "faenza":                  ("Faenza", "IT", 44.2853, 11.8833, ""),
+    "collecchio":              ("Collecchio", "IT", 44.7528, 10.2167, ""),
+    "ovaro":                   ("Ovaro", "IT", 46.4833, 12.8667, ""),
+
+    # — Luxembourg
+    "septfontaines":           ("Septfontaines", "LU", 49.7011, 5.9669,
+                                "Homonyme : Septfontaines (LU) retenu — vérifier Septfontaines (25, FR)"),
+
+    # — Pays-Bas
+    "kampen":                  ("Kampen", "NL", 52.5553, 5.9111, ""),
+    "dalfsen":                 ("Dalfsen", "NL", 52.5089, 6.2578, ""),
+    "rotterdam":               ("Rotterdam", "NL", 51.9225, 4.4792, ""),
+    "zaandam":                 ("Zaandam", "NL", 52.4389, 4.8258, ""),
+    "riel":                    ("Riel", "NL", 51.5250, 5.0220,
+                                "Homonyme : Riel (NL, Goirle) retenu — vérifier Riel-les-Eaux (FR)"),
+
+    # — Pologne
+    "siemiatycze":             ("Siemiatycze", "PL", 52.4272, 22.8625, ""),
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,36 +156,101 @@ JOURS = {
 LINE_RE = re.compile(r"^\s*([A-Z0-9][A-Z0-9 \-]{3,12}?)\s*[–—−-]\s*(.+)$")
 PLATE_RE = re.compile(r"^[A-Z0-9]{5,10}$")
 HEURE_RE = re.compile(r"(\d{1,2})\s*[:h]\s*(\d{2})")
-KM_RE = re.compile(r"(\d{2,4})\s*km", re.I)
-SUR_PLACE_RE = re.compile(r"\b(he is at|is at the|is at|just arrived|in process|is in)\b")
-EN_ROUTE_RE = re.compile(r"\b(heading|driving|towards|direction|left to go)\b")
+KM_RE = re.compile(r"(\d{1,4})\s*km", re.I)
+
+SUR_PLACE_RE = re.compile(
+    r"\b(is at|are at|just arrived|in process|process of|is waiting to be called|"
+    r"is unloading|is loading|is in process)\b")
+EN_ROUTE_RE = re.compile(
+    r"\b(heading|driving|towards|direction|left to go|will be around|should be there|"
+    r"km from|on the way|on his way|is left)\b")
+
+# Déclencheurs d'un nom de lieu : la capture s'arrête à la première ponctuation forte.
+# Lookahead → toutes les occurrences sont testées (même imbriquées).
+LIEU_RE = re.compile(r"(?=\b(?:in|near|towards|direction of)\s+([^,;:()?!–—]+))", re.I)
+
+# Petits mots autorisés à l'intérieur d'un nom de commune
+CONNECTEURS = {
+    "sur", "sous", "le", "la", "les", "de", "du", "des", "en", "et", "aux", "lez",
+    "am", "an", "der", "im", "bei", "ob", "op", "aan", "den", "di", "del", "della",
+    "al", "sint", "sankt", "saint", "sainte", "st", "ste",
+}
+# Mots en majuscule qui ne sont jamais un lieu
+FAUX_LIEUX = {"ETA", "CMR", "The", "Our", "He", "We", "They", "His", "Please"}
 
 
 def norm(txt: str) -> str:
     """minuscule, sans accent, sans ponctuation, espaces simples."""
-    t = unicodedata.normalize("NFKD", txt or "")
+    t = unicodedata.normalize("NFKD", str(txt or ""))
     t = "".join(c for c in t if not unicodedata.combining(c))
     t = t.lower().replace("'", " ").replace("’", " ").replace("-", " ")
     t = re.sub(r"[^a-z0-9 ]", " ", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
+def _capture_nom(segment: str):
+    """Garde la suite de mots capitalisés (+ connecteurs internes) en début de segment."""
+    parts, attente = [], []
+    for tok in segment.split():
+        clean = tok.strip(".'’\"")
+        if not clean:
+            break
+        fin_phrase = tok.endswith(".") and clean.lower() not in ("st", "ste")
+        low = clean.lower()
+
+        est_nom = clean[0].isupper() or (parts and re.match(r"^[dl]['’][A-ZÀ-Ý]", clean))
+        if est_nom:
+            if clean in FAUX_LIEUX:
+                break
+            if PLATE_RE.match(clean) and any(c.isdigit() for c in clean):
+                break
+            parts += attente + [clean]
+            attente = []
+        elif parts and low in CONNECTEURS:
+            attente.append(clean)
+        else:
+            break
+        if fin_phrase:
+            break
+    return " ".join(parts) or None
+
+
+def extrait_lieu(txt: str):
+    """Nom de commune trouvé dans la ligne, ou None."""
+    zone = txt
+    # Camion au garage : on ne regarde que la proposition qui parle du garage
+    if re.search(r"\bgarage\b", txt, re.I):
+        clauses = [c for c in re.split(r"[,;]", txt) if re.search(r"\bgarage\b", c, re.I)]
+        zone = clauses[0] if clauses else ""
+    for m in LIEU_RE.finditer(zone):
+        nom = _capture_nom(m.group(1))
+        if nom:
+            return nom
+    return None
+
+
 def detecte_statut(txt: str) -> str:
     t = txt.lower()
-    if "clean" in t:
-        return "lavage"
+    a_quai = bool(re.search(r"\b(un)?loading place\b", t))
+
+    if re.search(r"\bgarage\b", t):
+        return "garage"
     if "swap" in t or "changing trailer" in t:
         return "swap"
-    if "break" in t or re.search(r"\b45\s*h\b", t):
+    if "cleaning station" in t or re.search(r"called for cleaning|\bis cleaning\b|being cleaned", t):
+        return "lavage"
+    if re.search(r"\bempty\b", t):
+        return "vide"
+    if not a_quai and re.search(r"\bbreak\b|\b(24|45)\s*h\b", t):
         return "repos"
 
-    sur_place = bool(SUR_PLACE_RE.search(t))
+    dech = bool(re.search(r"\bunload|\bdeliver", t))
+    charg = bool(re.search(r"\bload(ing|ed)?\b", t)) and not dech
     en_route = bool(EN_ROUTE_RE.search(t))
-    dech = ("unload" in t) or ("deliver" in t)
-    charg = ("load" in t) and ("unload" not in t)
+    sur_place = bool(SUR_PLACE_RE.search(t)) and not en_route
 
     if dech:
-        return "sur_dech" if (sur_place and not en_route) else "route_dech"
+        return "sur_dech" if sur_place else "route_dech"
     if charg:
         return "sur_charg" if (sur_place and "just loaded" not in t) else "route_charg"
     if en_route:
@@ -137,32 +258,34 @@ def detecte_statut(txt: str) -> str:
     return "inconnu"
 
 
-def nettoie_lieu(brut: str) -> str:
-    s = (brut or "").strip(" .,;:")
-    s = re.sub(r"\b(the|place|point|area|city)\b", " ", s, flags=re.I)
-    s = re.sub(r"\s+", " ", s).strip(" .,;:")
-    return s
-
-
-def extrait_lieu(txt: str):
-    """Nom de lieu brut trouvé dans la ligne, ou None."""
-    for seg in re.split(r"[–—−]|\s-\s", txt):
-        s = seg.strip()
-        m = re.search(r"\bdirection of\s+(.+)$", s, re.I)
-        if m:
-            return nettoie_lieu(m.group(1))
-        m = re.search(r"\bin\s+(.+)$", s, re.I)
-        if m:
-            return nettoie_lieu(m.group(1))
-    return None
+def detecte_alertes(txt: str) -> list:
+    t = txt.lower()
+    alertes = []
+    if re.search(r"technical issue|breakdown|broken|assistance|reparation|repair|"
+                 r"loosing|losing|valve|puncture|flat tyre|gearbox", t):
+        alertes.append("Incident technique")
+    if re.search(r"don.?t have room|no room|will not load|won.?t load|will not unload|"
+                 r"refused|not accepted", t):
+        alertes.append("Blocage site")
+    if "?" in txt or re.search(r"\bplease\b|\bcan you\b|\bcan we\b", t):
+        alertes.append("Réponse attendue")
+    return alertes
 
 
 def extrait_eta(txt: str) -> str:
-    """ETA lisible : jour + heure quand le jour précède l'heure, sinon heure seule."""
+    """ETA lisible : jour + heure, heure contextualisée (fin repos, chauffe), km restants."""
     t = txt.lower()
 
-    heures = [(m.start(), f"{int(m.group(1)):02d}:{m.group(2)}")
-              for m in HEURE_RE.finditer(t)]
+    heures = []
+    for m in HEURE_RE.finditer(t):
+        avant = t[max(0, m.start() - 40):m.start()].split(",")[-1]
+        h = f"{int(m.group(1)):02d}:{m.group(2)}"
+        if "break" in avant:
+            h = f"fin repos {h}"
+        elif "heat" in avant:
+            h = f"chauffe {h}"
+        heures.append((m.start(), h))
+
     jour, pos_jour = None, 10 ** 6
     for en, fr in JOURS.items():
         m = re.search(rf"\b{en}\b", t)
@@ -175,9 +298,9 @@ def extrait_eta(txt: str) -> str:
         h = " – ".join(x[1] for x in heures[:2])
         parts.append(f"{jour} {h}" if (jour and pos_jour < heures[0][0]) else h)
     elif "morning" in t:
-        parts.append(f"{jour} matin".strip() if jour else "matin")
+        parts.append(f"{jour} matin" if jour else "matin")
     elif "evening" in t or "night" in t:
-        parts.append(f"{jour} soir".strip() if jour else "soir")
+        parts.append(f"{jour} soir" if jour else "soir")
     elif jour:
         parts.append(jour)
 
@@ -185,16 +308,15 @@ def extrait_eta(txt: str) -> str:
         parts.append(f"≈ {km.group(1)} km")
 
     if not parts:
-        if "in process" in t or re.search(r"\bnow\b", t):
+        if re.search(r"in process|process of|\bnow\b", t):
             parts.append("en cours")
-        elif "waiting" in t:
-            parts.append("en attente")
         elif "just arrived" in t:
             parts.append("arrivé")
+        elif "waiting" in t:
+            parts.append("en attente")
         elif SUR_PLACE_RE.search(t):
             parts.append("sur place")
 
-    # livraison reportée au lendemain malgré une ETA du jour
     if heures and re.search(r"(deliver|park)[^.]{0,60}(tomorrow|morning)", t):
         parts.append("livraison demain matin")
 
@@ -202,38 +324,61 @@ def extrait_eta(txt: str) -> str:
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def _nominatim(nom: str, settlement: bool):
+    """Appel brut Nominatim. Lève une exception en cas d'erreur réseau (non mise en cache)."""
+    time.sleep(1.1)  # politique d'usage Nominatim : 1 requête / seconde
+    params = {"q": nom, "format": "jsonv2", "limit": 1, "addressdetails": 1,
+              "countrycodes": PAYS_WEB}
+    if settlement:
+        params["featureType"] = "settlement"
+    r = requests.get(NOMINATIM, params=params, headers=UA, timeout=8)
+    r.raise_for_status()
+    return r.json()
+
+
 def geocode_web(nom: str):
     """Fallback Nominatim pour un lieu absent du référentiel."""
-    try:
-        r = requests.get(
-            NOMINATIM,
-            params={"q": nom, "format": "json", "limit": 1,
-                    "countrycodes": "fr,be,lu,de,nl,it,es,at,ch,pl,cz"},
-            headers=UA, timeout=8,
-        )
-        r.raise_for_status()
-        data = r.json()
-        if not data:
+    for settlement in (True, False):
+        try:
+            data = _nominatim(nom, settlement)
+        except Exception:
             return None
-        d = data[0]
-        pays = d.get("display_name", "").split(",")[-1].strip()[:2].upper()
-        return (nom.title(), pays, float(d["lat"]), float(d["lon"]),
-                "Géocodage automatique — à vérifier")
-    except Exception:
-        return None
+        if data:
+            d = data[0]
+            addr = d.get("address", {}) or {}
+            pays = (addr.get("country_code") or "").upper() or "—"
+            libelle = (addr.get("city") or addr.get("town") or addr.get("village")
+                       or addr.get("municipality") or nom)
+            return (libelle, pays, float(d["lat"]), float(d["lon"]),
+                    "Géocodage automatique — à vérifier")
+    return None
+
+
+def est_code_site(brut: str) -> bool:
+    """BSM, PTK, SNF… : code client, pas une commune."""
+    return bool(re.fullmatch(r"[A-Z0-9]{2,5}", (brut or "").replace(" ", "")))
 
 
 def resout_lieu(brut: str, autoriser_web: bool):
+    """(libellé, pays, lat, lon, alerte) ou None."""
     if not brut:
         return None
     cle = norm(brut)
     if cle in GEO:
         return GEO[cle]
-    for k, v in GEO.items():
-        if cle.startswith(k) or k.startswith(cle):
-            return v
+    for variante in (cle.replace(" st ", " saint "), cle.replace(" saint ", " st ")):
+        if variante in GEO:
+            return GEO[variante]
+    if est_code_site(brut):
+        return None
     if autoriser_web:
-        return geocode_web(brut)
+        geo = geocode_web(brut)
+        if geo:
+            return geo
+    premier = cle.split()[0] if cle else ""
+    if premier in GEO and premier != cle:
+        lib, pays, lat, lon, _ = GEO[premier]
+        return (lib, pays, lat, lon, f"Correspondance partielle « {brut} » → {lib} — à vérifier")
     return None
 
 
@@ -246,7 +391,7 @@ def parse_message(texte: str, autoriser_web: bool):
         if not m:
             lignes_ko.append(ligne.strip())
             continue
-        plaque = m.group(1).replace(" ", "").upper()
+        plaque = m.group(1).replace(" ", "").replace("-", "").upper()
         reste = m.group(2).strip()
         if not PLATE_RE.match(plaque):
             lignes_ko.append(ligne.strip())
@@ -255,13 +400,19 @@ def parse_message(texte: str, autoriser_web: bool):
         statut = detecte_statut(reste)
         brut = extrait_lieu(reste)
         geo = resout_lieu(brut, autoriser_web)
+        alertes = detecte_alertes(reste)
 
         if geo is None:
-            ville = brut or "Non précisé"
+            ville = brut or ("Garage" if statut == "garage" else "Non précisé")
             pays, lat, lon = "—", None, None
-            note = "Lieu non reconnu" if brut else "Aucune destination dans le message"
-            if brut is None and statut not in ("repos", "lavage", "swap"):
-                statut = "inconnu"
+            if brut and est_code_site(brut):
+                note = f"Code site « {brut} » — ajouter au référentiel GEO"
+            elif brut:
+                note = "Lieu non reconnu"
+            elif statut == "garage":
+                note = ""
+            else:
+                note = "Aucun lieu dans le message"
         else:
             ville, pays, lat, lon, note = geo
 
@@ -273,10 +424,16 @@ def parse_message(texte: str, autoriser_web: bool):
             "ETA": extrait_eta(reste),
             "Lat": lat,
             "Lon": lon,
-            "Alerte": note,
+            "Alerte": " · ".join([a for a in [note] + alertes if a]),
             "Message": reste,
         })
-    return pd.DataFrame(lignes_ok), lignes_ko
+
+    df = pd.DataFrame(lignes_ok)
+    if not df.empty:
+        df = df.drop_duplicates("Tracteur", keep="last").reset_index(drop=True)
+        df["Lat"] = pd.to_numeric(df["Lat"], errors="coerce")
+        df["Lon"] = pd.to_numeric(df["Lon"], errors="coerce")
+    return df, lignes_ko
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,23 +454,25 @@ st.markdown("""
 
 st.title("Carte Chesca")
 st.caption("Colle le message de suivi tel quel — une ligne par tracteur, "
-           "format `PLAQUE – he is heading unloading in Ville – ETA`.")
+           "format `PLAQUE – he will be around 10:15 at the unloading place in Ville, …`.")
 
 col_in, col_opt = st.columns([3, 1])
 with col_in:
     texte = st.text_area(
         "Message Chesca", height=220, key="msg",
-        placeholder="B205ADN – he is heading unloading in Grunenbach – should be there tomorrow around 11:30",
+        placeholder="GL51CHE – he will be around 10:15 at the unloading place in Sarre Union, we will keep you posted.",
     )
 with col_opt:
     autoriser_web = st.toggle(
         "Géocodage web", value=True,
-        help="Interroge Nominatim (OpenStreetMap) pour les sites absents du référentiel.")
+        help="Interroge Nominatim (OpenStreetMap) pour les sites absents du référentiel. "
+             "1 requête/seconde : le premier passage peut prendre quelques secondes.")
     rayon = st.slider("Taille des points", 4, 20, 9)
     lancer = st.button("Générer la carte", type="primary", use_container_width=True)
 
 if lancer and texte.strip():
-    df_parse, rejets = parse_message(texte, autoriser_web)
+    with st.spinner("Lecture du message et géolocalisation…"):
+        df_parse, rejets = parse_message(texte, autoriser_web)
     st.session_state["chesca_df"] = df_parse
     st.session_state["chesca_rejets"] = rejets
 
@@ -338,16 +497,21 @@ choix = st.multiselect(
 )
 vue = df[df["Statut"].isin(choix)].copy()
 
-c1, c2, c3, c4 = st.columns(4)
+alerte_txt = vue["Alerte"].fillna("")
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Tracteurs", len(vue))
 c2.metric("Sites", vue.dropna(subset=["Lat"])["Site"].nunique())
 c3.metric("Sans position", int(vue["Lat"].isna().sum()))
-c4.metric("À vérifier", int((vue["Alerte"].fillna("").str.len() > 0).sum()))
+c4.metric("Réponse attendue", int(alerte_txt.str.contains("Réponse attendue").sum()))
+c5.metric("Incidents / blocages",
+          int(alerte_txt.str.contains("Incident technique|Blocage site").sum()))
 
 # ── Carte ───────────────────────────────────────────────────────────────────
 carte = vue.dropna(subset=["Lat", "Lon"]).copy()
 if not carte.empty:
-    grp = (carte.groupby(["Site", "Pays", "Lat", "Lon"], as_index=False)
+    carte["_ordre"] = carte["Statut"].map({s: i for i, s in enumerate(ORDRE)})
+    carte = carte.sort_values("_ordre")
+    grp = (carte.groupby(["Site", "Pays", "Lat", "Lon"], as_index=False, sort=False)
                 .agg(Tracteurs=("Tracteur", lambda x: " · ".join(sorted(x))),
                      Nb=("Tracteur", "size"),
                      Statut=("Statut", "first"),
@@ -401,8 +565,8 @@ else:
 
 # ── Tableau éditable ────────────────────────────────────────────────────────
 st.subheader("Dispatch")
-st.caption("Corrige une commune ou des coordonnées dans le tableau, "
-           "puis clique sur Appliquer les corrections.")
+st.caption("Corrige une commune dans le tableau (les coordonnées sont recalculées "
+           "si tu ne les touches pas), puis clique sur Appliquer les corrections.")
 
 vue["_ordre"] = vue["Statut"].map({s: i for i, s in enumerate(ORDRE)})
 vue = vue.sort_values(["_ordre", "Site", "Tracteur"]).drop(columns="_ordre")
@@ -412,6 +576,7 @@ edit = st.data_editor(
     hide_index=True,
     use_container_width=True,
     height=460,
+    disabled=["Tracteur", "Message"],
     column_config={
         "Statut": st.column_config.SelectboxColumn(options=ORDRE, width="medium"),
         "Lat": st.column_config.NumberColumn(format="%.4f"),
@@ -424,8 +589,28 @@ edit = st.data_editor(
 
 if st.button("Appliquer les corrections"):
     base = st.session_state["chesca_df"].set_index("Tracteur")
-    base.update(edit.set_index("Tracteur"))
-    st.session_state["chesca_df"] = base.reset_index()
+    for trac, r in edit.set_index("Tracteur").iterrows():
+        if trac not in base.index:
+            continue
+        ancien = base.loc[trac]
+        r = r.copy()
+        site_change = norm(r["Site"]) != norm(ancien["Site"])
+        coords_idem = ((pd.isna(r["Lat"]) and pd.isna(ancien["Lat"]))
+                       or r["Lat"] == ancien["Lat"])
+        if site_change and coords_idem:
+            geo = resout_lieu(str(r["Site"]), autoriser_web)
+            if geo:
+                r["Site"], r["Pays"], r["Lat"], r["Lon"], note = geo
+                r["Alerte"] = note
+            else:
+                r["Pays"], r["Lat"], r["Lon"] = "—", None, None
+                r["Alerte"] = "Lieu non reconnu"
+        for col in r.index:
+            base.at[trac, col] = r[col]
+    base = base.reset_index()
+    base["Lat"] = pd.to_numeric(base["Lat"], errors="coerce")
+    base["Lon"] = pd.to_numeric(base["Lon"], errors="coerce")
+    st.session_state["chesca_df"] = base
     st.rerun()
 
 # ── Exports ─────────────────────────────────────────────────────────────────
@@ -439,7 +624,8 @@ e1.download_button(
 )
 
 nouveaux = {
-    norm(r["Site"]): [r["Site"], r["Pays"], r["Lat"], r["Lon"], ""]
+    norm(r["Site"]): [r["Site"], r["Pays"], round(float(r["Lat"]), 4),
+                      round(float(r["Lon"]), 4), ""]
     for _, r in edit.dropna(subset=["Lat", "Lon"]).iterrows()
     if norm(r["Site"]) not in GEO
 }
