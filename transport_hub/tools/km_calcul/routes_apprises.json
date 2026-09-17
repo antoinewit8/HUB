@@ -196,5 +196,18 @@
     "source": "carte_manuelle",
     "date": "2026-06-05",
     "confiance": 1
+  },
+  {
+    "origine": "Bannans, 25560, France",
+    "destination": "Heerenveen, Pays-Bas",
+    "waypoints": [
+      "47.221020, 6.392549",
+      "47.515962, 6.416894",
+      "49.446012, 5.887837"
+    ],
+    "km_reference": 873.6,
+    "source": "carte_manuelle",
+    "date": "2026-09-17",
+    "confiance": 1
   }
 ]
