@@ -209,5 +209,17 @@
     "source": "carte_manuelle",
     "date": "2026-09-17",
     "confiance": 1
+  },
+  {
+    "origine": "Hoogeveen, Pays-Bas",
+    "destination": "Isigny-sur-Mer, 14230, France",
+    "waypoints": [
+      "50.142106, 2.103354",
+      "49.364971, 0.777005"
+    ],
+    "km_reference": 836.8,
+    "source": "carte_manuelle",
+    "date": "2026-09-17",
+    "confiance": 1
   }
 ]
