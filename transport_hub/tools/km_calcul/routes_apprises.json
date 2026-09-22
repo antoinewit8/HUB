@@ -232,5 +232,16 @@
     "source": "carte_manuelle",
     "date": "2026-09-22",
     "confiance": 1
+  },
+  {
+    "origine": "BERMATINGEN, 88697, Germany",
+    "destination": "NIEUWDORP, 4455 TE, Netherlands",
+    "waypoints": [
+      "49.438562, 5.892411"
+    ],
+    "km_reference": 763.4,
+    "source": "carte_manuelle",
+    "date": "2026-09-22",
+    "confiance": 1
   }
 ]
