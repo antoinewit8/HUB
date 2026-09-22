@@ -221,5 +221,16 @@
     "source": "carte_manuelle",
     "date": "2026-09-17",
     "confiance": 1
+  },
+  {
+    "origine": "BERMATINGEN, 88697, Germany",
+    "destination": "ROTTERDAM, 3198, Netherlands",
+    "waypoints": [
+      "49.426994, 5.917765"
+    ],
+    "km_reference": 779.7,
+    "source": "carte_manuelle",
+    "date": "2026-09-22",
+    "confiance": 1
   }
 ]
