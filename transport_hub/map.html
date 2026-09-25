@@ -36,22 +36,88 @@
         }
         #btn-collapse:hover { background: #dce1e7; }
 
-        /* ── Départ / arrivée ── */
-        .ep {
-            display: flex; align-items: center; gap: 9px;
-            background: #f8f9fa; border: 1px solid #e9ecef; border-left: 4px solid #bdc3c7;
-            border-radius: 6px; padding: 9px 10px; margin-bottom: 7px;
+        /* ── Départ / arrivée (façon Google Maps) ── */
+        #endpoints { display: flex; align-items: center; gap: 8px; }
+        #ep-fields { flex: 1; min-width: 0; }
+        .ep-row { display: flex; align-items: center; gap: 8px; }
+        .ep-icon { width: 18px; flex-shrink: 0; display: flex; justify-content: center; }
+        .ep-dot { width: 9px; height: 9px; border-radius: 50%;
+            border: 3px solid #27ae60; background: white; }
+        .ep-pin { width: 12px; height: 12px; background: #c0392b;
+            border-radius: 50% 50% 50% 0; transform: rotate(-45deg); margin-top: -3px; }
+        .ep-link { width: 18px; height: 10px; display: flex; justify-content: center; }
+        .ep-link::before { content: ''; border-left: 2px dotted #b0bac4; height: 100%; }
+
+        .ep-input-wrap { flex: 1; position: relative; min-width: 0; }
+        .ep-input {
+            width: 100%; padding: 9px 28px 9px 10px; box-sizing: border-box;
+            border: 1px solid #dce1e7; border-radius: 6px; outline: none;
+            font-size: 13px; color: #2c3e50; background: #f8f9fa;
+            font-family: inherit; text-overflow: ellipsis; cursor: pointer;
         }
-        .ep.set-origin { border-left-color: #27ae60; }
-        .ep.set-dest   { border-left-color: #c0392b; }
-        .ep-tag { font-size: 10.5px; font-weight: bold; color: #7f8c8d;
-            text-transform: uppercase; letter-spacing: 0.4px; flex-shrink: 0; width: 46px; }
-        .ep-txt { flex: 1; font-size: 12.5px; color: #2c3e50; min-width: 0;
-            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .ep-txt.empty { color: #a6b1bd; font-style: italic; }
-        .ep-clear { color: #e74c3c; cursor: pointer; font-size: 14px; padding: 0 3px; flex-shrink: 0; }
+        .ep-input::placeholder { color: #a6b1bd; font-style: italic; }
+        .ep-input:hover { background: #fff; border-color: #c8d1da; }
+        .ep-input:focus {
+            background: #fff; border-color: #3498db; cursor: text;
+            box-shadow: 0 0 0 3px rgba(52,152,219,0.15);
+        }
+        .ep-clear {
+            position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+            color: #95a5a6; cursor: pointer; font-size: 13px; padding: 2px 3px; line-height: 1;
+        }
         .ep-clear:hover { color: #c0392b; }
-        .ep-clear.off { visibility: hidden; }
+        .ep-clear.off { display: none; }
+
+        #btn-swap {
+            flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%;
+            border: 1px solid #dce1e7; background: white; color: #5d6d7e;
+            font-size: 17px; line-height: 1; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: transform 0.25s ease, background 0.15s, border-color 0.15s;
+        }
+        #btn-swap:hover:not(:disabled) { background: #eaf4fb; border-color: #3498db; color: #2980b9; }
+        #btn-swap:disabled { opacity: 0.4; cursor: not-allowed; }
+        #btn-swap.flipped { transform: rotate(180deg); }
+        @media (prefers-reduced-motion: reduce) { #btn-swap { transition: none; } }
+
+        /* Suggestions sous les champs départ/arrivée */
+        #ep-suggest {
+            display: none; margin-top: 8px; background: white;
+            border: 1px solid #dce1e7; border-radius: 8px;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.10);
+            max-height: 320px; overflow-y: auto;
+        }
+        #ep-suggest.show { display: block; }
+        .sg-item {
+            display: flex; align-items: center; gap: 7px; padding: 8px 10px;
+            border-bottom: 1px solid #f0f3f5; cursor: pointer;
+        }
+        .sg-item:last-of-type { border-bottom: none; }
+        .sg-item.active, .sg-item:hover { background: #eaf4fb; }
+        .sg-status { padding: 10px; font-size: 12px; color: #7f8c8d; }
+        .sg-foot {
+            padding: 7px 10px; font-size: 11.5px; color: #95a5a6;
+            border-top: 1px solid #e9ecef; background: #fafbfc;
+        }
+        .sg-more { color: #2980b9; cursor: pointer; font-weight: 600; }
+        .sg-more:hover { text-decoration: underline; }
+
+        /* Ligne d'un résultat de géocodage (commune aux deux listes) */
+        .hit-main { flex: 1; min-width: 0; }
+        .hit-head { font-size: 13px; font-weight: 600; color: #2c3e50;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .hit-sub { font-size: 11.5px; color: #7f8c8d; margin-top: 2px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .hit-sub .pc { font-weight: bold; color: #2c3e50; background: #eef1f4;
+            border-radius: 3px; padding: 0 5px; margin-right: 5px; }
+
+        .country-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+        .country-row label { font-size: 12px; color: #7f8c8d; flex-shrink: 0; }
+        #search-country {
+            flex: 1; padding: 6px 8px; border: 1px solid #dce1e7; border-radius: 6px;
+            font-size: 12.5px; background: white; color: #34495e; outline: none; font-family: inherit;
+        }
+        #search-country:focus { border-color: #3498db; }
 
         .btn { margin-top: 9px; padding: 10px; border: none; border-radius: 6px;
             cursor: pointer; font-size: 14px; width: 100%; font-weight: bold; transition: 0.2s; }
@@ -111,12 +177,8 @@
         .wp-remove:hover { color: #c0392b; }
         .wp-empty { font-size: 12.5px; color: #95a5a6; font-style: italic; margin: 0; text-align: center; }
 
-        /* ── Recherche ── */
+        /* ── Recherche (bas du panneau) ── */
         #search-box { margin-top: 16px; border-top: 1px solid #e1e8ed; padding-top: 14px; }
-        #search-country { width: 100%; padding: 8px 9px; margin-bottom: 7px;
-            border: 1px solid #dce1e7; border-radius: 6px; font-size: 13px;
-            background: white; color: #34495e; box-sizing: border-box; outline: none; }
-        #search-country:focus { border-color: #3498db; }
         #search-input { width: 100%; padding: 9px 10px; border: 1px solid #dce1e7;
             border-radius: 6px; font-size: 14px; box-sizing: border-box; outline: none; }
         #search-input:focus { border-color: #3498db; }
@@ -127,15 +189,12 @@
         #search-btn:disabled { background: #bdc3c7; cursor: not-allowed; }
         #search-error { font-size: 12px; color: #e74c3c; margin-top: 6px; display: none; }
         #search-hint { font-size: 11.5px; color: #95a5a6; margin-top: 6px; }
-        #search-results { margin-top: 8px; display: none; max-height: 250px; overflow-y: auto; }
+        #search-results { margin-top: 8px; display: none; max-height: 260px; overflow-y: auto; }
         #search-results.show { display: block; }
         .sr-item { padding: 8px 9px; border: 1px solid #e9ecef; border-radius: 6px;
-            margin-bottom: 5px; font-size: 12.5px; cursor: pointer; background: white;
+            margin-bottom: 5px; cursor: pointer; background: white;
             display: flex; align-items: center; gap: 7px; }
         .sr-item:hover { background: #eaf4fb; border-color: #3498db; }
-        .sr-main { flex: 1; min-width: 0; }
-        .sr-sub { color: #95a5a6; font-size: 11.5px; overflow: hidden;
-            text-overflow: ellipsis; white-space: nowrap; }
         .sr-cc { font-size: 11px; font-weight: bold; color: #5d6d7e; background: #ecf0f1;
             border-radius: 4px; padding: 3px 6px; flex-shrink: 0; }
         .sr-type { font-size: 10.5px; color: #7f8c8d; background: #f4f6f8;
@@ -221,16 +280,64 @@
         <div class="hide-when-collapsed">
 
             <div id="endpoints">
-                <div class="ep" id="ep-origin">
-                    <span class="ep-tag">Départ</span>
-                    <span class="ep-txt empty" id="txt-origin">non défini</span>
-                    <span class="ep-clear off" id="clr-origin" onclick="clearPoint('origin')">✕</span>
+                <div id="ep-fields">
+                    <div class="ep-row" id="ep-row-origin">
+                        <span class="ep-icon"><span class="ep-dot"></span></span>
+                        <div class="ep-input-wrap">
+                            <input id="in-origin" class="ep-input" type="text"
+                                   autocomplete="off" spellcheck="false"
+                                   placeholder="Choisir le point de départ" />
+                            <span class="ep-clear off" id="clr-origin"
+                                  onclick="clearPoint('origin', true)" title="Effacer le départ">✕</span>
+                        </div>
+                    </div>
+                    <div class="ep-link"></div>
+                    <div class="ep-row" id="ep-row-dest">
+                        <span class="ep-icon"><span class="ep-pin"></span></span>
+                        <div class="ep-input-wrap">
+                            <input id="in-dest" class="ep-input" type="text"
+                                   autocomplete="off" spellcheck="false"
+                                   placeholder="Choisir la destination" />
+                            <span class="ep-clear off" id="clr-dest"
+                                  onclick="clearPoint('dest', true)" title="Effacer l'arrivée">✕</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="ep" id="ep-dest">
-                    <span class="ep-tag">Arrivée</span>
-                    <span class="ep-txt empty" id="txt-dest">non défini</span>
-                    <span class="ep-clear off" id="clr-dest" onclick="clearPoint('dest')">✕</span>
-                </div>
+                <button id="btn-swap" onclick="swapEndpoints()" disabled
+                        title="Inverser départ et arrivée">⇅</button>
+            </div>
+
+            <div id="ep-suggest"></div>
+
+            <div class="country-row">
+                <label for="search-country">Pays</label>
+                <select id="search-country">
+                    <option value="">Tous les pays</option>
+                    <option value="BE">Belgique</option>
+                    <option value="FR">France</option>
+                    <option value="LU">Luxembourg</option>
+                    <option value="NL">Pays-Bas</option>
+                    <option value="DE">Allemagne</option>
+                    <option value="IT">Italie</option>
+                    <option value="ES">Espagne</option>
+                    <option value="PT">Portugal</option>
+                    <option value="GB">Royaume-Uni</option>
+                    <option value="CH">Suisse</option>
+                    <option value="AT">Autriche</option>
+                    <option value="DK">Danemark</option>
+                    <option value="SE">Suède</option>
+                    <option value="NO">Norvège</option>
+                    <option value="FI">Finlande</option>
+                    <option value="PL">Pologne</option>
+                    <option value="CZ">Tchéquie</option>
+                    <option value="SK">Slovaquie</option>
+                    <option value="HU">Hongrie</option>
+                    <option value="SI">Slovénie</option>
+                    <option value="HR">Croatie</option>
+                    <option value="RO">Roumanie</option>
+                    <option value="BG">Bulgarie</option>
+                    <option value="IE">Irlande</option>
+                </select>
             </div>
 
             <div class="opts">
@@ -273,43 +380,18 @@
 
             <div id="search-box">
                 <h4>Rechercher une adresse</h4>
-                <select id="search-country">
-                    <option value="">Tous les pays</option>
-                    <option value="BE">Belgique</option>
-                    <option value="FR">France</option>
-                    <option value="LU">Luxembourg</option>
-                    <option value="NL">Pays-Bas</option>
-                    <option value="DE">Allemagne</option>
-                    <option value="IT">Italie</option>
-                    <option value="ES">Espagne</option>
-                    <option value="PT">Portugal</option>
-                    <option value="GB">Royaume-Uni</option>
-                    <option value="CH">Suisse</option>
-                    <option value="AT">Autriche</option>
-                    <option value="DK">Danemark</option>
-                    <option value="SE">Suède</option>
-                    <option value="NO">Norvège</option>
-                    <option value="FI">Finlande</option>
-                    <option value="PL">Pologne</option>
-                    <option value="CZ">Tchéquie</option>
-                    <option value="SK">Slovaquie</option>
-                    <option value="HU">Hongrie</option>
-                    <option value="SI">Slovénie</option>
-                    <option value="HR">Croatie</option>
-                    <option value="RO">Roumanie</option>
-                    <option value="BG">Bulgarie</option>
-                    <option value="IE">Irlande</option>
-                </select>
                 <input id="search-input" type="text" autocomplete="off"
-                       placeholder="Randers · Rotterdam · 14 rue de la Paix, Paris" />
+                       placeholder="Adresse à ajouter comme étape" />
                 <button id="search-btn" onclick="searchAddress()">Rechercher</button>
                 <div id="search-error"></div>
                 <div id="search-results"></div>
-                <div id="search-hint">Cherchez une adresse, puis choisissez départ, arrivée ou étape.</div>
+                <div id="search-hint">Pratique pour ajouter une étape. Le départ et l'arrivée se tapent directement en haut.</div>
             </div>
 
             <div class="instructions">
                 <b>Raccourcis :</b><br>
+                Clic dans Départ / Arrivée : taper une adresse ou des coordonnées.<br>
+                ⇅ : inverser départ et arrivée.<br>
                 Clic sur la carte : pose le départ, puis l'arrivée.<br>
                 Clic droit : ajoute une étape.<br>
                 Glisser un point : recalcule le trajet.<br>
@@ -383,11 +465,17 @@
         let originMarker = null, destMarker = null;
 
         let geojsonCoords         = [];   // tracé affiché
-        let originalGeojsonCoords = [];   // tracé de référence (premier calcul)
+        let originalGeojsonCoords = [];   // tracé de référence
         let hasRoute   = false;           // un tracé existe
         let routeKnown = false;           // le serveur connaît routeId
         let isModified = false;
         let busy = false;
+        let pendingCalc = false;          // un calcul demandé pendant qu'un autre tournait
+
+        // Changer le départ/l'arrivée par la saisie ou inverser les deux crée un
+        // nouveau trajet : le prochain tracé devient la référence, au lieu d'être
+        // affiché comme une "modification" de l'ancien.
+        let forceReference = false;
 
         const layerState = { road: false, pl: false, plLoaded: false };
 
@@ -449,25 +537,48 @@
         //  POINTS DÉPART / ARRIVÉE
         // ═══════════════════════════════════════════════════════
 
+        const coordLabel = ll => `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`;
+
         function setPoint(role, lngLat, label) {
-            const pt = { lng: lngLat.lng, lat: lngLat.lat,
-                         label: label || `${lngLat.lat.toFixed(4)}, ${lngLat.lng.toFixed(4)}` };
+            const pt = { lng: lngLat.lng, lat: lngLat.lat, label: label || coordLabel(lngLat) };
             if (role === 'origin') origin = pt; else dest = pt;
             syncMarkers();
             refreshPanel();
             autoCalculate();
+            // Point posé sans adresse (clic carte, coordonnées tapées) : on va
+            // chercher l'adresse la plus proche pour l'afficher dans la case.
+            if (!label) _resolvePointLabel(pt);
         }
 
-        function clearPoint(role) {
+        function clearPoint(role, refocus) {
             if (role === 'origin') origin = null; else dest = null;
             syncMarkers();
             // Un trajet sans ses deux extrémités n'a plus de sens : on efface le tracé.
             if (hasRoute) {
-                hasRoute = false; routeKnown = false;
+                hasRoute = false; routeKnown = false; isModified = false;
                 geojsonCoords = []; originalGeojsonCoords = [];
                 map.getSource('routeSource').setData(emptyGeoJSON());
                 map.getSource('originalRouteSource').setData(emptyGeoJSON());
+                map.setPaintProperty('originalRouteLayer', 'line-opacity', 0);
             }
+            refreshPanel();
+            if (refocus) _epInput(role).focus();
+        }
+
+        function swapEndpoints() {
+            if (!origin && !dest) return;
+            closeSuggest();
+            [origin, dest] = [dest, origin];
+
+            // Les étapes se parcourent dans l'autre sens.
+            waypoints.reverse();
+            _recolorWaypoints();
+            updateWaypointsList();
+
+            syncMarkers();
+            document.getElementById('btn-swap').classList.toggle('flipped');
+
+            if (origin && dest) { forceReference = true; autoCalculate(); }
             refreshPanel();
         }
 
@@ -483,15 +594,29 @@
                 marker.on('dragend', () => {
                     const ll = marker.getLngLat();
                     const target = role === 'origin' ? origin : dest;
+                    if (!target) return;
                     target.lng = ll.lng; target.lat = ll.lat;
-                    target.label = `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`;
+                    target.label = coordLabel(ll);
                     refreshPanel();
                     autoCalculate();
+                    _resolvePointLabel(target);
                 });
             } else {
                 marker.setLngLat([pt.lng, pt.lat]);
             }
             return marker;
+        }
+
+        // Remplace le libellé "lat, lng" par l'adresse la plus proche, sauf si
+        // le point a bougé ou a été remplacé entre-temps.
+        async function _resolvePointLabel(pt) {
+            const lat = pt.lat, lng = pt.lng;
+            const hit = await reverseHit(lat, lng);
+            if (!hit) return;
+            if (pt.lat !== lat || pt.lng !== lng) return;
+            if (pt !== origin && pt !== dest) return;
+            pt.label = hitLabel(hit).full;
+            refreshPanel();
         }
 
         function onMapClick(e) {
@@ -504,15 +629,17 @@
             waypoints.forEach(wp => wp.marker.remove());
             waypoints = [];
             origin = dest = null;
-            hasRoute = false; routeKnown = false; isModified = false;
+            hasRoute = false; routeKnown = false; isModified = false; forceReference = false;
             geojsonCoords = []; originalGeojsonCoords = [];
             syncMarkers();
             updateWaypointsList();
             if (map.getSource('routeSource')) {
                 map.getSource('routeSource').setData(emptyGeoJSON());
                 map.getSource('originalRouteSource').setData(emptyGeoJSON());
+                map.setPaintProperty('originalRouteLayer', 'line-opacity', 0);
             }
             _cancelSearchPin();
+            closeSuggest();
             document.getElementById('search-input').value = '';
             document.getElementById('search-results').classList.remove('show');
             map.flyTo({ center: HOME_VIEW, zoom: HOME_ZOOM, duration: 700 });
@@ -527,6 +654,7 @@
             document.getElementById('btn-calc').disabled = !ready || busy;
             document.getElementById('btn-calc').textContent =
                 hasRoute ? 'Recalculer' : 'Calculer l\'itinéraire';
+            document.getElementById('btn-swap').disabled = !(origin || dest);
 
             document.getElementById('stats-box').classList.toggle('show', hasRoute);
             document.getElementById('panel-title').textContent =
@@ -540,22 +668,11 @@
         }
 
         function _epRow(role, pt) {
-            const txt = document.getElementById('txt-' + role);
-            const clr = document.getElementById('clr-' + role);
-            const row = document.getElementById('ep-' + role);
-            if (pt) {
-                txt.textContent = pt.label;
-                txt.title = pt.label;
-                txt.classList.remove('empty');
-                clr.classList.remove('off');
-                row.classList.add(role === 'origin' ? 'set-origin' : 'set-dest');
-            } else {
-                txt.textContent = 'non défini';
-                txt.title = '';
-                txt.classList.add('empty');
-                clr.classList.add('off');
-                row.classList.remove('set-origin', 'set-dest');
-            }
+            const inp = _epInput(role);
+            // On n'écrase jamais ce que l'utilisateur est en train de taper.
+            if (document.activeElement !== inp) inp.value = pt ? pt.label : '';
+            inp.title = pt ? pt.label : '';
+            document.getElementById('clr-' + role).classList.toggle('off', !pt);
         }
 
         function togglePanel() {
@@ -566,6 +683,195 @@
         }
 
         function onOptionChange() { if (hasRoute) autoCalculate(); }
+
+        // ═══════════════════════════════════════════════════════
+        //  SAISIE DÉPART / ARRIVÉE AVEC SUGGESTIONS
+        // ═══════════════════════════════════════════════════════
+
+        const EP_ROLES = ['origin', 'dest'];
+        const sg = { role: null, hits: [], active: -1, seq: 0, timer: null,
+                     ctrl: null, query: '', full: false };
+
+        function _epInput(role) { return document.getElementById('in-' + role); }
+        function _countryFilter() { return document.getElementById('search-country').value; }
+
+        EP_ROLES.forEach(role => {
+            const inp = _epInput(role);
+
+            inp.addEventListener('focus', () => {
+                if (sg.role !== role) closeSuggest();
+                sg.role = role;
+                // Sélectionne tout pour qu'on puisse retaper directement, comme Google Maps.
+                setTimeout(() => { if (document.activeElement === inp) inp.select(); }, 0);
+            });
+
+            inp.addEventListener('input', () => {
+                sg.role = role;
+                _scheduleSuggest(inp.value, false, false);
+            });
+
+            inp.addEventListener('keydown', e => _onEpKey(e, role));
+
+            inp.addEventListener('blur', () => {
+                setTimeout(() => {
+                    if (document.activeElement === inp) return;
+                    if (sg.role === role) closeSuggest();
+                    refreshPanel();   // remet l'adresse d'avant si rien n'a été choisi
+                }, 120);
+            });
+        });
+
+        // Les clics dans la liste passent par mousedown + preventDefault : le champ
+        // garde le focus, sinon le blur fermerait la liste avant le clic.
+        document.getElementById('ep-suggest').addEventListener('mousedown', e => {
+            e.preventDefault();
+            if (!sg.role) return;
+            const more = e.target.closest('.sg-more');
+            if (more) { _scheduleSuggest(_epInput(sg.role).value, true, true); return; }
+            const item = e.target.closest('.sg-item');
+            if (item) {
+                const hit = sg.hits[+item.dataset.i];
+                if (hit) _chooseEndpoint(sg.role, hit);
+            }
+        });
+
+        function _onEpKey(e, role) {
+            const box = document.getElementById('ep-suggest');
+            const q = e.target.value.trim();
+            const upToDate = sg.role === role && sg.query === q && sg.hits.length
+                             && box.classList.contains('show');
+
+            if (e.key === 'ArrowDown' && upToDate) {
+                e.preventDefault();
+                sg.active = (sg.active + 1) % sg.hits.length;
+                _highlightSuggest();
+            } else if (e.key === 'ArrowUp' && upToDate) {
+                e.preventDefault();
+                sg.active = (sg.active - 1 + sg.hits.length) % sg.hits.length;
+                _highlightSuggest();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (upToDate && sg.active >= 0) _chooseEndpoint(role, sg.hits[sg.active]);
+                else _scheduleSuggest(e.target.value, true, true);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                closeSuggest();
+                e.target.blur();
+            }
+        }
+
+        function _scheduleSuggest(raw, immediate, full) {
+            clearTimeout(sg.timer);
+            const q = (raw || '').trim();
+            if (q.length < 3) { closeSuggest(); return; }
+            sg.timer = setTimeout(() => _runSuggest(q, full), immediate ? 0 : 300);
+        }
+
+        async function _runSuggest(q, full) {
+            const seq = ++sg.seq;
+            if (sg.ctrl) sg.ctrl.abort();
+            sg.ctrl = new AbortController();
+            const signal = sg.ctrl.signal;
+
+            // Coordonnées tapées à la main : pas de géocodage.
+            const c = _parseCoords(q);
+            if (c) {
+                sg.hits = [{ lat: c.lat, lng: c.lng, name: 'Coordonnées GPS', street: '',
+                             housenumber: '', postcode: '', city: '', region: '', country: '',
+                             cc: '', type: 'other', src: 'coords' }];
+                sg.query = q; sg.full = true; sg.active = 0;
+                _renderSuggest();
+                return;
+            }
+
+            if (!sg.hits.length || sg.query !== q) {
+                _suggestStatus(full ? 'Recherche élargie…' : 'Recherche…');
+            }
+
+            try {
+                const hits = await geocodeQuery(q, _countryFilter(), { typing: !full, signal });
+                if (seq !== sg.seq) return;
+
+                sg.hits = hits; sg.query = q; sg.full = full;
+                sg.active = hits.length ? 0 : -1;
+
+                if (!hits.length) {
+                    _suggestStatus(full
+                        ? `Rien trouvé pour « ${esc(q)} »${_countryFilter() ? ' dans ce pays' : ''}`
+                        : 'Aucune suggestion. <span class="sg-more">Recherche élargie (OSM)</span>');
+                    return;
+                }
+                _renderSuggest();
+
+                // Deuxième passe : compléter les codes postaux manquants, puis réafficher.
+                if (await enrichPostcodes(hits, signal) && seq === sg.seq) _renderSuggest();
+            } catch (e) {
+                if (signal.aborted || seq !== sg.seq) return;
+                console.warn('Suggestions:', e);
+                _suggestStatus('Recherche indisponible');
+            }
+        }
+
+        function _renderSuggest() {
+            const box = document.getElementById('ep-suggest');
+            box.innerHTML = sg.hits.map((h, i) =>
+                `<div class="sg-item${i === sg.active ? ' active' : ''}" data-i="${i}"
+                      title="${esc(hitLabel(h).full)}">${hitHTML(h)}</div>`
+            ).join('')
+            + `<div class="sg-foot">${sg.full
+                ? 'Source : ' + esc(lastGeoSource)
+                : 'Pas le bon lieu ? <span class="sg-more">Recherche élargie (OSM)</span>'}</div>`;
+            box.classList.add('show');
+        }
+
+        function _highlightSuggest() {
+            const items = document.querySelectorAll('#ep-suggest .sg-item');
+            items.forEach((el, i) => el.classList.toggle('active', i === sg.active));
+            if (items[sg.active]) items[sg.active].scrollIntoView({ block: 'nearest' });
+        }
+
+        function _suggestStatus(html) {
+            const box = document.getElementById('ep-suggest');
+            box.innerHTML = `<div class="sg-status">${html}</div>`;
+            box.classList.add('show');
+        }
+
+        function closeSuggest() {
+            clearTimeout(sg.timer);
+            if (sg.ctrl) { sg.ctrl.abort(); sg.ctrl = null; }
+            sg.seq++;
+            sg.hits = []; sg.active = -1; sg.query = '';
+            const box = document.getElementById('ep-suggest');
+            box.classList.remove('show');
+            box.innerHTML = '';
+        }
+
+        function _chooseEndpoint(role, hit) {
+            closeSuggest();
+            const inp = _epInput(role);
+            inp.blur();
+
+            forceReference = true;
+            const isCoords = hit.src === 'coords';
+            setPoint(role, { lng: hit.lng, lat: hit.lat }, isCoords ? null : hitLabel(hit).full);
+
+            // Comme Google Maps : si l'autre case est vide, on centre sur le point
+            // choisi et on passe directement à la saisie de l'autre case.
+            const otherRole = role === 'origin' ? 'dest' : 'origin';
+            const other = role === 'origin' ? dest : origin;
+            if (!other) {
+                map.flyTo({ center: [hit.lng, hit.lat], zoom: Math.max(map.getZoom(), 10), duration: 700 });
+                _epInput(otherRole).focus();
+            }
+        }
+
+        function _parseCoords(q) {
+            const m = q.match(/^\s*(-?\d{1,2}(?:[.]\d+)?)\s*[,;\s]\s*(-?\d{1,3}(?:[.]\d+)?)\s*$/);
+            if (!m) return null;
+            const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+            if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+            return { lat, lng };
+        }
 
         // ═══════════════════════════════════════════════════════
         //  CALCUL
@@ -704,13 +1010,20 @@
         }
 
         async function calculateRoute() {
-            if (!origin || !dest || busy) return;
+            if (!origin || !dest) return;
+            // Un calcul tourne déjà : on le laisse finir puis on relance avec
+            // les points à jour, au lieu d'ignorer la demande.
+            if (busy) { pendingCalc = true; return; }
+
             busy = true;
+            pendingCalc = false;
+            const asReference = !hasRoute || forceReference;
             setLoading(true);
             refreshPanel();
             try {
                 const data = await requestRoute();
-                applyRoute(data, !hasRoute);
+                applyRoute(data, asReference);
+                if (asReference) forceReference = false;
             } catch (err) {
                 console.error('Calcul:', err);
                 toast('Calcul impossible — ' + err.message);
@@ -718,6 +1031,7 @@
                 busy = false;
                 setLoading(false);
                 refreshPanel();
+                if (pendingCalc) { pendingCalc = false; autoCalculate(); }
             }
         }
 
@@ -974,20 +1288,30 @@
             const marker = new maplibregl.Marker({ color, draggable: true })
                 .setLngLat(lngLat).addTo(map);
 
-            const wp = { id, marker, color,
-                         label: label || `${lngLat.lat.toFixed(4)}, ${lngLat.lng.toFixed(4)}` };
+            const wp = { id, marker, color, label: label || coordLabel(lngLat) };
             waypoints.push(wp);
 
             marker.on('dragend', () => {
-                const ll = marker.getLngLat();
-                wp.label = `${ll.lat.toFixed(4)}, ${ll.lng.toFixed(4)}`;
+                wp.label = coordLabel(marker.getLngLat());
                 updateWaypointsList();
                 autoCalculate();
+                _resolveWaypointLabel(wp);
             });
             marker.getElement().addEventListener('dblclick', () => removeWaypoint(id));
 
             updateWaypointsList();
             autoCalculate();
+            if (!label) _resolveWaypointLabel(wp);
+        }
+
+        async function _resolveWaypointLabel(wp) {
+            const ll = wp.marker.getLngLat();
+            const hit = await reverseHit(ll.lat, ll.lng);
+            if (!hit || !waypoints.includes(wp)) return;
+            const now = wp.marker.getLngLat();
+            if (now.lat !== ll.lat || now.lng !== ll.lng) return;
+            wp.label = hitLabel(hit).short;
+            updateWaypointsList();
         }
 
         function removeWaypoint(id) {
@@ -995,6 +1319,7 @@
             if (i === -1) return;
             waypoints[i].marker.remove();
             waypoints.splice(i, 1);
+            _recolorWaypoints();
             updateWaypointsList();
             autoCalculate();
         }
@@ -1014,18 +1339,21 @@
             if (j < 0 || j >= waypoints.length) return;
 
             // On réordonne le tableau uniquement : déplacer aussi les marqueurs
-            // annulerait le changement d'ordre (bug de la version précédente).
+            // annulerait le changement d'ordre.
             [waypoints[i], waypoints[j]] = [waypoints[j], waypoints[i]];
+            _recolorWaypoints();
+            updateWaypointsList();
+            autoCalculate();
+        }
 
+        // La couleur suit le rang dans le trajet, pas l'ordre de création.
+        function _recolorWaypoints() {
             waypoints.forEach((wp, idx) => {
                 const c = WP_COLORS[idx % WP_COLORS.length];
                 wp.color = c;
                 const g = wp.marker.getElement().querySelector('svg g[fill]');
                 if (g) g.setAttribute('fill', c);
             });
-
-            updateWaypointsList();
-            autoCalculate();
         }
 
         function updateWaypointsList() {
@@ -1042,7 +1370,7 @@
                             display:flex;align-items:center;justify-content:center;
                             font-size:11px;font-weight:bold;flex-shrink:0;">${i+1}</div>
                     <div style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;
-                            white-space:nowrap;margin:0 6px;" title="${wp.label}">${wp.label}</div>
+                            white-space:nowrap;margin:0 6px;" title="${esc(wp.label)}">${esc(wp.label)}</div>
                     <div style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">
                         <button onclick="moveWaypoint(${wp.id},-1)" ${i===0?'disabled':''}
                             style="background:none;border:1px solid #ddd;border-radius:3px;
@@ -1057,13 +1385,42 @@
         }
 
         // ═══════════════════════════════════════════════════════
-        //  RECHERCHE D'ADRESSE
+        //  GÉOCODAGE
         // ═══════════════════════════════════════════════════════
 
         let searchMarker = null, searchPopup = null, searchHits = [], lastGeoSource = '';
 
         function _norm(s) {
             return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+        }
+
+        function esc(s) {
+            return String(s ?? '').replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        // Certains géocodeurs renvoient "4000;4020;4030" pour une ville à
+        // plusieurs codes : on garde le premier.
+        function _pc(v) {
+            return String(v || '').split(/[;,]/)[0].trim();
+        }
+
+        // fetch avec délai maximal, qui respecte aussi l'annulation extérieure.
+        async function _fetchT(url, { ms = 6000, signal, headers } = {}) {
+            const ctrl = new AbortController();
+            const t = setTimeout(() => ctrl.abort(), ms);
+            const onAbort = () => ctrl.abort();
+            if (signal) {
+                if (signal.aborted) ctrl.abort();
+                else signal.addEventListener('abort', onAbort, { once: true });
+            }
+            try {
+                return await fetch(url, { signal: ctrl.signal, headers });
+            } finally {
+                clearTimeout(t);
+                if (signal) signal.removeEventListener('abort', onAbort);
+            }
         }
 
         const TYPE_RANK = {
@@ -1077,11 +1434,43 @@
             street: 'rue', house: 'adresse', other: ''
         };
 
+        // head  : ligne principale (nom du lieu ou numéro + rue)
+        // sub   : commune, région, pays — le code postal est affiché à part
+        // full  : libellé complet mis dans les cases départ/arrivée
+        // short : libellé court pour la liste des étapes
         function hitLabel(h) {
-            const head = h.housenumber && h.street ? `${h.housenumber} ${h.street}`
-                                                   : (h.name || h.street || h.city);
-            const sub = [h.postcode, h.city !== head ? h.city : '', h.country].filter(Boolean).join(', ');
-            return { head: head || h.country, sub, full: [head, sub].filter(Boolean).join(', ') };
+            const head = (h.housenumber && h.street ? `${h.housenumber} ${h.street}`
+                                                    : (h.name || h.street || h.city)) || h.country || '';
+            const city = h.city && _norm(h.city) !== _norm(head) ? h.city : '';
+            const region = h.region && ![head, h.city, h.country].some(x => _norm(x) === _norm(h.region))
+                           ? h.region : '';
+            const subParts = [city, region, h.country].filter(Boolean);
+
+            const full = city
+                ? [head, [h.postcode, city].filter(Boolean).join(' '), h.country]
+                : [[h.postcode, head].filter(Boolean).join(' '), h.country];
+
+            return {
+                head, subParts,
+                full: full.filter(Boolean).join(', '),
+                short: h.postcode ? `${head} (${h.postcode})` : head
+            };
+        }
+
+        function hitHTML(h) {
+            const L = hitLabel(h);
+            const t = TYPE_LABEL[h.type] || '';
+            const pc = h.postcode ? `<span class="pc">${esc(h.postcode)}</span>` : '';
+            const sub = L.subParts.length
+                ? L.subParts.map(esc).join(', ')
+                : `${h.lat.toFixed(5)}, ${h.lng.toFixed(5)}`;
+            return `
+                <div class="hit-main">
+                    <div class="hit-head">${esc(L.head)}</div>
+                    <div class="hit-sub">${pc}${sub}</div>
+                </div>
+                ${t ? `<span class="sr-type">${t}</span>` : ''}
+                ${h.cc ? `<span class="sr-cc">${esc(h.cc)}</span>` : ''}`;
         }
 
         function _mapNomType(it) {
@@ -1096,48 +1485,65 @@
             return TYPE_RANK[t] !== undefined ? t : 'other';
         }
 
-        async function _nominatim(q, cc) {
+        function _nomHit(it) {
+            const a = it.address || {};
+            const x = it.extratags || {};
+            return {
+                lat: +it.lat, lng: +it.lon,
+                name: it.name || a.city || a.town || a.village || a.road
+                      || (it.display_name || '').split(',')[0],
+                street: a.road || '', housenumber: a.house_number || '',
+                // Les villes (nœuds "place") n'ont souvent pas de postcode dans
+                // address : le tag postal_code de l'objet OSM le donne parfois.
+                postcode: _pc(a.postcode || x.postal_code || x['addr:postcode']),
+                city: a.city || a.town || a.village || a.municipality || '',
+                region: a.county || a.state_district || a.province || a.state || '',
+                country: a.country || '', cc: (a.country_code || '').toUpperCase(),
+                type: _mapNomType(it), src: 'OSM'
+            };
+        }
+
+        function _photonType(p) {
+            if (p.osm_key === 'place' && TYPE_RANK[p.osm_value] !== undefined) return p.osm_value;
+            return TYPE_RANK[p.type] !== undefined ? p.type : 'other';
+        }
+
+        function _photonHit(f) {
+            const p = f.properties || {};
+            return {
+                lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0],
+                name: p.name || p.street || '', street: p.street || '',
+                housenumber: p.housenumber || '', postcode: _pc(p.postcode),
+                city: p.city || '',
+                region: p.county || p.state || '',
+                country: p.country || '', cc: (p.countrycode || '').toUpperCase(),
+                type: _photonType(p), src: 'Photon'
+            };
+        }
+
+        async function _nominatim(q, cc, signal) {
             let url = 'https://nominatim.openstreetmap.org/search'
-                    + '?format=jsonv2&addressdetails=1&limit=10&accept-language=fr'
+                    + '?format=jsonv2&addressdetails=1&extratags=1&limit=10&accept-language=fr'
                     + '&q=' + encodeURIComponent(q);
             if (cc) url += '&countrycodes=' + cc.toLowerCase();
-            const r = await fetch(url, { headers: { 'Accept': 'application/json' } });
+            const r = await _fetchT(url, { signal, headers: { 'Accept': 'application/json' } });
             if (!r.ok) throw new Error('Nominatim HTTP ' + r.status);
-            const j = await r.json();
-            return (j || []).map(it => {
-                const a = it.address || {};
-                return {
-                    lat: +it.lat, lng: +it.lon,
-                    name: it.name || a.city || a.town || a.village || a.road
-                          || (it.display_name || '').split(',')[0],
-                    street: a.road || '', housenumber: a.house_number || '',
-                    postcode: a.postcode || '',
-                    city: a.city || a.town || a.village || a.municipality || a.county || '',
-                    country: a.country || '', cc: (a.country_code || '').toUpperCase(),
-                    type: _mapNomType(it), src: 'OSM'
-                };
-            });
+            return ((await r.json()) || []).map(_nomHit);
         }
 
-        async function _photon(q) {
-            const r = await fetch('https://photon.komoot.io/api/?lang=fr&limit=20&q=' + encodeURIComponent(q));
+        async function _photon(q, signal) {
+            // Biais léger vers la zone affichée : à nom égal, le lieu proche passe devant.
+            const c = map.getCenter();
+            const url = 'https://photon.komoot.io/api/?lang=fr&limit=20'
+                      + `&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`
+                      + '&q=' + encodeURIComponent(q);
+            const r = await _fetchT(url, { signal });
             if (!r.ok) throw new Error('Photon HTTP ' + r.status);
-            const j = await r.json();
-            return (j.features || []).map(f => {
-                const p = f.properties || {};
-                return {
-                    lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0],
-                    name: p.name || p.street || '', street: p.street || '',
-                    housenumber: p.housenumber || '', postcode: p.postcode || '',
-                    city: p.city || p.county || p.state || '', country: p.country || '',
-                    cc: (p.countrycode || '').toUpperCase(),
-                    type: p.type || p.osm_value || 'other', src: 'Photon'
-                };
-            });
+            return ((await r.json()).features || []).map(_photonHit);
         }
 
-        async function _serverGeocode(q) {
-            const r = await fetch(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`);
+        async function _serverGeocode(q, signal) {
+            const r = await _fetchT(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`, { signal });
             if (!r.ok) throw new Error('Serveur HTTP ' + r.status);
             const d = await r.json();
             const items = Array.isArray(d) ? d : (d.results || (d.lat != null ? [d] : []));
@@ -1146,31 +1552,41 @@
                 .map(it => ({
                     lat: +it.lat, lng: +(it.lng ?? it.lon),
                     name: it.label || it.name || q, street: '', housenumber: '',
-                    postcode: '', city: '', country: it.country || '',
-                    cc: (it.countrycode || '').toUpperCase(), type: 'other', src: 'Serveur'
+                    postcode: _pc(it.postcode || it.postalCode), city: '', region: '',
+                    country: it.country || '', cc: (it.countrycode || '').toUpperCase(),
+                    type: 'other', src: 'Serveur'
                 }));
         }
 
-        async function geocodeQuery(q, cc) {
+        // typing = true : suggestions pendant la frappe. On n'interroge que Photon,
+        // prévu pour l'autocomplétion ; Nominatim l'interdit sur ses serveurs
+        // publics (1 requête/seconde max). La recherche complète (Entrée,
+        // "Recherche élargie", bouton Rechercher) garde l'ordre OSM → Photon → Serveur.
+        async function geocodeQuery(q, cc, { typing = false, signal } = {}) {
             let hits = [];
             const notes = [];
             lastGeoSource = '';
 
-            for (const [name, fn] of [['OSM', () => _nominatim(q, cc)],
-                                      ['Photon', () => _photon(q)],
-                                      ['Serveur', () => _serverGeocode(q)]]) {
+            const sources = typing
+                ? [['Photon', () => _photon(q, signal)]]
+                : [['OSM',     () => _nominatim(q, cc, signal)],
+                   ['Photon',  () => _photon(q, signal)],
+                   ['Serveur', () => _serverGeocode(q, signal)]];
+
+            for (const [name, fn] of sources) {
                 try {
-                    const res = await fn();
+                    let res = await fn();
+                    if (cc) res = (res || []).filter(h => !h.cc || h.cc === cc);
                     if (res && res.length) { hits = res; lastGeoSource = name; break; }
                     notes.push(name + ' : 0 résultat');
                 } catch (e) {
+                    if (signal && signal.aborted) throw e;
                     notes.push(name + ' : ' + e.message);
                     console.warn('Géocodeur', name, e);
                 }
             }
 
-            if (!hits.length) { lastGeoSource = notes.join(' · '); return []; }
-            if (cc) hits = hits.filter(h => !h.cc || h.cc === cc);
+            if (!hits.length) { lastGeoSource = notes.join(', '); return []; }
 
             const nq = _norm(q.split(',')[0]);
             hits.sort((a, b) => {
@@ -1190,6 +1606,89 @@
             }).slice(0, 8);
         }
 
+        // Complète les codes postaux absents (fréquent pour les villes dans OSM)
+        // par un géocodage inverse Photon sur la position du résultat.
+        // Renvoie true si au moins un résultat a été complété.
+        const _pcCache = new Map();
+        const NO_PC_TYPES = new Set(['country', 'state', 'county']);
+
+        async function enrichPostcodes(hits, signal) {
+            const todo = hits.filter(h => !h.postcode && !h._pcTried
+                                          && !NO_PC_TYPES.has(h.type) && h.src !== 'coords');
+            if (!todo.length) return false;
+
+            let changed = false;
+            await Promise.all(todo.map(async h => {
+                h._pcTried = true;
+                const key = `${h.lat.toFixed(4)},${h.lng.toFixed(4)}`;
+                try {
+                    let info = _pcCache.get(key);
+                    if (!info) {
+                        const r = await _fetchT(
+                            `https://photon.komoot.io/reverse?lat=${h.lat}&lon=${h.lng}&lang=fr&limit=1`,
+                            { ms: 3500, signal });
+                        if (!r.ok) return;
+                        const f = ((await r.json()).features || [])[0];
+                        if (!f) return;
+                        info = _photonHit(f);
+                        _pcCache.set(key, info);
+                    }
+                    if (info.postcode) { h.postcode = info.postcode; changed = true; }
+                    if (!h.region  && info.region)  { h.region  = info.region;  changed = true; }
+                    if (!h.country && info.country) { h.country = info.country; changed = true; }
+                    if (!h.cc && info.cc) h.cc = info.cc;
+                } catch (e) { /* le code postal reste simplement absent */ }
+            }));
+            return changed;
+        }
+
+        // Adresse la plus proche d'un point : Photon, puis Nominatim en secours.
+        async function reverseHit(lat, lng) {
+            try {
+                const r = await _fetchT(
+                    `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&lang=fr&limit=1`, { ms: 4000 });
+                if (r.ok) {
+                    const f = ((await r.json()).features || [])[0];
+                    if (f) {
+                        const h = _photonHit(f);
+                        if (h.street) h.name = h.street;   // l'adresse plutôt qu'un nom de bâtiment
+                        return h;
+                    }
+                }
+            } catch (e) { console.warn('Reverse Photon:', e); }
+
+            try {
+                const r = await _fetchT(
+                    'https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1'
+                    + `&zoom=18&accept-language=fr&lat=${lat}&lon=${lng}`,
+                    { ms: 5000, headers: { 'Accept': 'application/json' } });
+                if (r.ok) {
+                    const it = await r.json();
+                    if (it && it.lat != null) {
+                        const h = _nomHit(it);
+                        if (h.street) h.name = h.street;
+                        return h;
+                    }
+                }
+            } catch (e) { console.warn('Reverse Nominatim:', e); }
+            return null;
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  RECHERCHE D'ADRESSE (bas du panneau)
+        // ═══════════════════════════════════════════════════════
+
+        let searchSeq = 0;
+
+        function _renderSearchList() {
+            const listEl = document.getElementById('search-results');
+            listEl.innerHTML = searchHits.map((h, i) =>
+                `<div class="sr-item" onclick="_placeSearchPin(${i})"
+                      title="${esc(hitLabel(h).full)}">${hitHTML(h)}</div>`
+            ).join('');
+            listEl.classList.add('show');
+        }
+
         async function searchAddress() {
             const btn    = document.getElementById('search-btn');
             const errEl  = document.getElementById('search-error');
@@ -1198,13 +1697,16 @@
             const q      = document.getElementById('search-input').value.trim();
             if (q.length < 3) return;
 
+            const seq = ++searchSeq;
             errEl.style.display = 'none';
             listEl.classList.remove('show');
             btn.disabled = true; btn.textContent = 'Recherche...';
 
             try {
-                const cc = document.getElementById('search-country').value;
-                searchHits = await geocodeQuery(q, cc);
+                const cc = _countryFilter();
+                const hits = await geocodeQuery(q, cc);
+                if (seq !== searchSeq) return;
+                searchHits = hits;
 
                 if (!searchHits.length) {
                     errEl.textContent = cc ? `Rien trouvé pour « ${q} » dans ce pays`
@@ -1214,21 +1716,10 @@
                     return;
                 }
 
-                listEl.innerHTML = searchHits.map((h, i) => {
-                    const L = hitLabel(h);
-                    const t = TYPE_LABEL[h.type] || '';
-                    return `
-                        <div class="sr-item" onclick="_placeSearchPin(${i})" title="${L.full}">
-                            <div class="sr-main">
-                                <div>${L.head}</div>
-                                <div class="sr-sub">${L.sub || h.lat.toFixed(3) + ', ' + h.lng.toFixed(3)}</div>
-                            </div>
-                            ${t ? `<span class="sr-type">${t}</span>` : ''}
-                            ${h.cc ? `<span class="sr-cc">${h.cc}</span>` : ''}
-                        </div>`;
-                }).join('');
-                listEl.classList.add('show');
-                hintEl.textContent = `${searchHits.length} résultat(s) · source : ${lastGeoSource}`;
+                _renderSearchList();
+                hintEl.textContent = `${searchHits.length} résultat(s), source : ${lastGeoSource}`;
+
+                if (await enrichPostcodes(searchHits) && seq === searchSeq) _renderSearchList();
 
             } catch (e) {
                 console.error('Recherche:', e);
@@ -1261,7 +1752,7 @@
             searchPopup = new maplibregl.Popup({ className: 'search-popup', closeButton: false, maxWidth: '250px' })
                 .setLngLat([hit.lng, hit.lat])
                 .setHTML(`
-                    <div class="popup-label">${hitLabel(hit).full}</div>
+                    <div class="popup-label">${esc(hitLabel(hit).full)}</div>
                     <button class="popup-btn popup-btn-origin"   onclick="_applySearch(${index},'origin')">Définir comme départ</button>
                     <button class="popup-btn popup-btn-dest"     onclick="_applySearch(${index},'dest')">Définir comme arrivée</button>
                     <button class="popup-btn popup-btn-waypoint" onclick="_applySearchWaypoint(${index})">Ajouter comme étape</button>
@@ -1273,6 +1764,7 @@
             const hit = searchHits[index];
             if (!hit) return;
             _cancelSearchPin();
+            forceReference = true;
             setPoint(role, { lng: hit.lng, lat: hit.lat }, hitLabel(hit).full);
         }
 
@@ -1280,7 +1772,7 @@
             const hit = searchHits[index];
             if (!hit) return;
             _cancelSearchPin();
-            addWaypoint({ lng: hit.lng, lat: hit.lat }, hitLabel(hit).head);
+            addWaypoint({ lng: hit.lng, lat: hit.lat }, hitLabel(hit).short);
         }
 
         function _cancelSearchPin() {
@@ -1343,7 +1835,7 @@
                     let html = '<div style="font-size:13px;font-weight:bold;color:#c0392b;">Restriction PL</div>';
                     if (p.maxweight) html += `<div>Tonnage max : <b>${p.maxweight} t</b></div>`;
                     if (p.maxheight) html += `<div>Hauteur max : <b>${p.maxheight} m</b></div>`;
-                    if (p.name)      html += `<div style="color:#7f8c8d;font-size:12px;margin-top:4px;">${p.name}</div>`;
+                    if (p.name)      html += `<div style="color:#7f8c8d;font-size:12px;margin-top:4px;">${esc(p.name)}</div>`;
                     plPopup.setLngLat(e.lngLat).setHTML(html).addTo(map);
                 });
                 map.on('mouseleave', layerId, () => {
@@ -1459,7 +1951,7 @@
             document.getElementById('save-dest').value   = dest.label;
             const km = document.getElementById('dist').textContent.replace(' km', '').trim();
             document.getElementById('save-modal-wp-count').textContent =
-                `${waypoints.length} étape(s) intermédiaire(s) · ${km} km`;
+                `${waypoints.length} étape(s) intermédiaire(s), ${km} km`;
             const s = document.getElementById('save-modal-status');
             s.style.display = 'none'; s.className = '';
             document.getElementById('btn-modal-confirm').disabled = false;
