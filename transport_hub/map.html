@@ -804,7 +804,7 @@
                 _renderSuggest();
 
                 // Deuxième passe : compléter les codes postaux manquants, puis réafficher.
-                if (await enrichPostcodes(hits, signal) && seq === sg.seq) _renderSuggest();
+                enrichPostcodes(hits, signal, () => { if (seq === sg.seq) _renderSuggest(); });
             } catch (e) {
                 if (signal.aborted || seq !== sg.seq) return;
                 console.warn('Suggestions:', e);
@@ -1526,6 +1526,7 @@
                     + '?format=jsonv2&addressdetails=1&extratags=1&limit=10&accept-language=fr'
                     + '&q=' + encodeURIComponent(q);
             if (cc) url += '&countrycodes=' + cc.toLowerCase();
+            await _nominatimSlot(signal);
             const r = await _fetchT(url, { signal, headers: { 'Accept': 'application/json' } });
             if (!r.ok) throw new Error('Nominatim HTTP ' + r.status);
             return ((await r.json()) || []).map(_nomHit);
@@ -1597,79 +1598,147 @@
                 return (_norm(a.name).startsWith(nq) ? 0 : 1) - (_norm(b.name).startsWith(nq) ? 0 : 1);
             });
 
-            const seen = new Set();
-            return hits.filter(h => {
-                const k = `${h.cc}|${_norm(h.name)}|${h.lat.toFixed(3)}|${h.lng.toFixed(3)}`;
-                if (seen.has(k)) return false;
-                seen.add(k);
-                return true;
-            }).slice(0, 8);
+            // Doublons : le même lieu arrive souvent deux fois (le nœud de la
+            // ville et le contour de la commune, à quelques km l'un de l'autre).
+            // Même nom + même pays à moins de 5 km = même lieu : on garde le
+            // premier, déjà le mieux classé.
+            const kept = [];
+            for (const h of hits) {
+                const dup = kept.some(k => k.cc === h.cc
+                                        && _norm(k.name) === _norm(h.name)
+                                        && _norm(k.housenumber) === _norm(h.housenumber)
+                                        && _distKm(k, h) < 5);
+                if (!dup) {
+                    kept.push(h);
+                } else {
+                    // Le doublon écarté avait peut-être le code postal qui manque à l'autre.
+                    const k = kept.find(k => k.cc === h.cc && _norm(k.name) === _norm(h.name)
+                                             && _distKm(k, h) < 5);
+                    if (k && !k.postcode && h.postcode) k.postcode = h.postcode;
+                }
+                if (kept.length >= 8) break;
+            }
+            return kept;
         }
 
-        // Complète les codes postaux absents (fréquent pour les villes dans OSM)
-        // par un géocodage inverse Photon sur la position du résultat.
-        // Renvoie true si au moins un résultat a été complété.
+        // Géocodage inverse Photon. Les résultats sont triés du plus proche au
+        // plus lointain ; limit > 1 permet d'aller chercher un code postal chez
+        // un voisin quand l'objet le plus proche n'en a pas.
+        async function _photonReverse(lat, lng, { limit = 1, signal, ms = 4000 } = {}) {
+            const r = await _fetchT(
+                `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&lang=fr&limit=${limit}&radius=2`,
+                { ms, signal });
+            if (!r.ok) throw new Error('Photon reverse HTTP ' + r.status);
+            return ((await r.json()).features || []).map(_photonHit);
+        }
+
+        // Nominatim : 1 requête par seconde maximum sur le serveur public.
+        // Toutes les requêtes passent par cette file, qui les espace.
+        let _nomQueue = Promise.resolve();
+        let _nomLast = 0;
+        function _nominatimSlot(signal) {
+            const slot = _nomQueue.then(async () => {
+                const wait = Math.max(0, _nomLast + 1100 - Date.now());
+                if (wait) await new Promise(res => setTimeout(res, wait));
+                _nomLast = Date.now();
+                if (signal && signal.aborted) throw new DOMException('annulé', 'AbortError');
+            });
+            _nomQueue = slot.catch(() => {});
+            return slot;
+        }
+
+        async function _nominatimReverse(lat, lng, signal) {
+            await _nominatimSlot(signal);
+            const r = await _fetchT(
+                'https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1'
+                + `&zoom=18&accept-language=fr&lat=${lat}&lon=${lng}`,
+                { ms: 5000, signal, headers: { 'Accept': 'application/json' } });
+            if (!r.ok) throw new Error('Nominatim reverse HTTP ' + r.status);
+            const it = await r.json();
+            return it && it.lat != null ? _nomHit(it) : null;
+        }
+
+        // Complète les codes postaux absents (fréquent pour les villes et
+        // villages : dans OSM, le nœud du lieu n'a pas d'adresse).
+        //   1) Photon inverse, 10 voisins : premier code postal du même pays.
+        //   2) Ce qui manque encore : Nominatim inverse, 4 au plus, espacés d'1 s.
+        // onUpdate() est appelé à chaque résultat complété pour réafficher la liste.
         const _pcCache = new Map();
         const NO_PC_TYPES = new Set(['country', 'state', 'county']);
+        const NOM_PC_MAX = 4;
 
-        async function enrichPostcodes(hits, signal) {
+        function _applyInfo(h, info) {
+            let changed = false;
+            if (!h.postcode && info.postcode) { h.postcode = info.postcode; changed = true; }
+            if (!h.region  && info.region)    { h.region   = info.region;   changed = true; }
+            if (!h.country && info.country)   { h.country  = info.country;  changed = true; }
+            if (!h.cc && info.cc) h.cc = info.cc;
+            return changed;
+        }
+
+        async function enrichPostcodes(hits, signal, onUpdate) {
             const todo = hits.filter(h => !h.postcode && !h._pcTried
                                           && !NO_PC_TYPES.has(h.type) && h.src !== 'coords');
             if (!todo.length) return false;
+            todo.forEach(h => { h._pcTried = true; });
 
             let changed = false;
+            const key = h => `${h.lat.toFixed(4)},${h.lng.toFixed(4)}`;
+
+            // Passe 1 : cache puis Photon, en parallèle.
             await Promise.all(todo.map(async h => {
-                h._pcTried = true;
-                const key = `${h.lat.toFixed(4)},${h.lng.toFixed(4)}`;
+                const cached = _pcCache.get(key(h));
+                if (cached) { if (_applyInfo(h, cached)) changed = true; return; }
                 try {
-                    let info = _pcCache.get(key);
-                    if (!info) {
-                        const r = await _fetchT(
-                            `https://photon.komoot.io/reverse?lat=${h.lat}&lon=${h.lng}&lang=fr&limit=1`,
-                            { ms: 3500, signal });
-                        if (!r.ok) return;
-                        const f = ((await r.json()).features || [])[0];
-                        if (!f) return;
-                        info = _photonHit(f);
-                        _pcCache.set(key, info);
-                    }
-                    if (info.postcode) { h.postcode = info.postcode; changed = true; }
-                    if (!h.region  && info.region)  { h.region  = info.region;  changed = true; }
-                    if (!h.country && info.country) { h.country = info.country; changed = true; }
-                    if (!h.cc && info.cc) h.cc = info.cc;
-                } catch (e) { /* le code postal reste simplement absent */ }
+                    const near = await _photonReverse(h.lat, h.lng, { limit: 10, signal, ms: 3500 });
+                    const withPc = near.find(n => n.postcode && (!h.cc || !n.cc || n.cc === h.cc));
+                    const info = Object.assign({}, near[0] || {}, withPc ? { postcode: withPc.postcode } : {});
+                    if (withPc) _pcCache.set(key(h), info);
+                    if (_applyInfo(h, info)) changed = true;
+                } catch (e) { /* on tente Nominatim ensuite */ }
             }));
+            if (changed && onUpdate) onUpdate();
+            if (signal && signal.aborted) return changed;
+
+            // Passe 2 : Nominatim pour les derniers manquants, un par un.
+            const rest = todo.filter(h => !h.postcode).slice(0, NOM_PC_MAX);
+            for (const h of rest) {
+                if (signal && signal.aborted) break;
+                try {
+                    const info = await _nominatimReverse(h.lat, h.lng, signal);
+                    if (!info || !info.postcode) continue;
+                    if (h.cc && info.cc && info.cc !== h.cc) continue;
+                    _pcCache.set(key(h), info);
+                    if (_applyInfo(h, info)) { changed = true; if (onUpdate) onUpdate(); }
+                } catch (e) {
+                    if (signal && signal.aborted) break;
+                }
+            }
             return changed;
         }
 
         // Adresse la plus proche d'un point : Photon, puis Nominatim en secours.
         async function reverseHit(lat, lng) {
             try {
-                const r = await _fetchT(
-                    `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&lang=fr&limit=1`, { ms: 4000 });
-                if (r.ok) {
-                    const f = ((await r.json()).features || [])[0];
-                    if (f) {
-                        const h = _photonHit(f);
-                        if (h.street) h.name = h.street;   // l'adresse plutôt qu'un nom de bâtiment
-                        return h;
+                const near = await _photonReverse(lat, lng, { limit: 5 });
+                if (near.length) {
+                    const h = near[0];
+                    if (!h.postcode) {
+                        const withPc = near.find(n => n.postcode && (!h.cc || n.cc === h.cc));
+                        if (withPc) h.postcode = withPc.postcode;
                     }
+                    if (!h.city) {
+                        const withCity = near.find(n => n.city);
+                        if (withCity) h.city = withCity.city;
+                    }
+                    if (h.street) h.name = h.street;   // l'adresse plutôt qu'un nom de bâtiment
+                    return h;
                 }
             } catch (e) { console.warn('Reverse Photon:', e); }
 
             try {
-                const r = await _fetchT(
-                    'https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1'
-                    + `&zoom=18&accept-language=fr&lat=${lat}&lon=${lng}`,
-                    { ms: 5000, headers: { 'Accept': 'application/json' } });
-                if (r.ok) {
-                    const it = await r.json();
-                    if (it && it.lat != null) {
-                        const h = _nomHit(it);
-                        if (h.street) h.name = h.street;
-                        return h;
-                    }
-                }
+                const h = await _nominatimReverse(lat, lng);
+                if (h) { if (h.street) h.name = h.street; return h; }
             } catch (e) { console.warn('Reverse Nominatim:', e); }
             return null;
         }
@@ -1719,7 +1788,7 @@
                 _renderSearchList();
                 hintEl.textContent = `${searchHits.length} résultat(s), source : ${lastGeoSource}`;
 
-                if (await enrichPostcodes(searchHits) && seq === searchSeq) _renderSearchList();
+                enrichPostcodes(searchHits, null, () => { if (seq === searchSeq) _renderSearchList(); });
 
             } catch (e) {
                 console.error('Recherche:', e);
