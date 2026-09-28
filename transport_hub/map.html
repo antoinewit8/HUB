@@ -160,6 +160,31 @@
         .tc-none { font-size: 12px; color: #7f8c8d; line-height: 1.5; margin: 0; }
         .tc-none code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-size: 11.5px; }
 
+        /* ── Traversées (ferries / navettes) ── */
+        #ferry-box { display: none; margin: 4px 0 12px 0; padding: 11px 12px;
+            background: #f4f8fb; border: 1px solid #d6e4ef; border-radius: 8px; }
+        #ferry-box.show { display: block; }
+        .fy-block + .fy-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid #dde7ef; }
+        .fy-head { display: flex; align-items: center; gap: 7px; font-size: 13px;
+            font-weight: 600; color: #2c3e50; }
+        .fy-ico { font-size: 15px; flex-shrink: 0; }
+        .fy-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fy-forced { font-size: 10.5px; font-weight: bold; color: #d35400; background: #fdebd0;
+            border-radius: 10px; padding: 1px 7px; flex-shrink: 0; }
+        .fy-sub { font-size: 11.5px; color: #7f8c8d; margin: 3px 0 8px 22px; }
+        .fy-select { width: 100%; padding: 7px 8px; border: 1px solid #dce1e7; border-radius: 6px;
+            font-size: 12.5px; background: white; color: #34495e; outline: none; font-family: inherit; }
+        .fy-select:focus { border-color: #3498db; }
+        .fy-search { display: flex; gap: 6px; margin-top: 6px; }
+        .fy-search input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #dce1e7;
+            border-radius: 6px; font-size: 12px; outline: none; font-family: inherit; }
+        .fy-search input:focus { border-color: #3498db; }
+        .fy-search button { padding: 6px 10px; border: none; border-radius: 6px; background: #3498db;
+            color: white; font-size: 12px; font-weight: bold; cursor: pointer; flex-shrink: 0; }
+        .fy-search button:hover { background: #2980b9; }
+        .fy-status { font-size: 11px; color: #95a5a6; margin-top: 5px; line-height: 1.4; }
+        .fy-status.err { color: #c0392b; }
+
         #route-state { font-size: 12px; text-align: center; padding: 5px 10px;
             border-radius: 20px; margin: 12px 0; font-weight: bold; }
         .state-original { background: #d5f5e3; color: #1e8449; }
@@ -363,6 +388,8 @@
                 </div>
                 <div id="toll-detail"></div>
 
+                <div id="ferry-box"></div>
+
                 <div id="wp-container">
                     <h4>Étapes du trajet</h4>
                     <div id="wp-list"><p class="wp-empty">Aucune étape ajoutée.</p></div>
@@ -395,7 +422,8 @@
                 Clic sur la carte : pose le départ, puis l'arrivée.<br>
                 Clic droit : ajoute une étape.<br>
                 Glisser un point : recalcule le trajet.<br>
-                Double-clic sur une étape : la supprime.
+                Double-clic sur une étape : la supprime.<br>
+                Traversée sur le trajet : choisir la ligne dans le bloc « Traversées ».
             </div>
         </div>
     </div>
@@ -477,6 +505,12 @@
         // affiché comme une "modification" de l'ancien.
         let forceReference = false;
 
+        // Traversées imposées, au format PTV "combinedTransport=latA,lonA,latB,lonB".
+        // Le serveur les place lui-même au bon endroit dans la suite des points.
+        let forcedFerries = [];
+        let lastGoodFerries = [];         // celles du dernier tracé affiché
+        let originalRouteData = null;     // réponse du tracé de référence
+
         const layerState = { road: false, pl: false, plLoaded: false };
 
         // ═══════════════════════════════════════════════════════
@@ -504,6 +538,16 @@
                 id: 'routeLayer', type: 'line', source: 'routeSource',
                 layout: { 'line-join': 'round', 'line-cap': 'round' },
                 paint: { 'line-color': '#007cbf', 'line-width': 6, 'line-opacity': 0.85 }
+            });
+
+            // Ports d'embarquement / débarquement des traversées
+            map.addSource('ferrySource', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+            map.addLayer({
+                id: 'ferryPorts', type: 'circle', source: 'ferrySource',
+                paint: {
+                    'circle-radius': 6, 'circle-color': '#1f3a93',
+                    'circle-stroke-color': '#ffffff', 'circle-stroke-width': 2
+                }
             });
 
             _initRoadTypeLayer();
@@ -560,6 +604,7 @@
                 map.getSource('routeSource').setData(emptyGeoJSON());
                 map.getSource('originalRouteSource').setData(emptyGeoJSON());
                 map.setPaintProperty('originalRouteLayer', 'line-opacity', 0);
+                _resetFerries();
             }
             refreshPanel();
             if (refocus) _epInput(role).focus();
@@ -638,6 +683,7 @@
                 map.getSource('originalRouteSource').setData(emptyGeoJSON());
                 map.setPaintProperty('originalRouteLayer', 'line-opacity', 0);
             }
+            _resetFerries();
             _cancelSearchPin();
             closeSuggest();
             document.getElementById('search-input').value = '';
@@ -891,7 +937,8 @@
         function options() {
             return {
                 avoid_tolls:    document.getElementById('opt-tolls').checked,
-                avoid_highways: document.getElementById('opt-hw').checked
+                avoid_highways: document.getElementById('opt-hw').checked,
+                ferries:        forcedFerries.slice()
             };
         }
 
@@ -1018,6 +1065,8 @@
             busy = true;
             pendingCalc = false;
             const asReference = !hasRoute || forceReference;
+            // Nouveau trajet : les traversées imposées sur l'ancien n'ont plus de sens.
+            if (forceReference) forcedFerries = [];
             setLoading(true);
             refreshPanel();
             try {
@@ -1027,6 +1076,9 @@
             } catch (err) {
                 console.error('Calcul:', err);
                 toast('Calcul impossible — ' + err.message);
+                // Le tracé affiché reste l'ancien : on remet les traversées qui vont avec.
+                forcedFerries = lastGoodFerries.slice();
+                if (hasRoute) renderFerries();
             } finally {
                 busy = false;
                 setLoading(false);
@@ -1043,6 +1095,7 @@
 
             if (asReference) {
                 originalGeojsonCoords = [...geojsonCoords];
+                originalRouteData = data;
                 map.getSource('originalRouteSource').setData(buildGeoJSON(originalGeojsonCoords));
                 isModified = false;
                 map.setPaintProperty('originalRouteLayer', 'line-opacity', 0);
@@ -1053,6 +1106,8 @@
             }
 
             hasRoute = true;
+            handleFerryWarnings(data);
+            lastGoodFerries = forcedFerries.slice();
             setStats(data);
             layerState.plLoaded = false;   // la zone a changé
             refreshPanel();
@@ -1067,6 +1122,7 @@
             document.getElementById('toll').textContent = (d.prix_peage  ?? '—') + ' €';
             renderTollDetail();
             renderKmDetail();
+            renderFerries();
         }
 
         // ═══════════════════════════════════════════════════════
@@ -1163,7 +1219,11 @@
             + `<div class="tc-head" style="border-top:1px solid #e4e9ef;padding-top:8px;margin-top:4px;">
                    <span class="tc-name">Total</span>
                    <span class="tc-amount">${total.toFixed(2).replace('.', ',')} €</span>
-               </div>`;
+               </div>`
+            + ((lastRouteData && Array.isArray(lastRouteData.crossings) && lastRouteData.crossings.length)
+                ? '<p class="tc-none" style="margin-top:6px;">Le prix des traversées (ferry, navette) '
+                  + 'n\'est pas compris dans ce montant.</p>'
+                : '');
         }
 
         // ═══════════════════════════════════════════════════════
@@ -1208,6 +1268,7 @@
 
             const total = rows.reduce((s, r) => s + r.km, 0);
             const max   = Math.max(...rows.map(r => r.km), 0.1);
+            const ferryKm = Number(d.ferry_km) || 0;
 
             box.innerHTML = rows.map(r => {
                 const nom = r.cc === '??' ? 'Pays non identifié' : (PAYS_NOM[r.cc] || r.cc);
@@ -1228,7 +1289,11 @@
             + `<div class="tc-head" style="border-top:1px solid #e4e9ef;padding-top:8px;margin-top:4px;">
                    <span class="tc-name">Total</span>
                    <span class="tc-amount">${fmtKm(total)} km</span>
-               </div>`;
+               </div>`
+            + (ferryKm > 0
+                ? `<p class="tc-none" style="margin-top:6px;">Dont ${fmtKm(ferryKm)} km de traversée `
+                  + `(ferry / navette), non roulés.</p>`
+                : '');
         }
 
         function toggleKmDetail() {
@@ -1251,6 +1316,9 @@
             waypoints = [];
             updateWaypointsList();
 
+            forcedFerries = [];
+            lastGoodFerries = [];
+
             geojsonCoords = [...originalGeojsonCoords];
             map.getSource('routeSource').setData(buildGeoJSON(geojsonCoords));
             origin.lng = originalGeojsonCoords[0][0];
@@ -1261,15 +1329,264 @@
 
             isModified = false;
             map.setPaintProperty('originalRouteLayer', 'line-opacity', 0);
+            // Les chiffres du tracé de référence sont gardés côté navigateur :
+            // pas besoin du serveur pour les réafficher.
+            if (originalRouteData) setStats(originalRouteData);
             refreshPanel();
 
             try {
                 const resp = await fetch(`${serverUrl}/api/reset_route/${routeId}`, { method: 'POST' });
-                if (resp.ok) setStats(await resp.json());
+                if (resp.ok && !originalRouteData) setStats(await resp.json());
             } catch (e) {
                 console.warn('reset_route indisponible:', e);
             }
             toast('Tracé calculé restauré', 'info');
+        }
+
+        // ═══════════════════════════════════════════════════════
+        //  TRAVERSÉES (ferries / navettes ferroviaires)
+        // ═══════════════════════════════════════════════════════
+        // Le serveur renvoie `crossings` : les traversées que PTV a mises sur le
+        // trajet. Pour chacune, on liste les lignes qui partent du même secteur
+        // (/api/ferry_options) et l'utilisateur peut en imposer une autre.
+
+        const FERRY_RADIUS_KM = 60;     // rayon de recherche autour du port d'embarquement
+        const FERRY_MATCH_KM  = 15;     // une ligne imposée "appartient" à la traversée
+                                        // dont l'embarquement est à moins de 15 km
+        const ferryState = { seq: 0, query: {}, cache: new Map() };
+
+        function _crossings() {
+            const d = lastRouteData || {};
+            return Array.isArray(d.crossings)
+                ? d.crossings.filter(c => c && c.start && c.start.lat != null && c.start.lng != null)
+                : [];
+        }
+
+        function _parseFerry(wp) {
+            const m = String(wp || '').match(
+                /^combinedTransport=(-?[\d.]+),(-?[\d.]+),(-?[\d.]+),(-?[\d.]+)$/);
+            return m ? { s: { lat: +m[1], lng: +m[2] }, d: { lat: +m[3], lng: +m[4] } } : null;
+        }
+
+        function _forcedFor(c) {
+            return forcedFerries.find(wp => {
+                const f = _parseFerry(wp);
+                return f && _distKm(f.s, c.start) < FERRY_MATCH_KM;
+            }) || '';
+        }
+
+        function fmtDur(min) {
+            min = Math.round(Number(min) || 0);
+            const h = Math.floor(min / 60), m = min % 60;
+            return h ? `${h} h ${String(m).padStart(2, '0')}` : `${m} min`;
+        }
+
+        function _ferryLabel(o) {
+            const s = o.start && o.start.name, d = o.dest && o.dest.name;
+            const trajet = s && d ? `${s} → ${d}` : (o.name || 'Ligne');
+            const extra = [o.duration_min ? fmtDur(o.duration_min) : '',
+                           o.type === 'RAIL' ? 'rail' : ''].filter(Boolean).join(', ');
+            return extra ? `${trajet} (${extra})` : trajet;
+        }
+
+        function _resetFerries() {
+            forcedFerries = [];
+            lastGoodFerries = [];
+            originalRouteData = null;
+            lastRouteData = null;
+            ferryState.query = {};
+            ferryState.seq++;
+            const box = document.getElementById('ferry-box');
+            box.classList.remove('show');
+            box.innerHTML = '';
+            updateFerryMarkers([]);
+        }
+
+        function updateFerryMarkers(list) {
+            const src = map.getSource && map.getSource('ferrySource');
+            if (!src) return;
+            const features = [];
+            (list || []).forEach(c => [c.start, c.end].forEach(p => {
+                if (p && p.lat != null && p.lng != null) {
+                    features.push({ type: 'Feature', properties: {},
+                                    geometry: { type: 'Point', coordinates: [p.lng, p.lat] } });
+                }
+            }));
+            src.setData({ type: 'FeatureCollection', features });
+        }
+
+        function renderFerries() {
+            const box = document.getElementById('ferry-box');
+            const list = _crossings();
+            updateFerryMarkers(list);
+            ferryState.seq++;
+
+            if (!list.length) {
+                box.classList.remove('show');
+                box.innerHTML = '';
+                return;
+            }
+
+            box.innerHTML = '<h4>Traversées</h4>' + list.map((c, k) => {
+                const forced = _forcedFor(c);
+                const rail = c.type === 'RAIL';
+                const nom = c.name || (rail ? 'Navette ferroviaire' : 'Ferry');
+                const meta = [
+                    c.duration_min ? fmtDur(c.duration_min) : '',
+                    c.distance_km ? fmtKm(Number(c.distance_km)) + ' km' : '',
+                    c.from_start_km != null ? 'au km ' + Math.round(c.from_start_km) : ''
+                ].filter(Boolean).join(' · ');
+                return `
+                    <div class="fy-block">
+                        <div class="fy-head">
+                            <span class="fy-ico">${rail ? '🚆' : '⛴️'}</span>
+                            <span class="fy-name" title="${esc(nom)}">${esc(nom)}</span>
+                            ${forced ? '<span class="fy-forced">imposée</span>' : ''}
+                        </div>
+                        <div class="fy-sub" id="fy-sub-${k}">${esc(meta)}</div>
+                        <select class="fy-select" id="fy-sel-${k}" onchange="onFerryChange(${k})" disabled>
+                            <option>Chargement des lignes…</option>
+                        </select>
+                        <div class="fy-search">
+                            <input id="fy-q-${k}" type="text" autocomplete="off"
+                                   placeholder="Autre port (ex. Dunkerque)"
+                                   value="${esc(ferryState.query[k] || '')}"
+                                   onkeydown="if (event.key === 'Enter') { event.preventDefault(); searchFerry(${k}); }">
+                            <button onclick="searchFerry(${k})">Chercher</button>
+                        </div>
+                        <div class="fy-status" id="fy-st-${k}"></div>
+                    </div>`;
+            }).join('');
+            box.classList.add('show');
+
+            list.forEach((c, k) => loadFerryOptions(k));
+        }
+
+        async function loadFerryOptions(k) {
+            const c = _crossings()[k];
+            if (!c) return;
+            const seq = ferryState.seq;
+            const q = (ferryState.query[k] || '').trim();
+
+            const p = new URLSearchParams();
+            if (q) {
+                p.set('q', q);
+            } else {
+                p.set('lat', c.start.lat);
+                p.set('lng', c.start.lng);
+                p.set('radius_km', FERRY_RADIUS_KM);
+            }
+            if (c.end && c.end.lat != null && c.end.lng != null) {
+                p.set('dest_lat', c.end.lat);
+                p.set('dest_lng', c.end.lng);
+            }
+            if (c.end && c.end.cc) p.set('dest_cc', c.end.cc);
+            const key = p.toString();
+
+            let res = ferryState.cache.get(key);
+            if (!res) {
+                try {
+                    const r = await _fetchT(`${serverUrl}/api/ferry_options?${key}`, { ms: 20000 });
+                    const body = await r.json().catch(() => ({}));
+                    if (!r.ok) throw new Error(body.detail || ('HTTP ' + r.status));
+                    res = { options: Array.isArray(body.options) ? body.options : [],
+                            truncated: !!body.truncated };
+                    ferryState.cache.set(key, res);
+                } catch (e) {
+                    res = { options: [], error: e.name === 'AbortError' ? 'délai dépassé' : e.message };
+                }
+            }
+            if (seq !== ferryState.seq) return;   // le panneau a été redessiné entre-temps
+            _fillFerrySelect(k, c, res, q);
+        }
+
+        function _fillFerrySelect(k, c, res, q) {
+            const sel = document.getElementById('fy-sel-' + k);
+            const st  = document.getElementById('fy-st-' + k);
+            if (!sel || !st) return;
+
+            const forced = _forcedFor(c);
+            const opts = res.options.slice();
+            // La ligne imposée peut venir d'une autre recherche : on la garde visible.
+            if (forced && !opts.some(o => o.wp === forced)) {
+                opts.unshift({ wp: forced, name: 'Ligne imposée' });
+            }
+
+            sel.innerHTML = '<option value="">Automatique (choix PTV)</option>'
+                + opts.map(o =>
+                    `<option value="${esc(o.wp)}"${o.wp === forced ? ' selected' : ''}
+                             title="${esc(o.name || '')}">${esc(_ferryLabel(o))}</option>`
+                  ).join('');
+            sel.disabled = false;
+
+            // Les événements PTV ne donnent pas le nom des ports : on le reprend
+            // de la ligne qui correspond à la traversée actuelle.
+            const actuelle = res.options.find(o => o.start && o.dest && c.end
+                && _distKm(o.start, c.start) < 5 && _distKm(o.dest, c.end) < 5);
+            const sub = document.getElementById('fy-sub-' + k);
+            if (actuelle && sub && !sub.dataset.ports && actuelle.start.name && actuelle.dest.name) {
+                sub.dataset.ports = '1';
+                sub.textContent = `${actuelle.start.name} → ${actuelle.dest.name}`
+                                + (sub.textContent ? ' · ' + sub.textContent : '');
+            }
+
+            st.className = 'fy-status' + (res.error ? ' err' : '');
+            if (res.error) {
+                st.textContent = 'Lignes indisponibles — ' + res.error;
+            } else if (!res.options.length) {
+                st.textContent = q ? `Aucune ligne camion pour « ${q} ».`
+                                   : 'Aucune autre ligne camion trouvée autour de ce port.';
+            } else {
+                st.textContent = `${res.options.length}${res.truncated ? '+' : ''} ligne(s) camion `
+                    + (q ? `pour « ${q} »` : `à moins de ${FERRY_RADIUS_KM} km de l'embarquement`)
+                    + (q ? '' : '. Autre port : tapez son nom.');
+            }
+        }
+
+        function searchFerry(k) {
+            const inp = document.getElementById('fy-q-' + k);
+            if (!inp) return;
+            ferryState.query[k] = inp.value.trim();
+            const sel = document.getElementById('fy-sel-' + k);
+            if (sel) { sel.disabled = true; sel.innerHTML = '<option>Recherche…</option>'; }
+            loadFerryOptions(k);
+        }
+
+        function onFerryChange(k) {
+            const c = _crossings()[k];
+            const sel = document.getElementById('fy-sel-' + k);
+            if (!c || !sel) return;
+            const prev = _forcedFor(c);
+            forcedFerries = forcedFerries.filter(w => w !== prev);
+            if (sel.value) forcedFerries.push(sel.value);
+            sel.disabled = true;
+            autoCalculate();
+        }
+
+        // PTV prévient quand une ligne imposée n'a pas pu être utilisée
+        // (aucune liaison entre ces deux ports pour ce véhicule).
+        function handleFerryWarnings(data) {
+            const ws = Array.isArray(data.ferry_warnings) ? data.ferry_warnings : [];
+            let ignored = 0;
+            ws.forEach(w => {
+                if (w.code !== 'ROUTING_COMBINED_TRANSPORT_WAYPOINT_IGNORED') {
+                    console.info('Traversée PTV :', w.code, w.details || '');
+                    return;
+                }
+                ignored++;
+                const nums = String((w.details || {}).parameter || '').match(/-?\d+(?:\.\d+)?/g);
+                if (nums && nums.length >= 4) {
+                    const s = { lat: +nums[0], lng: +nums[1] }, d = { lat: +nums[2], lng: +nums[3] };
+                    forcedFerries = forcedFerries.filter(wp => {
+                        const f = _parseFerry(wp);
+                        return !(f && _distKm(f.s, s) < 1 && _distKm(f.d, d) < 1);
+                    });
+                }
+            });
+            if (ignored) {
+                toast('Ligne imposée ignorée par PTV (pas de liaison camion entre ces ports) : '
+                      + 'le tracé garde la traversée automatique.', 'info');
+            }
         }
 
         // ═══════════════════════════════════════════════════════
@@ -2020,7 +2337,9 @@
             document.getElementById('save-dest').value   = dest.label;
             const km = document.getElementById('dist').textContent.replace(' km', '').trim();
             document.getElementById('save-modal-wp-count').textContent =
-                `${waypoints.length} étape(s) intermédiaire(s), ${km} km`;
+                `${waypoints.length} étape(s) intermédiaire(s)`
+                + (forcedFerries.length ? `, ${forcedFerries.length} traversée(s) imposée(s)` : '')
+                + `, ${km} km`;
             const s = document.getElementById('save-modal-status');
             s.style.display = 'none'; s.className = '';
             document.getElementById('btn-modal-confirm').disabled = false;
@@ -2050,7 +2369,8 @@
             try {
                 const resp = await fetch(serverUrl + '/api/save_reference', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ origin: o, dest: d, waypoints: intermediates, km })
+                    body: JSON.stringify({ origin: o, dest: d, waypoints: intermediates, km,
+                                           ferries: forcedFerries.slice() })
                 });
                 const data = await resp.json();
                 if (resp.ok) {
