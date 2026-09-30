@@ -16,3 +16,5 @@ pdf2image
 img2pdf
 Pillow
 ocrmypdf
+follium
+streamlit-folium
