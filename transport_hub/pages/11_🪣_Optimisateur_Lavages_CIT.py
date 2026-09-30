@@ -1,16 +1,28 @@
 """
-Page Streamlit : Optimisateur Lavages Citernes
-Croise le fichier missions (CA CIT) avec le fichier lavages par N° Dossier.
-Recherche par localité de déchargement → affiche les lavages associés + carte.
+Page Streamlit : Optimisateur Lavages Citernes — recherche autour d'une position
+- On choisit une position : adresse tapée OU clic sur la carte
+- Stations connues (historique lavages) dans le rayon, avec prix pratiqués
+- Nouvelles stations potentielles (OpenStreetMap, + Google Places si clé API)
+- Référentiel géocodé exportable pour ne pas regéocoder à chaque fois
+
+Dépendances à ajouter dans requirements.txt :
+    folium
+    streamlit-folium
 """
 
-import streamlit as st
-import pandas as pd
-import os
-import sys
-import unicodedata
+import io
 import re
-from collections import Counter
+import json
+import difflib
+import unicodedata
+import urllib.request as ureq
+import urllib.parse as uparse
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import folium
+from streamlit_folium import st_folium
 
 st.set_page_config(
     page_title="Optimisateur Lavages CIT",
@@ -18,7 +30,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# ─── Style ───────────────────────────────────────────────────────────────────
+# ─── Style (identique au reste du HUB) ───────────────────────────────────────
 st.markdown("""
 <style>
 [data-testid="stAppViewContainer"] { background: #0e1b28; }
@@ -33,21 +45,8 @@ h1, h2, h3, .stMarkdown { color: #e8f4fd; }
     text-align: center;
     margin-bottom: 0.5rem;
 }
-.kpi-box .kpi-val { font-size: 1.9rem; font-weight: 700; color: #4a90d9; }
-.kpi-box .kpi-lbl { font-size: 0.78rem; color: #8aa4bc; text-transform: uppercase; letter-spacing: 1px; }
-
-.lavage-card {
-    background: #152a3e;
-    border: 1px solid rgba(74,144,217,0.15);
-    border-left: 3px solid #4a90d9;
-    border-radius: 8px;
-    padding: 0.8rem 1rem;
-    margin-bottom: 0.5rem;
-    font-size: 0.88rem;
-    color: #cde;
-}
-.lavage-card .station { font-weight: 600; color: #6bb8f0; font-size: 0.95rem; }
-.lavage-card .meta { color: #8aa4bc; font-size: 0.8rem; }
+.kpi-box .kpi-val { font-size: 1.7rem; font-weight: 700; color: #4a90d9; }
+.kpi-box .kpi-lbl { font-size: 0.78rem; color: #8aa4bc; letter-spacing: 0.5px; }
 
 .section-title {
     color: #e8f4fd;
@@ -60,656 +59,622 @@ h1, h2, h3, .stMarkdown { color: #e8f4fd; }
 </style>
 """, unsafe_allow_html=True)
 
-# ─── Normalisation texte ──────────────────────────────────────────────────────
-def normalize(text: str) -> str:
-    if not text:
+UA = {"User-Agent": "CB-Transport-Hub/1.0"}
+
+# ─── Utilitaires ─────────────────────────────────────────────────────────────
+def normalize(text) -> str:
+    if text is None or (isinstance(text, float) and np.isnan(text)):
         return ""
     text = str(text).upper().strip()
     text = unicodedata.normalize("NFD", text)
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
-    text = re.sub(r"['\-–]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    text = re.sub(r"['\-–.,]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
-# ─── Chargement données ───────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
-def load_data(missions_bytes, lavages_bytes):
-    import io
-    df_m = pd.read_excel(io.BytesIO(missions_bytes), dtype=str)
-    df_l = pd.read_excel(io.BytesIO(lavages_bytes), dtype=str)
 
-    # Nettoyage colonnes
-    df_m.columns = df_m.columns.str.strip()
-    df_l.columns = df_l.columns.str.strip()
-
-    # Nettoyage N° Dossier
-    df_m["N° Dossier"] = df_m["N° Dossier"].str.strip()
-    df_l["N° Dossier"] = df_l["N° Dossier"].str.strip()
-
-    # Parsing dates
-    if "Date chargement" in df_m.columns:
-        df_m["Date chargement"] = pd.to_datetime(df_m["Date chargement"], errors="coerce")
-    if "Date" in df_l.columns:
-        df_l["Date"] = pd.to_datetime(df_l["Date"], errors="coerce")
-
-    # Déduire le pays du lavage depuis le code postal
-    # CP 4 chiffres = NL ou BE, 5 chiffres = FR/DE/etc.
-    def detect_pays_lavage(cp):
-        cp = str(cp).strip()
-        if len(cp) == 4 and cp.isdigit():
-            return "NL/BE"
-        elif len(cp) == 5 and cp.isdigit():
-            return "FR/DE/ES"
-        return "Autre"
-    df_l["_pays_lavage"] = df_l["Code postal"].apply(detect_pays_lavage)
-
-    # Normalisation localité pour recherche
-    df_m["_localite_norm"] = df_m["Localité déchargement"].apply(normalize)
-    df_l["_localite_lavage_norm"] = df_l["Localité"].apply(normalize)
-
-    return df_m, df_l
-
-# ─── Géocodage (Photon/Komoot en priorité, fallback Nominatim) ───────────────
-import urllib.request as _ureq
-import urllib.parse as _uparse
-import json as _json
-
-def _photon_call(query: str):
-    """Photon (Komoot) — OSM, sans clé, fonctionne sur Streamlit Cloud."""
-    url = f"https://photon.komoot.io/api/?q={_uparse.quote(query)}&limit=1&lang=fr"
+def parse_prix(val):
+    """'1.234,50 €' / '85,00' / '85.5' → float, sinon NaN."""
+    if val is None:
+        return np.nan
+    s = str(val).strip().replace("€", "").replace("EUR", "").replace("\xa0", "").replace(" ", "")
+    if not s or s.lower() == "nan":
+        return np.nan
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".")
+    else:
+        s = s.replace(",", ".")
     try:
-        req = _ureq.Request(url, headers={"User-Agent": "CB-Transport-Hub/1.0"})
-        with _ureq.urlopen(req, timeout=6) as r:
-            data = _json.loads(r.read())
-        features = data.get("features", [])
-        if features:
-            coords = features[0]["geometry"]["coordinates"]
-            return float(coords[1]), float(coords[0])
-    except Exception:
-        pass
-    return None
+        return float(s)
+    except ValueError:
+        return np.nan
 
-def _nominatim_call(query: str):
-    """Nominatim fallback."""
+
+def haversine(lat1, lon1, lat2, lon2):
+    """Distance vol d'oiseau en km (vectorisé)."""
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    a = np.sin((lat2 - lat1) / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin((lon2 - lon1) / 2) ** 2
+    return 6371.0 * 2 * np.arcsin(np.sqrt(a))
+
+
+def gmaps_link(lat, lon):
+    return f"https://www.google.com/maps/search/?api=1&query={lat:.6f},{lon:.6f}"
+
+
+def _get_json(url, timeout=10):
+    req = ureq.Request(url, headers=UA)
+    with ureq.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _post_json(url, body: bytes, headers: dict, timeout=45):
+    req = ureq.Request(url, data=body, headers={**UA, **headers}, method="POST")
+    with ureq.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+# ─── Géocodage ───────────────────────────────────────────────────────────────
+def _photon(query: str, limit: int = 1):
+    url = f"https://photon.komoot.io/api/?q={uparse.quote(query)}&limit={limit}&lang=fr"
+    try:
+        return _get_json(url, timeout=8).get("features", [])
+    except Exception:
+        return []
+
+
+def _nominatim(query: str, limit: int = 1):
     url = (
         "https://nominatim.openstreetmap.org/search"
-        f"?q={_uparse.quote(query)}&format=json&limit=1"
+        f"?q={uparse.quote(query)}&format=json&limit={limit}&addressdetails=1"
     )
     try:
-        req = _ureq.Request(url, headers={"User-Agent": "CB-Transport-Hub/1.0"})
-        with _ureq.urlopen(req, timeout=6) as r:
-            data = _json.loads(r.read())
-        if data:
-            return float(data[0]["lat"]), float(data[0]["lon"])
+        return _get_json(url, timeout=8)
     except Exception:
-        pass
+        return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def search_address(query: str):
+    """Renvoie jusqu'à 5 propositions {label, lat, lon} pour une adresse tapée."""
+    out = []
+    for f in _photon(query, limit=5):
+        p = f.get("properties", {})
+        lon, lat = f["geometry"]["coordinates"]
+        rue = " ".join(x for x in [p.get("street"), p.get("housenumber")] if x)
+        ville = " ".join(x for x in [p.get("postcode"), p.get("city")] if x)
+        parts = [p.get("name"), rue, ville, p.get("country")]
+        label = ", ".join(dict.fromkeys(x for x in parts if x)) or query
+        out.append({"label": label, "lat": float(lat), "lon": float(lon)})
+    if not out:
+        for d in _nominatim(query, limit=5):
+            out.append({"label": d.get("display_name", query), "lat": float(d["lat"]), "lon": float(d["lon"])})
+    return out
+
+
+@st.cache_data(ttl=30 * 86400, show_spinner=False)
+def geocode_station(nom: str, localite: str, cp: str, pays: str = ""):
+    """
+    Géocode une station. Le résultat par nom n'est accepté que si le CP ou la
+    localité retournés correspondent (évite les homonymes à l'autre bout de l'Europe).
+    Retour : (lat, lon, précision) ou None.
+    """
+    cp_n, loc_n = normalize(cp), normalize(localite)
+
+    # 1) Nom de la station + adresse
+    for f in _photon(f"{nom}, {cp} {localite} {pays}".strip(" ,"), limit=3):
+        p = f.get("properties", {})
+        if normalize(p.get("postcode")) == cp_n or (loc_n and normalize(p.get("city")) == loc_n):
+            lon, lat = f["geometry"]["coordinates"]
+            return float(lat), float(lon), "station"
+
+    # 2) CP + localité (position approximative au centre de la commune)
+    q_loc = f"{cp} {localite} {pays}".strip()
+    feats = _photon(q_loc, limit=1)
+    if feats:
+        lon, lat = feats[0]["geometry"]["coordinates"]
+        return float(lat), float(lon), "localité"
+    res = _nominatim(q_loc, limit=1)
+    if res:
+        return float(res[0]["lat"]), float(res[0]["lon"]), "localité"
     return None
 
-def _geocode_raw(query: str):
-    """Essaie Photon puis Nominatim."""
-    result = _photon_call(query)
-    if result:
-        return result
-    return _nominatim_call(query)
 
-@st.cache_data(show_spinner=False, ttl=86400)
-def geocode_location(query: str):
-    """Géocode une station — résultat mis en cache."""
-    return _geocode_raw(query)
+# ─── Recherche de nouvelles stations ─────────────────────────────────────────
+NAME_RX = (
+    "tank ?clean|tank ?wash|tankreinig|tankinnenreinig|tankwasch|tankreiniging|"
+    "lavage.{0,12}citerne|nettoyage.{0,12}citerne|station de lavage poids|"
+    "lavaggio.{0,6}cisterne|limpieza.{0,6}cisternas|cleaning station"
+)
+OVERPASS_URLS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
 
-def geocode_dest(query: str):
-    """Géocode la destination — sans cache pour ne pas bloquer sur None."""
-    return _geocode_raw(query)
 
-import urllib.parse
+@st.cache_data(ttl=86400, show_spinner=False)
+def search_osm(lat: float, lon: float, radius_km: int):
+    r = int(min(radius_km, 150) * 1000)
+    query = f"""
+[out:json][timeout:40];
+(
+  nwr(around:{r},{lat},{lon})["name"~"{NAME_RX}",i][!"highway"];
+  nwr(around:{r},{lat},{lon})["amenity"="vehicle_wash"]["hgv"~"yes|designated|only"];
+  nwr(around:{r},{lat},{lon})["amenity"="truck_wash"];
+);
+out center tags;
+"""
+    body = uparse.urlencode({"data": query}).encode()
+    data = None
+    for url in OVERPASS_URLS:
+        try:
+            data = _post_json(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
+            break
+        except Exception:
+            continue
+    if data is None:
+        return None  # None = erreur, [] = aucun résultat
 
-# ─── Header ──────────────────────────────────────────────────────────────────
-st.markdown("## 🪣 Optimisateur Lavages Citernes")
-st.caption("Croisez les missions citernes avec les lavages associés — trouvez les stations par localité de déchargement")
-st.divider()
+    out = []
+    for el in data.get("elements", []):
+        t = el.get("tags", {})
+        la = el.get("lat") or el.get("center", {}).get("lat")
+        lo = el.get("lon") or el.get("center", {}).get("lon")
+        if la is None or lo is None:
+            continue
+        rue = " ".join(x for x in [t.get("addr:street"), t.get("addr:housenumber")] if x)
+        ville = " ".join(x for x in [t.get("addr:postcode"), t.get("addr:city")] if x)
+        out.append({
+            "nom": t.get("name") or t.get("operator") or "Station de lavage PL (sans nom)",
+            "adresse": ", ".join(x for x in [rue, ville] if x),
+            "lat": float(la), "lon": float(lo),
+            "telephone": t.get("phone") or t.get("contact:phone") or "",
+            "site": t.get("website") or t.get("contact:website") or "",
+            "source": "OpenStreetMap",
+        })
+    return out
 
-# ─── Upload fichiers ─────────────────────────────────────────────────────────
-col_up1, col_up2 = st.columns(2)
-with col_up1:
-    missions_file = st.file_uploader(
-        "📋 Fichier Missions (CA CIT)",
-        type=["xlsx", "xls"],
-        key="missions",
-        help="Fichier CA_CIT_25-ajd avec toutes les missions citernes"
-    )
-with col_up2:
-    lavages_file = st.file_uploader(
-        "🧼 Fichier Lavages",
-        type=["xlsx", "xls"],
-        key="lavages",
-        help="Fichier liste_lavages avec N° Dossier et stations"
-    )
 
-if not missions_file or not lavages_file:
-    st.info("👆 Chargez les deux fichiers Excel pour démarrer")
-    st.stop()
+def get_google_key():
+    try:
+        return st.secrets.get("GOOGLE_PLACES_API_KEY")
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def search_google(lat: float, lon: float, radius_km: int, api_key: str):
+    termes = ["tank cleaning station", "lavage citerne camion", "Tankreinigung", "tankreiniging"]
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key,
+        "X-Goog-FieldMask": (
+            "places.id,places.displayName,places.formattedAddress,places.location,"
+            "places.nationalPhoneNumber,places.websiteUri,places.googleMapsUri"
+        ),
+    }
+    out, vus = [], set()
+    for terme in termes:
+        body = json.dumps({
+            "textQuery": terme,
+            "pageSize": 20,
+            "locationBias": {"circle": {
+                "center": {"latitude": lat, "longitude": lon},
+                "radius": float(min(radius_km * 1000, 50000)),
+            }},
+        }).encode()
+        try:
+            data = _post_json("https://places.googleapis.com/v1/places:searchText", body, headers, timeout=15)
+        except Exception:
+            continue
+        for p in data.get("places", []):
+            if p.get("id") in vus:
+                continue
+            vus.add(p.get("id"))
+            loc = p.get("location", {})
+            if "latitude" not in loc:
+                continue
+            out.append({
+                "nom": p.get("displayName", {}).get("text", "?"),
+                "adresse": p.get("formattedAddress", ""),
+                "lat": float(loc["latitude"]), "lon": float(loc["longitude"]),
+                "telephone": p.get("nationalPhoneNumber", ""),
+                "site": p.get("websiteUri", ""),
+                "source": "Google",
+            })
+    return out
+
 
 # ─── Chargement ──────────────────────────────────────────────────────────────
-with st.spinner("⏳ Chargement et croisement des données..."):
-    try:
-        df_m, df_l = load_data(missions_file.read(), lavages_file.read())
-    except Exception as e:
-        st.error(f"❌ Erreur chargement : {e}")
-        st.stop()
+@st.cache_data(show_spinner=False)
+def load_excel(b: bytes) -> pd.DataFrame:
+    df = pd.read_excel(io.BytesIO(b), dtype=str)
+    df.columns = df.columns.str.strip()
+    return df
 
-# ─── KPIs globaux ────────────────────────────────────────────────────────────
-total_missions = len(df_m)
-total_lavages  = len(df_l)
-dossiers_avec_lavage = len(set(df_m["N° Dossier"]) & set(df_l["N° Dossier"]))
-nb_localites = df_m["Localité déchargement"].nunique()
 
-k1, k2, k3, k4 = st.columns(4)
-with k1:
-    st.markdown(f'<div class="kpi-box"><div class="kpi-val">{total_missions:,}</div><div class="kpi-lbl">Missions CIT</div></div>', unsafe_allow_html=True)
-with k2:
-    st.markdown(f'<div class="kpi-box"><div class="kpi-val">{total_lavages:,}</div><div class="kpi-lbl">Lavages enregistrés</div></div>', unsafe_allow_html=True)
-with k3:
-    st.markdown(f'<div class="kpi-box"><div class="kpi-val">{dossiers_avec_lavage:,}</div><div class="kpi-lbl">Dossiers avec lavage</div></div>', unsafe_allow_html=True)
-with k4:
-    st.markdown(f'<div class="kpi-box"><div class="kpi-val">{nb_localites:,}</div><div class="kpi-lbl">Localités déchargement</div></div>', unsafe_allow_html=True)
+@st.cache_data(show_spinner=False)
+def build_lavages(df_l: pd.DataFrame, df_m: pd.DataFrame | None):
+    df = df_l.copy()
+    for c in ["Nom 1", "Localité", "Code postal", "N° Dossier"]:
+        if c in df.columns:
+            df[c] = df[c].fillna("").str.strip()
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True) if "Date" in df.columns else pd.NaT
+    df["_prix"] = df["Prix"].apply(parse_prix) if "Prix" in df.columns else np.nan
+    df["_pays"] = df["Pays"].fillna("").str.strip() if "Pays" in df.columns else ""
+    df["_cle"] = df["Nom 1"].map(normalize) + "|" + df["Code postal"]
 
+    # Produit transporté (le prix d'un lavage dépend du produit précédent)
+    if df_m is not None and {"N° Dossier", "Produit"}.issubset(df_m.columns) and "N° Dossier" in df.columns:
+        prod = df_m[["N° Dossier", "Produit"]].copy()
+        prod["N° Dossier"] = prod["N° Dossier"].str.strip()
+        prod = prod.drop_duplicates("N° Dossier")
+        df = df.merge(prod, on="N° Dossier", how="left")
+    return df
+
+
+@st.cache_data(show_spinner=False)
+def build_stations(df: pd.DataFrame) -> pd.DataFrame:
+    g = df.sort_values("Date").groupby("_cle", dropna=False)
+    st_df = g.agg(
+        nom=("Nom 1", "first"),
+        localite=("Localité", "first"),
+        cp=("Code postal", "first"),
+        pays=("_pays", "first"),
+        nb=("_cle", "size"),
+        prix_med=("_prix", "median"),
+        prix_min=("_prix", "min"),
+        prix_max=("_prix", "max"),
+        dernier_prix=("_prix", "last"),
+        dernier_lavage=("Date", "max"),
+    ).reset_index()
+    return st_df[st_df["nom"] != ""]
+
+
+# ─── En-tête ─────────────────────────────────────────────────────────────────
+st.markdown("## 🪣 Optimisateur Lavages Citernes")
+st.caption("Choisissez une position (adresse ou clic sur la carte) : stations déjà utilisées avec leurs prix, et nouvelles stations à démarcher.")
 st.divider()
 
-# ─── Recherche ───────────────────────────────────────────────────────────────
-st.markdown('<div class="section-title">🔍 Recherche par localité de déchargement</div>', unsafe_allow_html=True)
+c1, c2, c3 = st.columns(3)
+with c1:
+    lavages_file = st.file_uploader("🧼 Fichier Lavages (obligatoire)", type=["xlsx", "xls"], key="lavages",
+                                    help="liste_lavages : N° Dossier, Date, Nom 1, Localité, Code postal, Prix…")
+with c2:
+    missions_file = st.file_uploader("📋 Fichier Missions CA CIT (optionnel)", type=["xlsx", "xls"], key="missions",
+                                     help="Sert à afficher les prix par produit transporté")
+with c3:
+    ref_file = st.file_uploader("📍 Référentiel stations géocodé (optionnel)", type=["xlsx"], key="ref",
+                                help="Export de l'onglet Référentiel : évite de regéocoder toutes les stations")
 
-# Autocomplete : liste triée des localités
-localites_list = sorted(df_m["Localité déchargement"].dropna().unique().tolist())
-
-col_search, col_pays = st.columns([3, 1])
-with col_search:
-    query = st.selectbox(
-        "Localité de déchargement",
-        options=[""] + localites_list,
-        index=0,
-        help="Tapez pour filtrer la liste"
-    )
-with col_pays:
-    pays_filter = st.selectbox(
-        "Filtrer par pays",
-        ["Tous"] + sorted(df_m["Pays déchargement"].dropna().unique().tolist())
-    )
-
-# Filtre produit optionnel
-with st.expander("🎛️ Filtres avancés", expanded=False):
-    col_f1, col_f2, col_f3 = st.columns(3)
-    with col_f1:
-        produit_filter = st.multiselect(
-            "Produit transporté",
-            options=sorted(df_m["Produit"].dropna().unique().tolist()),
-        )
-    with col_f2:
-        client_filter = st.multiselect(
-            "Client facturation",
-            options=sorted(df_m["Client facturation"].dropna().unique().tolist()),
-        )
-    with col_f3:
-        date_range = st.date_input(
-            "Période",
-            value=[],
-            help="Laisser vide = toutes les dates"
-        )
-
-col_f4, _ = st.columns([2, 2])
-with col_f4:
-    pays_lavage_opts = ["Tous"] + sorted(df_l["_pays_lavage"].dropna().unique().tolist())
-    pays_lavage_filter = st.selectbox(
-        "🌍 Filtrer lavages par zone géographique",
-        pays_lavage_opts,
-        help="NL/BE = Pays-Bas/Belgique (CP 4 chiffres) | FR/DE/ES = France/Allemagne (CP 5 chiffres)"
-    )
-
-if not query:
-    st.info("👆 Sélectionnez ou tapez une localité de déchargement pour voir les lavages associés")
+if not lavages_file:
+    st.info("👆 Chargez au minimum le fichier lavages pour démarrer")
     st.stop()
 
-# ─── Filtrage missions ────────────────────────────────────────────────────────
-query_norm = normalize(query)
-mask = df_m["_localite_norm"].str.contains(query_norm, na=False, regex=False)
-
-if pays_filter != "Tous":
-    mask &= df_m["Pays déchargement"].str.strip() == pays_filter
-if produit_filter:
-    mask &= df_m["Produit"].isin(produit_filter)
-if client_filter:
-    mask &= df_m["Client facturation"].isin(client_filter)
-if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-    d_from, d_to = pd.Timestamp(date_range[0]), pd.Timestamp(date_range[1])
-    mask &= df_m["Date chargement"].between(d_from, d_to)
-
-df_missions_filtre = df_m[mask].copy()
-
-if df_missions_filtre.empty:
-    st.warning(f"⚠️ Aucune mission trouvée pour « {query} »")
+try:
+    df_l_raw = load_excel(lavages_file.getvalue())
+    df_m_raw = load_excel(missions_file.getvalue()) if missions_file else None
+except Exception as e:
+    st.error(f"❌ Lecture impossible : {e}")
     st.stop()
 
-# ─── Croisement avec lavages ──────────────────────────────────────────────────
-dossiers_ids = df_missions_filtre["N° Dossier"].unique()
-df_lavages_raw = df_l[df_l["N° Dossier"].isin(dossiers_ids)].copy()
+manquantes = [c for c in ["Nom 1", "Localité", "Code postal"] if c not in df_l_raw.columns]
+if manquantes:
+    st.error(f"❌ Colonnes manquantes dans le fichier lavages : {', '.join(manquantes)}")
+    st.stop()
 
-# Joindre les infos mission pour calculer le timing du lavage
-df_lavages_raw = df_lavages_raw.merge(
-    df_missions_filtre[["N° Dossier", "Date chargement",
-                         "Pays chargement", "Pays déchargement",
-                         "C.P. chargement", "C.P. déchargement"]],
-    on="N° Dossier", how="left"
-)
+df_lav = build_lavages(df_l_raw, df_m_raw)
+df_st = build_stations(df_lav)
+has_produit = "Produit" in df_lav.columns
 
-# Classifier chaque lavage : avant ou après déchargement
-# Logique : CP 4 chiffres du lavage = zone NL/BE
-#           Si pays chargement = NL/BE et lavage en NL/BE → avant déchargement
-#           Sinon → après déchargement (lavage proche du lieu de livraison)
-def classify_lavage(row):
-    cp_lav = str(row.get("Code postal", "") or "").strip()
-    pays_ch = str(row.get("Pays chargement", "") or "").strip().upper()
-    pays_dech = str(row.get("Pays déchargement", "") or "").strip().upper()
+# ─── Géocodage des stations connues (session + référentiel) ─────────────────
+if "coords" not in st.session_state:
+    st.session_state["coords"] = {}
+coords = st.session_state["coords"]
 
-    # CP 4 chiffres = zone NL/BE
-    lav_zone_nl_be = len(cp_lav) == 4 and cp_lav.isdigit()
-    # Chargement en NL/BE
-    ch_nl_be = pays_ch in ("NL", "B", "BE")
+if ref_file:
+    try:
+        ref = load_excel(ref_file.getvalue())
+        for _, r in ref.dropna(subset=["cle", "lat", "lon"]).iterrows():
+            coords.setdefault(r["cle"], (float(r["lat"]), float(r["lon"]), r.get("precision", "référentiel")))
+    except Exception as e:
+        st.warning(f"Référentiel ignoré ({e}) — colonnes attendues : cle, lat, lon, precision")
 
-    if lav_zone_nl_be and ch_nl_be:
-        return "avant"   # lavage en transit avant livraison
-    elif not lav_zone_nl_be and not ch_nl_be:
-        return "apres"   # lavage après livraison, zone cohérente
-    elif lav_zone_nl_be and not ch_nl_be:
-        return "avant"   # lavage en zone nord alors que chargement au sud → avant
+a_geocoder = df_st[~df_st["_cle"].isin(coords.keys())]
+if not a_geocoder.empty:
+    bar = st.progress(0, text=f"Géocodage de {len(a_geocoder)} station(s)… (une seule fois par session)")
+    for i, (_, r) in enumerate(a_geocoder.iterrows()):
+        res = geocode_station(r["nom"], r["localite"], r["cp"], r["pays"])
+        coords[r["_cle"]] = res if res else (np.nan, np.nan, "échec")
+        bar.progress((i + 1) / len(a_geocoder), text=f"Géocodage {i + 1}/{len(a_geocoder)} — {r['nom']}")
+    bar.empty()
+
+df_st["lat"] = df_st["_cle"].map(lambda k: coords.get(k, (np.nan,) * 3)[0])
+df_st["lon"] = df_st["_cle"].map(lambda k: coords.get(k, (np.nan,) * 3)[1])
+df_st["precision"] = df_st["_cle"].map(lambda k: coords.get(k, (np.nan,) * 3)[2])
+df_st_geo = df_st.dropna(subset=["lat", "lon"]).copy()
+
+# ─── Choix de la position ────────────────────────────────────────────────────
+st.markdown('<div class="section-title">📍 Position de recherche</div>', unsafe_allow_html=True)
+
+col_a, col_b, col_c = st.columns([3, 1, 1])
+with col_a:
+    adresse = st.text_input("Adresse, ville ou code postal",
+                            placeholder="ex. Zone industrielle, 57190 Florange — ou cliquez sur la carte")
+    propositions = search_address(adresse) if adresse.strip() else []
+    choix = None
+    if propositions:
+        choix = st.selectbox("Résultats", propositions, format_func=lambda p: p["label"])
+    elif adresse.strip():
+        st.warning("Adresse introuvable. Essayez avec le code postal, ou cliquez sur la carte.")
+with col_b:
+    rayon = st.slider("Rayon (km)", 5, 200, 50, step=5)
+with col_c:
+    st.write("")
+    st.write("")
+    if st.button("📍 Centrer ici", use_container_width=True, disabled=choix is None):
+        st.session_state["center"] = {"lat": choix["lat"], "lon": choix["lon"], "label": choix["label"]}
+
+col_o1, col_o2 = st.columns(2)
+with col_o1:
+    chercher_osm = st.checkbox("🔎 Chercher de nouvelles stations (OpenStreetMap)", value=True)
+google_key = get_google_key()
+with col_o2:
+    chercher_google = st.checkbox("🔎 Chercher aussi via Google Places", value=bool(google_key),
+                                  disabled=not google_key,
+                                  help=None if google_key else "Ajoutez GOOGLE_PLACES_API_KEY dans les secrets Streamlit")
+
+center = st.session_state.get("center")
+
+# ─── Calculs autour de la position ───────────────────────────────────────────
+df_proche = pd.DataFrame()
+df_new = pd.DataFrame()
+osm_erreur = False
+
+if center:
+    df_st_geo["dist_km"] = haversine(center["lat"], center["lon"], df_st_geo["lat"], df_st_geo["lon"])
+    df_proche = df_st_geo[df_st_geo["dist_km"] <= rayon].sort_values("dist_km").copy()
+
+    trouves = []
+    lat_r, lon_r = round(center["lat"], 3), round(center["lon"], 3)
+    with st.spinner("Recherche de nouvelles stations…"):
+        if chercher_google and google_key:
+            trouves += search_google(lat_r, lon_r, rayon, google_key)
+        if chercher_osm:
+            res_osm = search_osm(lat_r, lon_r, rayon)
+            if res_osm is None:
+                osm_erreur = True
+            else:
+                trouves += res_osm
+
+    if trouves:
+        df_new = pd.DataFrame(trouves)
+        df_new["dist_km"] = haversine(center["lat"], center["lon"], df_new["lat"], df_new["lon"])
+        df_new = df_new[df_new["dist_km"] <= rayon]
+
+        # Dédoublonnage entre sources (< 150 m = même site)
+        gardes = []
+        for _, r in df_new.iterrows():
+            if all(haversine(r["lat"], r["lon"], g["lat"], g["lon"]) > 0.15 for g in gardes):
+                gardes.append(r)
+        df_new = pd.DataFrame(gardes)
+
+        # Déjà dans notre historique ? (proximité ou nom similaire)
+        def deja_connue(r):
+            if df_st_geo.empty:
+                return ""
+            d = haversine(r["lat"], r["lon"], df_st_geo["lat"].values, df_st_geo["lon"].values)
+            proches = df_st_geo[d < 5].assign(_d=d[d < 5])
+            for _, k in proches.iterrows():
+                sim = difflib.SequenceMatcher(None, normalize(r["nom"]), normalize(k["nom"])).ratio()
+                if k["_d"] < 0.4 or sim > 0.75:
+                    return k["nom"]
+            return ""
+
+        if not df_new.empty:
+            df_new["deja_connue"] = df_new.apply(deja_connue, axis=1)
+            df_new = df_new.sort_values("dist_km")
+
+df_pistes = df_new[df_new["deja_connue"] == ""] if not df_new.empty else pd.DataFrame()
+
+# ─── KPIs ────────────────────────────────────────────────────────────────────
+if center:
+    st.markdown(f"### 📍 {center['label']} — rayon {rayon} km")
+    k1, k2, k3, k4 = st.columns(4)
+    prix_zone = df_proche["prix_med"].median() if not df_proche.empty else np.nan
+    moins_chere = (df_proche.dropna(subset=["prix_med"]).sort_values("prix_med").iloc[0]
+                   if not df_proche.dropna(subset=["prix_med"]).empty else None)
+    vals = [
+        (len(df_proche), "Stations déjà utilisées"),
+        (len(df_pistes), "Nouvelles pistes"),
+        (f"{prix_zone:.0f} €" if pd.notna(prix_zone) else "—", "Prix médian zone"),
+        (f"{moins_chere['prix_med']:.0f} €" if moins_chere is not None else "—",
+         f"Moins chère : {moins_chere['nom'][:28]}" if moins_chere is not None else "Moins chère"),
+    ]
+    for col, (v, lbl) in zip([k1, k2, k3, k4], vals):
+        col.markdown(f'<div class="kpi-box"><div class="kpi-val">{v}</div><div class="kpi-lbl">{lbl}</div></div>',
+                     unsafe_allow_html=True)
+    if osm_erreur:
+        st.warning("OpenStreetMap (Overpass) ne répond pas pour le moment — réessayez dans une minute.")
+
+# ─── Carte ───────────────────────────────────────────────────────────────────
+if center:
+    m = folium.Map(location=[center["lat"], center["lon"]], zoom_start=9, tiles="CartoDB dark_matter")
+    folium.Circle([center["lat"], center["lon"]], radius=rayon * 1000,
+                  color="#4a90d9", weight=1, fill=True, fill_opacity=0.04).add_to(m)
+    folium.Marker([center["lat"], center["lon"]], tooltip=center["label"],
+                  icon=folium.Icon(color="black", icon="crosshairs", prefix="fa")).add_to(m)
+elif not df_st_geo.empty:
+    m = folium.Map(location=[df_st_geo["lat"].mean(), df_st_geo["lon"].mean()], zoom_start=6,
+                   tiles="CartoDB dark_matter")
+else:
+    m = folium.Map(location=[49.8, 5.5], zoom_start=6, tiles="CartoDB dark_matter")
+
+# Stations connues hors rayon : petits points discrets
+ids_proches = set(df_proche["_cle"]) if not df_proche.empty else set()
+for _, r in df_st_geo[~df_st_geo["_cle"].isin(ids_proches)].iterrows():
+    folium.CircleMarker([r["lat"], r["lon"]], radius=3, color="#5a7085", fill=True, fill_opacity=0.7,
+                        tooltip=f"{r['nom']} ({r['localite']})").add_to(m)
+
+# Stations connues dans le rayon : couleur selon le prix médian (tiers de la zone)
+if not df_proche.empty:
+    prix_ok = df_proche["prix_med"].dropna()
+    q1, q2 = (prix_ok.quantile(1 / 3), prix_ok.quantile(2 / 3)) if len(prix_ok) >= 3 else (np.inf, np.inf)
+    for _, r in df_proche.iterrows():
+        p = r["prix_med"]
+        couleur = "gray" if pd.isna(p) else ("green" if p <= q1 else "orange" if p <= q2 else "red")
+        prix_txt = "—" if pd.isna(p) else f"{p:.2f} € (min {r['prix_min']:.2f} / max {r['prix_max']:.2f})"
+        date_txt = r["dernier_lavage"].strftime("%d/%m/%Y") if pd.notna(r["dernier_lavage"]) else "—"
+        approx = "<br><i>⚠️ position approximative (centre de la commune)</i>" if r["precision"] == "localité" else ""
+        popup = (f"<b>{r['nom']}</b><br>{r['cp']} {r['localite']}<br>"
+                 f"💶 Prix médian : {prix_txt}<br>🧼 {r['nb']} lavage(s) — dernier le {date_txt}<br>"
+                 f"📏 {r['dist_km']:.1f} km{approx}<br>"
+                 f"<a href='{gmaps_link(r['lat'], r['lon'])}' target='_blank'>Ouvrir dans Google Maps</a>")
+        folium.Marker([r["lat"], r["lon"]], tooltip=f"{r['nom']} — {prix_txt.split(' (')[0]}",
+                      popup=folium.Popup(popup, max_width=320),
+                      icon=folium.Icon(color=couleur, icon="tint", prefix="fa")).add_to(m)
+
+# Nouvelles pistes
+if not df_pistes.empty:
+    for _, r in df_pistes.iterrows():
+        popup = (f"<b>{r['nom']}</b><br>{r['adresse'] or '(adresse non renseignée)'}<br>"
+                 f"🆕 Jamais utilisée — prix à demander<br>📏 {r['dist_km']:.1f} km — source {r['source']}<br>"
+                 + (f"📞 {r['telephone']}<br>" if r["telephone"] else "")
+                 + (f"<a href='{r['site']}' target='_blank'>Site web</a><br>" if r["site"] else "")
+                 + f"<a href='{gmaps_link(r['lat'], r['lon'])}' target='_blank'>Ouvrir dans Google Maps</a>")
+        folium.Marker([r["lat"], r["lon"]], tooltip=f"🆕 {r['nom']}",
+                      popup=folium.Popup(popup, max_width=320),
+                      icon=folium.Icon(color="purple", icon="question", prefix="fa")).add_to(m)
+
+st.caption("🖱️ Cliquez n'importe où sur la carte pour y placer le centre de recherche.")
+carte = st_folium(m, height=620, use_container_width=True, returned_objects=["last_clicked"], key="carte_lavages")
+st.markdown("<small>🟢 moins cher de la zone &nbsp;|&nbsp; 🟠 prix moyen &nbsp;|&nbsp; 🔴 plus cher &nbsp;|&nbsp; "
+            "⚪ prix inconnu &nbsp;|&nbsp; 🟣 nouvelle piste &nbsp;|&nbsp; ⚫ centre de recherche &nbsp;|&nbsp; "
+            "points gris : stations connues hors rayon</small>", unsafe_allow_html=True)
+
+clic = (carte or {}).get("last_clicked")
+if clic:
+    sig = (round(clic["lat"], 5), round(clic["lng"], 5))
+    if sig != st.session_state.get("dernier_clic"):
+        st.session_state["dernier_clic"] = sig
+        st.session_state["center"] = {"lat": clic["lat"], "lon": clic["lng"],
+                                      "label": f"Point sélectionné ({clic['lat']:.4f}, {clic['lng']:.4f})"}
+        st.rerun()
+
+if not center:
+    st.info("👆 Tapez une adresse puis « Centrer ici », ou cliquez sur la carte.")
+
+# ─── Onglets de résultats ────────────────────────────────────────────────────
+onglets = ["🧼 Stations connues", "🆕 Nouvelles pistes"]
+if has_produit:
+    onglets.append("💶 Prix par produit")
+onglets.append("🔧 Référentiel")
+tabs = st.tabs(onglets)
+t_connues, t_pistes = tabs[0], tabs[1]
+t_produit = tabs[2] if has_produit else None
+t_ref = tabs[-1]
+
+with t_connues:
+    if not center:
+        st.info("Choisissez d'abord une position.")
+    elif df_proche.empty:
+        st.info(f"Aucune station de l'historique dans un rayon de {rayon} km. Voir l'onglet Nouvelles pistes.")
     else:
-        return "apres"   # lavage en zone sud alors que chargement au nord → après livraison
-
-df_lavages_raw["timing"] = df_lavages_raw.apply(classify_lavage, axis=1)
-df_lavages_raw = df_lavages_raw.drop(
-    columns=["Date chargement", "Pays chargement", "Pays déchargement",
-             "C.P. chargement", "C.P. déchargement"],
-    errors="ignore"
-)
-
-df_lavages_match = df_lavages_raw.copy()
-
-# ─── Résultats ───────────────────────────────────────────────────────────────
-st.markdown(f"### 📍 Résultats pour : **{query}**")
-
-r1, r2, r3 = st.columns(3)
-with r1:
-    st.markdown(f'<div class="kpi-box"><div class="kpi-val">{len(df_missions_filtre)}</div><div class="kpi-lbl">Missions trouvées</div></div>', unsafe_allow_html=True)
-with r2:
-    st.markdown(f'<div class="kpi-box"><div class="kpi-val">{len(df_lavages_match)}</div><div class="kpi-lbl">Lavages associés</div></div>', unsafe_allow_html=True)
-with r3:
-    nb_stations = df_lavages_match["Nom 1"].nunique()
-    st.markdown(f'<div class="kpi-box"><div class="kpi-val">{nb_stations}</div><div class="kpi-lbl">Stations distinctes</div></div>', unsafe_allow_html=True)
-
-# ─── Tabs ─────────────────────────────────────────────────────────────────────
-tab_lavages, tab_carte, tab_missions, tab_stats = st.tabs([
-    "🧼 Lavages", "🗺️ Carte", "📋 Missions", "📊 Statistiques"
-])
-
-# ── Tab Lavages ───────────────────────────────────────────────────────────────
-with tab_lavages:
-    if df_lavages_match.empty:
-        st.info("Aucun lavage enregistré pour ces dossiers.")
-    else:
-        # Résumé par station
-        st.markdown('<div class="section-title">🏆 Stations les plus utilisées</div>', unsafe_allow_html=True)
-        station_counts = df_lavages_match.groupby(["Nom 1", "Localité", "Code postal"]).size().reset_index(name="Nb lavages")
-        station_counts = station_counts.sort_values("Nb lavages", ascending=False)
-
-        for _, row in station_counts.head(10).iterrows():
-            pct = int(row["Nb lavages"] / len(df_lavages_match) * 100)
-            st.markdown(f"""
-            <div class="lavage-card">
-                <div class="station">🏭 {row['Nom 1']}</div>
-                <div>📍 {row['Localité']} ({row['Code postal']})</div>
-                <div class="meta">✅ {row['Nb lavages']} lavage(s) — {pct}% du total</div>
-            </div>
-            """, unsafe_allow_html=True)
-
-        st.markdown('<div class="section-title">📄 Détail des lavages</div>', unsafe_allow_html=True)
-
-        # Merge pour avoir le contexte mission
-        # On sélectionne uniquement les colonnes utiles côté missions, sans "Chauffeur"
-        # (déjà présent dans df_lavages_match) pour éviter les conflits de colonnes dupliquées
-        cols_mission_merge = [c for c in [
-            "N° Dossier", "Date chargement", "Localité chargement",
-            "Localité déchargement", "Produit", "Client facturation"
-        ] if c in df_missions_filtre.columns]
-
-        df_detail = df_lavages_match.merge(
-            df_missions_filtre[cols_mission_merge],
-            on="N° Dossier",
-            how="left"
-        )
-
-        cols_show = [c for c in [
-            "N° Dossier", "Date", "Nom 1", "Localité", "Code postal",
-            "Chauffeur", "Tracteur", "Remorque", "Prix",
-            "Localité chargement", "Localité déchargement", "Produit", "Client facturation"
-        ] if c in df_detail.columns]
-
+        vue = df_proche[["nom", "localite", "cp", "dist_km", "nb", "prix_med", "prix_min", "prix_max",
+                         "dernier_prix", "dernier_lavage", "precision"]].copy()
+        vue["maps"] = [gmaps_link(a, b) for a, b in zip(df_proche["lat"], df_proche["lon"])]
         st.dataframe(
-            df_detail[cols_show].sort_values("Date", ascending=False) if "Date" in df_detail.columns else df_detail[cols_show],
-            use_container_width=True,
-            hide_index=True,
+            vue, hide_index=True, use_container_width=True,
+            column_config={
+                "nom": "Station", "localite": "Localité", "cp": "CP",
+                "dist_km": st.column_config.NumberColumn("Distance (km, vol d'oiseau)", format="%.1f"),
+                "nb": st.column_config.NumberColumn("Nb lavages"),
+                "prix_med": st.column_config.NumberColumn("Prix médian", format="%.2f €"),
+                "prix_min": st.column_config.NumberColumn("Min", format="%.2f €"),
+                "prix_max": st.column_config.NumberColumn("Max", format="%.2f €"),
+                "dernier_prix": st.column_config.NumberColumn("Dernier prix", format="%.2f €"),
+                "dernier_lavage": st.column_config.DateColumn("Dernier lavage", format="DD/MM/YYYY"),
+                "precision": "Géocodage",
+                "maps": st.column_config.LinkColumn("Maps", display_text="Ouvrir"),
+            },
         )
 
-        # Export
-        import io as _io
-        buf = _io.BytesIO()
-        df_detail[cols_show].to_excel(buf, index=False, engine="openpyxl")
-        st.download_button(
-            "📥 Exporter les lavages (Excel)",
-            data=buf.getvalue(),
-            file_name=f"lavages_{normalize(query).replace(' ','_')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-
-# ── Tab Carte ─────────────────────────────────────────────────────────────────
-with tab_carte:
-    st.markdown('<div class="section-title">🗺️ Carte des stations de lavage</div>', unsafe_allow_html=True)
-
-    if df_lavages_match.empty:
-        st.info("Aucun lavage à afficher sur la carte.")
+with t_pistes:
+    if not center:
+        st.info("Choisissez d'abord une position.")
+    elif not chercher_osm and not chercher_google:
+        st.info("Activez au moins une source de recherche au-dessus de la carte.")
+    elif df_pistes.empty:
+        st.info("Aucune nouvelle station trouvée dans ce rayon. OpenStreetMap est incomplet sur ce type de site : "
+                "élargissez le rayon ou activez Google Places.")
     else:
-        # Filtre avant/après déchargement
-        col_toggle1, col_toggle2, _ = st.columns([1, 1, 3])
-        with col_toggle1:
-            show_avant = st.checkbox("🟢 Lavages avant chargement", value=True,
-                help="Lavages effectués avant de charger le produit (citerne à nettoyer)")
-        with col_toggle2:
-            show_apres = st.checkbox("🔵 Lavages après déchargement", value=True,
-                help="Lavages effectués après déchargement chez le client, citerne vidée")
+        vue_n = df_pistes[["nom", "adresse", "dist_km", "telephone", "site", "source"]].copy()
+        vue_n["prix"] = "À demander"
+        vue_n["maps"] = [gmaps_link(a, b) for a, b in zip(df_pistes["lat"], df_pistes["lon"])]
+        st.dataframe(
+            vue_n, hide_index=True, use_container_width=True,
+            column_config={
+                "nom": "Station", "adresse": "Adresse",
+                "dist_km": st.column_config.NumberColumn("Distance (km)", format="%.1f"),
+                "telephone": "Téléphone",
+                "site": st.column_config.LinkColumn("Site"),
+                "source": "Source", "prix": "Prix",
+                "maps": st.column_config.LinkColumn("Maps", display_text="Ouvrir"),
+            },
+        )
+    if not df_new.empty and (df_new["deja_connue"] != "").any():
+        with st.expander(f"Résultats écartés car déjà dans l'historique ({(df_new['deja_connue'] != '').sum()})"):
+            st.dataframe(df_new[df_new["deja_connue"] != ""][["nom", "adresse", "source", "deja_connue"]]
+                         .rename(columns={"deja_connue": "Correspond à"}), hide_index=True)
 
-        df_carte = df_lavages_match.copy()
-        if not show_avant:
-            df_carte = df_carte[df_carte["timing"] != "avant"]
-        if not show_apres:
-            df_carte = df_carte[df_carte["timing"] != "apres"]
-
-        # Géocoder les stations filtrées
-        stations_unique = df_carte.groupby(["Nom 1","Localité","Code postal","timing"]).size().reset_index(name="Nb lavages")
-
-        geocoded = []
-        progress_bar = st.progress(0, text="Géocodage des stations...")
-        total_s = len(stations_unique)
-
-        for i, (_, row) in enumerate(stations_unique.iterrows()):
-            search_q = f"{row['Nom 1']}, {row['Localité']}, {row['Code postal']}"
-            coords = geocode_location(search_q)
-            if coords is None:
-                coords = geocode_location(f"{row['Localité']}, {row['Code postal']}")
-            if coords:
-                timing = row.get("timing", "apres")
-                geocoded.append({
-                    "nom": row["Nom 1"],
-                    "localite": row["Localité"],
-                    "cp": row["Code postal"],
-                    "nb": int(row["Nb lavages"]),
-                    "timing": timing,
-                    "lat": coords[0],
-                    "lon": coords[1],
-                })
-            progress_bar.progress((i + 1) / total_s, text=f"Géocodage {i+1}/{total_s}")
-
-        progress_bar.empty()
-
-        if not geocoded:
-            st.warning("Impossible de géocoder les stations pour cette localité.")
+if t_produit is not None:
+    with t_produit:
+        if not center or df_proche.empty:
+            st.info("Aucune station connue dans le rayon.")
         else:
-            df_geo = pd.DataFrame(geocoded)
+            lav_zone = df_lav[df_lav["_cle"].isin(df_proche["_cle"])].dropna(subset=["_prix"])
+            lav_zone = lav_zone[lav_zone["Produit"].notna()]
+            if lav_zone.empty:
+                st.info("Pas de lavage avec prix et produit identifiés dans cette zone.")
+            else:
+                st.markdown("**Prix médian par station et par produit transporté**")
+                pivot = lav_zone.pivot_table(index="Produit", columns="Nom 1", values="_prix",
+                                             aggfunc="median")
+                st.dataframe(pivot.style.format("{:.2f} €", na_rep="—").highlight_min(axis=1, color="#1f5e3a"),
+                             use_container_width=True)
+                st.caption("En vert : station la moins chère pour ce produit dans la zone.")
 
-            # Géocoder la localité de déchargement cible
-            # On récupère le pays réel depuis les missions filtrées
-            pays_dech = df_missions_filtre["Pays déchargement"].dropna().mode()
-            pays_dech_str = pays_dech.iloc[0].strip() if not pays_dech.empty else ""
+                st.markdown("**Détail des lavages de la zone**")
+                cols_det = [c for c in ["N° Dossier", "Date", "Nom 1", "Localité", "Produit", "Prix",
+                                        "Chauffeur", "Tracteur", "Remorque"] if c in lav_zone.columns]
+                st.dataframe(lav_zone[cols_det].sort_values("Date", ascending=False),
+                             hide_index=True, use_container_width=True)
 
-            PAYS_MAP_GEO = {
-                "F": "France", "B": "Belgium", "BE": "Belgium",
-                "D": "Germany", "NL": "Netherlands", "L": "Luxembourg",
-                "E": "Spain", "I": "Italy", "GB": "United Kingdom",
-                "CH": "Switzerland", "A": "Austria", "PL": "Poland",
-                "CZ": "Czech Republic", "SK": "Slovakia", "H": "Hungary",
-            }
-            pays_label = PAYS_MAP_GEO.get(pays_dech_str.upper(), pays_dech_str)
+with t_ref:
+    st.markdown("Exportez ce référentiel et rechargez-le au prochain lancement : le géocodage devient instantané. "
+                "Vous pouvez corriger à la main les lat/lon des stations mal placées dans le fichier.")
+    ref_out = df_st[["_cle", "nom", "localite", "cp", "pays", "lat", "lon", "precision"]].rename(
+        columns={"_cle": "cle"})
+    echecs = ref_out[ref_out["precision"] == "échec"]
+    approx = ref_out[ref_out["precision"] == "localité"]
+    r1, r2, r3 = st.columns(3)
+    r1.metric("Stations au référentiel", len(ref_out))
+    r2.metric("Position approximative", len(approx))
+    r3.metric("Non géocodées", len(echecs))
+    if not echecs.empty:
+        st.dataframe(echecs[["nom", "localite", "cp"]], hide_index=True)
+    buf = io.BytesIO()
+    ref_out.to_excel(buf, index=False, engine="openpyxl")
+    st.download_button("📥 Télécharger le référentiel géocodé", buf.getvalue(),
+                       file_name="referentiel_stations_lavage.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-            cp_dech = df_missions_filtre["C.P. déchargement"].dropna().mode()
-            cp_str = cp_dech.iloc[0].strip() if not cp_dech.empty else ""
-
-            # Normalisation du nom : ST → SAINT, STE → SAINTE
-            import re as _re
-            query_expanded = _re.sub(r'\bST\b', 'SAINT', query, flags=_re.IGNORECASE)
-            query_expanded = _re.sub(r'\bSTE\b', 'SAINTE', query_expanded, flags=_re.IGNORECASE)
-
-            # Tentatives de géocodage par ordre de précision
-            dest_coords = None
-            attempts = []
-            for q in ([query_expanded, query] if query_expanded != query else [query]):
-                if cp_str and pays_label:
-                    attempts.append(f"{q}, {cp_str}, {pays_label}")
-                if pays_label:
-                    attempts.append(f"{q}, {pays_label}")
-                attempts.append(q)
-
-            debug_results = []
-            for attempt in attempts:
-                dest_coords = geocode_dest(attempt)
-                debug_results.append((attempt, dest_coords))
-                if dest_coords:
-                    break
-
-            with st.expander("🔧 Debug géocodage destination", expanded=dest_coords is None):
-                for att, res in debug_results:
-                    icon = "✅" if res else "❌"
-                    st.write(f"{icon} `{att}` → `{res}`")
-                if dest_coords is None:
-                    st.error("Toutes les tentatives ont échoué — Nominatim ne reconnaît pas cette localité.")
-
-            # Carte MapLibre via st.map (fallback simple)
-            # Utiliser pydeck pour une carte plus riche
-            try:
-                import pydeck as pdk
-
-                # Séparer les deux catégories
-                df_apres = df_geo[df_geo["timing"] == "apres"].copy() if not df_geo.empty else pd.DataFrame()
-                df_avant = df_geo[df_geo["timing"] == "avant"].copy() if not df_geo.empty else pd.DataFrame()
-
-                layers = []
-
-                # Layer lavages APRÈS déchargement (bleu)
-                if not df_apres.empty:
-                    layers.append(pdk.Layer(
-                        "ScatterplotLayer", data=df_apres,
-                        get_position="[lon, lat]", get_radius=5000,
-                        get_fill_color=[74, 144, 217, 220],
-                        get_line_color=[255, 255, 255, 180],
-                        stroked=True, line_width_min_pixels=1,
-                        pickable=True, auto_highlight=True,
-                    ))
-                    layers.append(pdk.Layer(
-                        "TextLayer", data=df_apres,
-                        get_position="[lon, lat]", get_text="nom",
-                        get_size=12, get_color=[180, 220, 255, 220],
-                        get_anchor="middle", get_alignment_baseline="'bottom'",
-                        get_pixel_offset=[0, -10],
-                    ))
-
-                # Layer lavages AVANT déchargement (vert)
-                if not df_avant.empty:
-                    layers.append(pdk.Layer(
-                        "ScatterplotLayer", data=df_avant,
-                        get_position="[lon, lat]", get_radius=5000,
-                        get_fill_color=[46, 184, 92, 220],
-                        get_line_color=[255, 255, 255, 180],
-                        stroked=True, line_width_min_pixels=1,
-                        pickable=True, auto_highlight=True,
-                    ))
-                    layers.append(pdk.Layer(
-                        "TextLayer", data=df_avant,
-                        get_position="[lon, lat]", get_text="nom",
-                        get_size=12, get_color=[160, 255, 180, 220],
-                        get_anchor="middle", get_alignment_baseline="'bottom'",
-                        get_pixel_offset=[0, -10],
-                    ))
-
-                # Layer point déchargement (rouge vif + contour blanc + label)
-                if dest_coords:
-                    df_dest = pd.DataFrame([{
-                        "lat": dest_coords[0],
-                        "lon": dest_coords[1],
-                        "nom": f"Déchargement : {query}",
-                        "label": query.upper(),
-                    }])
-                    layer_dest = pdk.Layer(
-                        "ScatterplotLayer",
-                        data=df_dest,
-                        get_position="[lon, lat]",
-                        get_radius=10000,
-                        get_fill_color=[220, 30, 30, 240],
-                        get_line_color=[255, 255, 255, 255],
-                        stroked=True,
-                        line_width_min_pixels=2,
-                        pickable=True,
-                    )
-                    layer_dest_text = pdk.Layer(
-                        "TextLayer",
-                        data=df_dest,
-                        get_position="[lon, lat]",
-                        get_text="label",
-                        get_size=14,
-                        get_color=[255, 80, 80, 255],
-                        get_anchor="middle",
-                        get_alignment_baseline="'bottom'",
-                        get_pixel_offset=[0, -14],
-                        font_weight=800,
-                    )
-                    layers.append(layer_dest)
-                    layers.append(layer_dest_text)
-
-                if dest_coords is None:
-                    st.warning(f"⚠️ Point de déchargement non géocodé pour « {query} » — seules les stations de lavage sont affichées.")
-
-                center_lat = dest_coords[0] if dest_coords else df_geo["lat"].mean()
-                center_lon = dest_coords[1] if dest_coords else df_geo["lon"].mean()
-
-                view = pdk.ViewState(
-                    latitude=center_lat,
-                    longitude=center_lon,
-                    zoom=5,
-                    pitch=0,
-                )
-
-                tooltip = {
-                    "html": "<b>{nom}</b><br>{localite} ({cp})<br>🧼 {nb} lavage(s)",
-                    "style": {"background": "#0e1b28", "color": "#e8f4fd", "font-size": "13px", "padding": "8px"}
-                }
-
-                deck = pdk.Deck(
-                    layers=layers,
-                    initial_view_state=view,
-                    tooltip=tooltip,
-                    map_style="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-                )
-                st.pydeck_chart(deck, use_container_width=True, height=600)
-
-                # Légende
-                st.markdown("""
-                <small>
-                🔵 Lavage après déchargement &nbsp;|&nbsp;
-                🟢 Lavage avant chargement &nbsp;|&nbsp;
-                🔴 Localité de déchargement
-                </small>
-                """, unsafe_allow_html=True)
-
-                # Bouton plein écran via page dédiée
-                map_params = urllib.parse.urlencode({"localite": query})
-                st.markdown(
-                    f'<a href="/12_Carte_Lavage?{map_params}" target="_blank">'
-                    f'<button style="margin-top:0.5rem;padding:0.4rem 1rem;background:#4a90d9;'
-                    f'color:white;border:none;border-radius:6px;cursor:pointer;font-size:0.85rem;">'
-                    f'🗺️ Ouvrir la carte en plein écran</button></a>',
-                    unsafe_allow_html=True,
-                )
-
-            except ImportError:
-                # Fallback st.map
-                st.map(df_geo.rename(columns={"lat": "latitude", "lon": "longitude"}))
-
-            # Tableau récapitulatif géocodé
-            with st.expander("📋 Stations géocodées"):
-                st.dataframe(df_geo[["nom","localite","cp","nb","lat","lon"]], hide_index=True)
-
-# ── Tab Missions ──────────────────────────────────────────────────────────────
-with tab_missions:
-    st.markdown('<div class="section-title">📋 Missions vers cette localité</div>', unsafe_allow_html=True)
-
-    cols_m = [c for c in [
-        "N° Dossier", "Date chargement", "Localité chargement", "C.P. chargement",
-        "Pays chargement", "Localité déchargement", "C.P. déchargement",
-        "Produit", "Client facturation", "Prix transport", "Total des ventes"
-    ] if c in df_missions_filtre.columns]
-
-    st.dataframe(
-        df_missions_filtre[cols_m].sort_values("Date chargement", ascending=False)
-        if "Date chargement" in df_missions_filtre.columns
-        else df_missions_filtre[cols_m],
-        use_container_width=True,
-        hide_index=True
-    )
-
-# ── Tab Stats ─────────────────────────────────────────────────────────────────
-with tab_stats:
-    st.markdown('<div class="section-title">📊 Analyse des lavages</div>', unsafe_allow_html=True)
-
-    if df_lavages_match.empty:
-        st.info("Pas de données pour les statistiques.")
-    else:
-        col_s1, col_s2 = st.columns(2)
-
-        with col_s1:
-            st.markdown("**Répartition par station**")
-            st.bar_chart(
-                station_counts.set_index("Nom 1")["Nb lavages"].head(10)
-            )
-
-        with col_s2:
-            st.markdown("**Produits transportés (missions concernées)**")
-            prod_counts = df_missions_filtre["Produit"].value_counts().head(10)
-            st.bar_chart(prod_counts)
-
-        # Chauffeurs les plus actifs
-        if "Chauffeur" in df_lavages_match.columns:
-            st.markdown("**Top chauffeurs (lavages)**")
-            chauf = df_lavages_match["Chauffeur"].value_counts().head(10).reset_index()
-            chauf.columns = ["Chauffeur", "Nb lavages"]
-            st.dataframe(chauf, hide_index=True, use_container_width=True)
-
-        # Evol temporelle par station
-        if "Date" in df_lavages_match.columns:
-            st.markdown("**Évolution mensuelle des lavages**")
-
-            # Sélecteur station
-            stations_dispo = ["Toutes les stations"] + sorted(
-                df_lavages_match["Nom 1"].dropna().unique().tolist()
-            )
-            station_sel = st.selectbox("📍 Choisir une station", stations_dispo, key="stat_station")
-
-            df_tmp = df_lavages_match.copy()
-            if station_sel != "Toutes les stations":
-                df_tmp = df_tmp[df_tmp["Nom 1"] == station_sel]
-
-            df_tmp["Mois"] = pd.to_datetime(df_tmp["Date"], errors="coerce").dt.to_period("M").astype(str)
-            monthly = df_tmp.groupby("Mois").size().reset_index(name="Nb lavages")
-            st.bar_chart(monthly.set_index("Mois"))
-
-            # KPI station sélectionnée
-            if station_sel != "Toutes les stations" and not df_tmp.empty:
-                pct_total = len(df_tmp) / len(df_lavages_match) * 100
-                avg_month = len(df_tmp) / max(monthly["Mois"].nunique(), 1)
-                sc1, sc2, sc3 = st.columns(3)
-                sc1.metric("Total lavages", len(df_tmp))
-                sc2.metric("% du total", f"{pct_total:.1f}%")
-                sc3.metric("Moy / mois", f"{avg_month:.1f}")
+# ─── Export de la recherche ──────────────────────────────────────────────────
+if center and (not df_proche.empty or not df_pistes.empty):
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        if not df_proche.empty:
+            df_proche.drop(columns=["_cle"]).to_excel(xw, sheet_name="Stations connues", index=False)
+        if not df_pistes.empty:
+            df_pistes.drop(columns=["deja_connue"]).to_excel(xw, sheet_name="Nouvelles pistes", index=False)
+    st.download_button("📥 Exporter cette recherche (Excel)", buf.getvalue(),
+                       file_name=f"lavages_autour_{center['lat']:.3f}_{center['lon']:.3f}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
