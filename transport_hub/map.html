@@ -374,6 +374,16 @@
         .dot-pl   { background: var(--red); }
         .toggle-btn .badge-loading { font-size: 12px; color: var(--sub); font-variant-numeric: tabular-nums; }
 
+
+        /* ── Choix du fond de carte ── */
+        .seg { display: flex; background: var(--soft); border-radius: 980px; padding: 3px; }
+        .seg button { border: none; background: transparent; padding: 6px 14px; border-radius: 980px;
+            font-size: 13.5px; font-weight: 500; color: var(--text); cursor: pointer; white-space: nowrap;
+            transition: background .15s, box-shadow .15s; }
+        .seg button.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.04); }
+        .lp-sep { width: .5px; align-self: stretch; margin: 6px 4px; background: rgba(0,0,0,.14); }
+        #layer-panel { align-items: center; }
+
         :focus-visible { outline: 3px solid rgba(0,113,227,.45); outline-offset: 2px; }
         .ep-input:focus-visible, #search-input:focus-visible, .fy-search input:focus-visible { outline: none; }
 
@@ -530,6 +540,11 @@
     </div>
 
     <div id="layer-panel" class="glass">
+        <div class="seg" id="fond-seg" role="group" aria-label="Fond de carte">
+            <button data-fond="plan" class="on">Plan</button>
+            <button data-fond="satellite">Satellite</button>
+        </div>
+        <span class="lp-sep"></span>
         <button class="toggle-btn" id="toggle-road" onclick="toggleLayer('road')"
                 title="Colorier autoroutes / nationales / départementales">
             <span class="toggle-dot dot-road"></span>
@@ -2549,6 +2564,86 @@
             win.addEventListener('resize', apply);
             // Streamlit finit de poser sa mise en page après le premier rendu.
             [200, 600, 1500].forEach(d => setTimeout(apply, d));
+        })();
+    </script>
+    <script>
+        // ═══════════════════════════════════════════════════════
+        //  FOND DE CARTE : PLAN / SATELLITE
+        //  Ajout indépendant : ne modifie aucune fonction existante.
+        //  Satellite = imagerie Esri + libellés Esri + frontières
+        //  renforcées (Natural Earth), sous le tracé et les couches PL.
+        // ═══════════════════════════════════════════════════════
+        (function () {
+            const ESRI = s => `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`;
+            const BORDERS_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson';
+            const SAT_LAYERS = ['sat-imagery', 'sat-ref', 'sat-border-halo', 'sat-border-line'];
+            const seg = document.getElementById('fond-seg');
+
+            let fond = 'plan';
+            try { fond = localStorage.getItem('cb-carte-fond') === 'satellite' ? 'satellite' : 'plan'; } catch (e) { }
+            let pret = false, frontieresChargees = false;
+
+            function majBoutons() {
+                seg.querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.fond === fond));
+            }
+
+            async function chargerFrontieres() {
+                if (frontieresChargees) return;
+                frontieresChargees = true;
+                try {
+                    const r = await fetch(BORDERS_URL);
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    map.getSource('sat-borders').setData(await r.json());
+                } catch (e) {
+                    frontieresChargees = false;   // nouvel essai au prochain passage en satellite
+                    console.warn('Frontières indisponibles:', e);
+                }
+            }
+
+            function appliquer() {
+                majBoutons();
+                if (!pret) return;
+                const vis = fond === 'satellite' ? 'visible' : 'none';
+                SAT_LAYERS.forEach(id => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis); });
+                if (fond === 'satellite') chargerFrontieres();
+            }
+
+            // Enregistré après celui du script principal : ses couches existent déjà ici.
+            map.on('load', () => {
+                const sous = map.getLayer('originalRouteLayer') ? 'originalRouteLayer' : undefined;
+
+                map.addSource('sat-imagery', { type: 'raster', tiles: [ESRI('World_Imagery')], tileSize: 256,
+                    maxzoom: 19, attribution: 'Imagerie © Esri, Maxar, Earthstar Geographics' });
+                map.addLayer({ id: 'sat-imagery', type: 'raster', source: 'sat-imagery',
+                    layout: { visibility: 'none' } }, sous);
+
+                map.addSource('sat-ref', { type: 'raster', tiles: [ESRI('Reference/World_Boundaries_and_Places')],
+                    tileSize: 256, maxzoom: 19, attribution: '© Esri' });
+                map.addLayer({ id: 'sat-ref', type: 'raster', source: 'sat-ref',
+                    layout: { visibility: 'none' } }, sous);
+
+                map.addSource('sat-borders', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+                const larg = k => ['interpolate', ['linear'], ['zoom'], 4, 1.6 * k, 8, 2.6 * k, 12, 3.4 * k];
+                map.addLayer({ id: 'sat-border-halo', type: 'line', source: 'sat-borders',
+                    layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+                    paint: { 'line-color': '#000000', 'line-width': larg(2.6), 'line-opacity': .7 } }, sous);
+                map.addLayer({ id: 'sat-border-line', type: 'line', source: 'sat-borders',
+                    layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' },
+                    paint: { 'line-color': '#ffd54f', 'line-width': larg(1) } }, sous);
+
+                pret = true;
+                appliquer();
+            });
+
+            seg.addEventListener('click', e => {
+                const b = e.target.closest('button[data-fond]');
+                if (!b || b.dataset.fond === fond) return;
+                fond = b.dataset.fond;
+                try { localStorage.setItem('cb-carte-fond', fond); } catch (err) { }
+                appliquer();
+            });
+
+            majBoutons();
         })();
     </script>
 </body>
