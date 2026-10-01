@@ -304,6 +304,25 @@ def fetch_new_stations(lat, lon, radius_km, use_osm, google_key):
     return {"trouves": trouves, "osm_erreur": osm_erreur, "duree": time.time() - t0}
 
 
+
+# ─── Fond de carte (sans clé API) ────────────────────────────────────────────
+ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/{}/MapServer/tile/{{z}}/{{y}}/{{x}}"
+
+
+def base_map(location, zoom):
+    """Fond sombre Esri + noms de lieux, avec bascule vers OpenStreetMap clair."""
+    m = folium.Map(location=location, zoom_start=zoom, tiles=None, control_scale=True)
+    folium.TileLayer(
+        tiles=ESRI.format("World_Dark_Gray_Base"), attr="Tiles © Esri", name="Sombre",
+        max_native_zoom=16, max_zoom=19,
+    ).add_to(m)
+    folium.TileLayer(
+        tiles=ESRI.format("World_Dark_Gray_Reference"), attr="© Esri", name="Noms des lieux",
+        overlay=True, control=False, max_native_zoom=16, max_zoom=19,
+    ).add_to(m)
+    folium.TileLayer("OpenStreetMap", name="Clair (OpenStreetMap)", show=False).add_to(m)
+    return m
+
 # ─── Chargement ──────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def load_excel(b: bytes) -> pd.DataFrame:
@@ -520,20 +539,19 @@ if center:
 
 # ─── Carte (affichée tout de suite) ──────────────────────────────────────────
 if center:
-    m = folium.Map(location=[center["lat"], center["lon"]], zoom_start=9, tiles="CartoDB dark_matter")
+    m = base_map([center["lat"], center["lon"]], 9)
     folium.Circle([center["lat"], center["lon"]], radius=rayon * 1000,
                   color="#4a90d9", weight=1, fill=True, fill_opacity=0.04).add_to(m)
     folium.Marker([center["lat"], center["lon"]], tooltip=center["label"],
                   icon=folium.Icon(color="black", icon="crosshairs", prefix="fa")).add_to(m)
 elif not df_st_geo.empty:
-    m = folium.Map(location=[df_st_geo["lat"].mean(), df_st_geo["lon"].mean()], zoom_start=6,
-                   tiles="CartoDB dark_matter")
+    m = base_map([df_st_geo["lat"].mean(), df_st_geo["lon"].mean()], 6)
 else:
-    m = folium.Map(location=[49.8, 5.5], zoom_start=6, tiles="CartoDB dark_matter")
+    m = base_map([49.8, 5.5], 6)
 
 ids_proches = set(df_proche["_cle"]) if not df_proche.empty else set()
 for _, r in df_st_geo[~df_st_geo["_cle"].isin(ids_proches)].iterrows():
-    folium.CircleMarker([r["lat"], r["lon"]], radius=3, color="#5a7085", fill=True, fill_opacity=0.7,
+    folium.CircleMarker([r["lat"], r["lon"]], radius=3, color="#8aa4bc", fill=True, fill_opacity=0.8,
                         tooltip=f"{r['nom']} ({r['localite']})").add_to(m)
 
 if not df_proche.empty:
@@ -564,6 +582,7 @@ if not df_pistes.empty:
                       popup=folium.Popup(popup, max_width=320),
                       icon=folium.Icon(color="purple", icon="question", prefix="fa")).add_to(m)
 
+folium.LayerControl(position="topright", collapsed=True).add_to(m)
 st.caption("🖱️ Cliquez n'importe où sur la carte pour y placer le centre de recherche.")
 carte = st_folium(m, height=620, use_container_width=True, returned_objects=["last_clicked"], key="carte_lavages")
 st.markdown("<small>🟢 moins cher de la zone &nbsp;|&nbsp; 🟠 prix moyen &nbsp;|&nbsp; 🔴 plus cher &nbsp;|&nbsp; "
