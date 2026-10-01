@@ -320,22 +320,79 @@ def load_excel(b: bytes) -> pd.DataFrame:
     return df
 
 
+def dossier_norm(v) -> str:
+    """'D-012345 ' / '12345.0' / '012345' → '12345' (pour lier CA et lavages)."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return ""
+    s = re.sub(r"\.0+$", "", str(v).strip())
+    s = re.sub(r"\s+", "", s).upper()
+    s = s.lstrip("0")
+    return "" if s in ("", "NAN", "NONE") else s
+
+
+CHAMPS_CA = {
+    "dossier": ("N° de dossier *", ["N° DOSSIER", "N DOSSIER", "NO DOSSIER", "NUMERO DOSSIER", "N DE DOSSIER",
+                                    "DOSSIER", "REF DOSSIER"]),
+    "supplements": ("Suppléments (prix du lavage) *", ["SUPPLEMENTS", "SUPPLEMENT", "SUPPL", "SUPPLEMENTS HT"]),
+    "produit": ("Produit transporté", ["PRODUIT", "MARCHANDISE", "PRODUCT", "NATURE MARCHANDISE"]),
+}
+CA_REGLES = ["Additionner les lignes", "Garder la plus élevée"]
+
+
 @st.cache_data(show_spinner=False)
-def build_lavages(df_l: pd.DataFrame, df_m: pd.DataFrame | None):
+def build_lavages(df_l: pd.DataFrame, df_ca: pd.DataFrame | None, map_ca: tuple | None = None):
+    """
+    Lavages + fichier CA liés par N° de dossier.
+    Prix retenu : suppléments du CA (réparti si plusieurs lavages sur le même dossier),
+    à défaut la colonne Prix du fichier lavages. La source est tracée dans _prix_src.
+    """
     df = df_l.copy()
     for c in ["Nom 1", "Localité", "Code postal", "N° Dossier"]:
         if c in df.columns:
             df[c] = df[c].fillna("").str.strip()
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce", dayfirst=True) if "Date" in df.columns else pd.NaT
-    df["_prix"] = df["Prix"].apply(parse_prix) if "Prix" in df.columns else np.nan
+    df["_prix_lav"] = df["Prix"].apply(parse_prix) if "Prix" in df.columns else np.nan
     df["_pays"] = df["Pays"].fillna("").str.strip() if "Pays" in df.columns else ""
     df["_cle"] = df["Nom 1"].map(normalize) + "|" + df["Code postal"]
+    df["_dos"] = df["N° Dossier"].map(dossier_norm) if "N° Dossier" in df.columns else ""
+    df["_prix"] = df["_prix_lav"]
+    df["_prix_src"] = np.where(df["_prix_lav"].notna(), "Fichier lavages", "")
+    df["_sup_ca"] = np.nan
+    df["_lignes_ca"] = 0
+    df["_nb_lav_dossier"] = 1
 
-    if df_m is not None and {"N° Dossier", "Produit"}.issubset(df_m.columns) and "N° Dossier" in df.columns:
-        prod = df_m[["N° Dossier", "Produit"]].copy()
-        prod["N° Dossier"] = prod["N° Dossier"].str.strip()
-        prod = prod.drop_duplicates("N° Dossier")
-        df = df.merge(prod, on="N° Dossier", how="left")
+    if df_ca is None or not map_ca:
+        return df
+    mp = dict(map_ca)
+    if not mp.get("dossier"):
+        return df
+
+    ca = pd.DataFrame({"_dos": df_ca[mp["dossier"]].map(dossier_norm)})
+    if mp.get("produit"):
+        ca["_prod"] = df_ca[mp["produit"]].fillna("").astype(str).str.strip()
+    if mp.get("supplements"):
+        ca["_sup"] = df_ca[mp["supplements"]].map(parse_prix)
+    ca = ca[ca["_dos"] != ""]
+
+    if mp.get("produit"):
+        prod = ca[ca["_prod"] != ""].drop_duplicates("_dos").set_index("_dos")["_prod"]
+        df["Produit"] = df["_dos"].map(prod)
+
+    if mp.get("supplements"):
+        sup = ca[ca["_sup"] > 0]
+        regle = mp.get("regle") or CA_REGLES[0]
+        agg = sup.groupby("_dos")["_sup"].sum() if regle == CA_REGLES[0] else sup.groupby("_dos")["_sup"].max()
+        lignes = sup.groupby("_dos").size()
+        a_dos = df["_dos"] != ""
+        nb_lav = df[a_dos].groupby("_dos")["_dos"].transform("size")
+        df.loc[a_dos, "_nb_lav_dossier"] = nb_lav
+        df["_sup_ca"] = df["_dos"].map(agg)
+        df["_lignes_ca"] = df["_dos"].map(lignes).fillna(0).astype(int)
+        ok = df["_sup_ca"].notna() & a_dos
+        df.loc[ok, "_prix"] = df.loc[ok, "_sup_ca"] / df.loc[ok, "_nb_lav_dossier"]
+        df.loc[ok, "_prix_src"] = np.where(
+            df.loc[ok, "_nb_lav_dossier"] > 1,
+            "CA (réparti sur " + df.loc[ok, "_nb_lav_dossier"].astype(int).astype(str) + " lavages)", "CA")
     return df
 
 
@@ -372,11 +429,12 @@ CHAMPS_ANNUAIRE = {
 }
 
 
-def detect_colonnes(colonnes) -> dict:
+def detect_colonnes(colonnes, champs=None) -> dict:
     """Associe automatiquement les colonnes du fichier aux champs attendus."""
+    champs = champs or CHAMPS_ANNUAIRE
     norm = {c: normalize(c) for c in colonnes}
     pris, out = set(), {}
-    for champ, (_, candidats) in CHAMPS_ANNUAIRE.items():
+    for champ, (_, candidats) in champs.items():
         meilleur, score_max = None, 0
         for col, n in norm.items():
             if col in pris:
@@ -1282,8 +1340,9 @@ c1, c2 = st.columns(2)
 with c1:
     lavages_file = st.file_uploader("Historique des lavages (obligatoire)", type=["xlsx", "xls"], key="lavages",
                                     help="liste_lavages : N° Dossier, Date, Nom 1, Localité, Code postal, Prix…")
-    missions_file = st.file_uploader("Missions CA CIT (facultatif)", type=["xlsx", "xls"], key="missions",
-                                     help="Sert à afficher les prix par produit transporté")
+    missions_file = st.file_uploader("Fichier CA CIT (facultatif)", type=["xlsx", "xls"], key="missions",
+                                     help="Lié aux lavages par N° de dossier : suppléments = prix du lavage, "
+                                          "et produit transporté")
 with c2:
     annuaire_file = st.file_uploader("Adresses des stations (facultatif)", type=["xlsx", "xls"], key="annuaire",
                                      help="Annuaire : nom, adresse, CP, localité, téléphone…")
@@ -1327,7 +1386,31 @@ if df_a_raw is not None:
     else:
         df_ann = build_annuaire(df_a_raw, tuple(sorted(mapping.items())))
 
-df_lav = build_lavages(df_l_raw, df_m_raw)
+map_ca = None
+if df_m_raw is not None:
+    detect_ca = detect_colonnes(df_m_raw.columns, CHAMPS_CA)
+    options_ca = ["—"] + list(df_m_raw.columns)
+    m_ca = {}
+    with st.expander("Colonnes du fichier CA (détectées automatiquement, corrigez si besoin)",
+                     expanded=not {"dossier", "supplements"}.issubset(detect_ca)):
+        cols = st.columns(3)
+        for i, (champ, (lbl, _)) in enumerate(CHAMPS_CA.items()):
+            defaut = detect_ca.get(champ)
+            v = cols[i].selectbox(lbl, options_ca, index=options_ca.index(defaut) if defaut else 0, key=f"ca_{champ}")
+            m_ca[champ] = None if v == "—" else v
+        m_ca["regle"] = st.radio("Si un dossier a plusieurs lignes avec des suppléments", CA_REGLES,
+                                 horizontal=True, key="ca_regle")
+        st.caption(f"{len(df_m_raw)} ligne(s) dans le fichier CA.")
+    if "N° Dossier" not in df_l_raw.columns:
+        st.warning("Le fichier lavages n’a pas de colonne « N° Dossier » : impossible de le lier au CA.")
+    elif not m_ca["dossier"]:
+        st.warning("Indiquez la colonne du N° de dossier dans le fichier CA.")
+    else:
+        if not m_ca["supplements"]:
+            st.caption("Sans colonne Suppléments, le fichier CA ne sert qu’au produit transporté.")
+        map_ca = tuple(sorted(m_ca.items()))
+
+df_lav = build_lavages(df_l_raw, df_m_raw, map_ca)
 df_hist = build_stations(df_lav)
 if df_hist.empty:
     st.error("Aucune station exploitable dans l’historique (colonne Nom 1 vide).")
@@ -1422,6 +1505,42 @@ st.caption("Le fichier HTML s’ouvre dans n’importe quel navigateur, sans le 
            "Rechargez la base géocodée au prochain lancement : plus aucun géocodage à attendre.")
 
 # ─── Contrôles qualité ───────────────────────────────────────────────────────
+if map_ca and dict(map_ca).get("supplements"):
+    st.markdown('<div class="ap-section">Prix des lavages</div>', unsafe_allow_html=True)
+    src = df_lav["_prix_src"]
+    via_ca = src.str.startswith("CA")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Prix issus du CA", int(via_ca.sum()))
+    p2.metric("Prix du fichier lavages", int((src == "Fichier lavages").sum()))
+    p3.metric("Sans prix", int((src == "").sum()))
+    p4.metric("Répartis sur plusieurs lavages", int(src.str.contains("réparti").sum()))
+
+    det = ["N° Dossier", "Date", "Nom 1", "Localité"]
+    det = [c for c in det if c in df_lav.columns]
+    ecarts = df_lav[via_ca & df_lav["_prix_lav"].notna() & ((df_lav["_prix"] - df_lav["_prix_lav"]).abs() > 1)]
+    if not ecarts.empty:
+        with st.expander(f"Écarts entre le CA et la colonne Prix du fichier lavages ({len(ecarts)})"):
+            st.dataframe(ecarts[det + ["_prix", "_prix_lav", "_prix_src"]]
+                         .rename(columns={"_prix": "Prix retenu (CA)", "_prix_lav": "Prix fichier lavages",
+                                          "_prix_src": "Source"}),
+                         hide_index=True, use_container_width=True)
+    multi = df_lav[via_ca & ((df_lav["_nb_lav_dossier"] > 1) | (df_lav["_lignes_ca"] > 1))]
+    if not multi.empty:
+        with st.expander(f"Dossiers à vérifier : plusieurs lavages ou plusieurs lignes CA ({multi['_dos'].nunique()})"):
+            st.dataframe(multi[det + ["_lignes_ca", "_nb_lav_dossier", "_sup_ca", "_prix"]]
+                         .rename(columns={"_lignes_ca": "Lignes CA avec suppléments",
+                                          "_nb_lav_dossier": "Lavages sur le dossier",
+                                          "_sup_ca": "Suppléments CA", "_prix": "Prix retenu par lavage"})
+                         .sort_values(det[0] if det else "Prix retenu par lavage"),
+                         hide_index=True, use_container_width=True)
+            st.caption("Les suppléments d’un dossier sont répartis à parts égales entre ses lavages. "
+                       "Si un dossier contient d’autres suppléments que le lavage, le prix sera surestimé.")
+    sans = df_lav[src == ""]
+    if not sans.empty:
+        with st.expander(f"Lavages sans prix ({len(sans)})"):
+            st.dataframe(sans[det], hide_index=True, use_container_width=True)
+            st.caption("Dossier absent du CA, ou suppléments vides / à zéro, et pas de prix dans le fichier lavages.")
+
 if has_ann:
     st.markdown('<div class="ap-section">Rapprochement avec l’annuaire</div>', unsafe_allow_html=True)
     approchants = df_base[(df_base["rapprochement"].str.len() > 0) & (df_base["rapprochement"] != "exact")]
