@@ -795,18 +795,16 @@ const HAS_PROD = LAV.length > 0;
 const C = { vert: '#00a854', orange: '#f57c00', rouge: '#e53935', gris: '#78909c', ann: '#00acc1', piste: '#aa00ff', centre: '#e53935' };
 function esri(s) { return `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`; }
 const FONDS = {
-  'Clair': { layers: [['https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', '© OpenStreetMap contributors © CARTO', 20]],
-             front: '#003087', halo: '#ffffff', point: '#0057A8' },
-  'Sombre': { layers: [[esri('Canvas/World_Dark_Gray_Base'), 'Tiles © Esri', 16], [esri('Canvas/World_Dark_Gray_Reference'), '© Esri', 16]],
-              front: '#ffd54f', halo: '#000000', point: '#8ab4f8' },
   'Satellite': { layers: [[esri('World_Imagery'), 'Tiles © Esri', 18], [esri('Reference/World_Boundaries_and_Places'), '© Esri', 18]],
                  front: '#ffd54f', halo: '#000000', point: '#ffffff' },
+  'Sombre': { layers: [[esri('Canvas/World_Dark_Gray_Base'), 'Tiles © Esri', 16], [esri('Canvas/World_Dark_Gray_Reference'), '© Esri', 16]],
+              front: '#ffd54f', halo: '#000000', point: '#8ab4f8' },
 };
 const OSM_MAX = 100;
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 const NAME_RX = 'tank ?clean|tank ?wash|tankreinig|tankinnenreinig|tankwasch|tankreiniging|lavage.{0,12}citerne|nettoyage.{0,12}citerne|station de lavage poids|lavaggio.{0,6}cisterne|limpieza.{0,6}cisternas|cleaning station';
 
-const state = { center: null, rayon: 50, fond: 'Clair', borders: true, hors: true,
+const state = { center: null, rayon: 50, fond: 'Satellite', borders: true, hors: true,
                 pistes: {}, tab: 'proches', sort: { key: 'dist', dir: 1 }, filtre: '',
                 proches: [], used: [], ann: [], pis: [] };
 const $ = id => document.getElementById(id);
