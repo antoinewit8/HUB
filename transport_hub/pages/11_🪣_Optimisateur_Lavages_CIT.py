@@ -1,249 +1,76 @@
 """
-Page Streamlit : Optimisateur Lavages Citernes — vue carte plein écran
-- Panneau latéral (style Apple) : position, rayon, affichage, recherche de nouvelles stations, fichiers
-- La carte occupe la page ; synthèse et légende flottent par-dessus
-- Base unifiée : historique des lavages (prix) + annuaire des stations (adresses, téléphones…)
-- Nouvelles stations potentielles (OpenStreetMap, + Google Places si clé API), à la demande
-- Base géocodée exportable, rechargée comme référentiel
+Page Streamlit : Optimisateur Lavages Citernes
+- Préparation dans le HUB : historique des lavages + annuaire des stations → base unifiée géocodée
+- La carte s'ouvre dans un nouvel onglet, en plein écran façon Google Maps :
+  panneau à gauche (style Apple), synthèse en haut à droite, détail en bas sur demande
+- La carte est aussi téléchargeable en fichier HTML autonome (partage, usage hors HUB)
 
-Dépendances (requirements.txt) :
-    folium
-    streamlit-folium
+Plus besoin de folium ni de streamlit-folium pour cette page.
 """
 
 import io
 import re
 import json
-import time
 import math
 import html
 import difflib
 import unicodedata
 import urllib.request as ureq
 import urllib.parse as uparse
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import streamlit as st
-import folium
-from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
-st.set_page_config(
-    page_title="Lavages citernes",
-    page_icon="🪣",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Lavages citernes", page_icon="🪣", layout="wide")
 
-# ─── Style Apple (page + panneau latéral) ────────────────────────────────────
-APPLE_CSS = """
+PAGE_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
 :root {
-  --ap-bg: #f5f5f7;
-  --ap-card: #ffffff;
-  --ap-text: #1d1d1f;
-  --ap-sub: #6e6e73;
-  --ap-line: #d2d2d7;
-  --ap-soft: #e8e8ed;
-  --ap-blue: #0071e3;
-  --ap-blue-hover: #0077ed;
+  --ap-bg: #f5f5f7; --ap-text: #1d1d1f; --ap-sub: #6e6e73; --ap-line: #d2d2d7; --ap-soft: #e8e8ed; --ap-blue: #0071e3;
   --ap-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif;
 }
-
-/* Page */
 .stApp, [data-testid="stAppViewContainer"] { background: var(--ap-bg) !important; }
-.stApp, .stApp *:not([data-testid="stIconMaterial"]):not([class*="material-symbols"]):not(.material-icons) {
-  font-family: var(--ap-font);
-}
+[data-testid="stMain"] *:not([data-testid="stIconMaterial"]):not([class*="material-symbols"]),
+section.main *:not([data-testid="stIconMaterial"]):not([class*="material-symbols"]) { font-family: var(--ap-font); }
 [data-testid="stHeader"] { background: transparent !important; }
-.block-container, [data-testid="stMainBlockContainer"] {
-  max-width: 100% !important;
-  padding: 1rem 1.5rem 2rem 1.5rem !important;
-}
-[data-testid="stMain"] p, [data-testid="stMain"] li, [data-testid="stMain"] label,
-[data-testid="stMain"] h1, [data-testid="stMain"] h2, [data-testid="stMain"] h3,
+.block-container, [data-testid="stMainBlockContainer"] { max-width: 1100px !important; padding-top: 2.5rem !important; }
+[data-testid="stMain"] p, [data-testid="stMain"] label, [data-testid="stMain"] li,
 section.main p, section.main label { color: var(--ap-text); }
 [data-testid="stMain"] [data-testid="stCaptionContainer"] p { color: var(--ap-sub); }
 
-/* Carte : coins arrondis, ombre douce */
-[data-testid="stMain"] iframe {
-  border-radius: 18px;
-  box-shadow: 0 6px 30px rgba(0,0,0,.08), 0 0 0 .5px rgba(0,0,0,.06);
-}
+.ap-hero h1 { font-size: 48px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; color: var(--ap-text); margin: 0 0 .5rem; padding: 0; }
+.ap-hero p { font-size: 21px; line-height: 1.38; color: var(--ap-sub); margin: 0 0 1.5rem; max-width: 46ch; }
+.ap-section { font-size: 24px; font-weight: 600; letter-spacing: -0.015em; color: var(--ap-text);
+  border-top: 1px solid #e5e5ea; padding-top: 1.4rem; margin: 2rem 0 1rem; }
 
-/* Panneau latéral */
-[data-testid="stSidebar"] {
-  background: rgba(255,255,255,.88) !important;
-  backdrop-filter: saturate(180%) blur(20px);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-right: 1px solid rgba(0,0,0,.08);
-}
-[data-testid="stSidebar"][aria-expanded="true"] { min-width: 360px; max-width: 360px; }
-[data-testid="stSidebar"] > div, [data-testid="stSidebarContent"] { background: transparent !important; }
-[data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span,
-[data-testid="stSidebar"] li, [data-testid="stSidebar"] small { color: var(--ap-text); }
-[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p { color: var(--ap-sub) !important; font-size: 12.5px; }
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p { font-size: 13px; font-weight: 500; color: var(--ap-sub); }
+[data-testid="stMetric"] { background: #fff; border-radius: 18px; padding: 16px 18px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 0 0 .5px rgba(0,0,0,.06); }
+[data-testid="stMetricValue"] div, [data-testid="stMetricValue"] { font-weight: 600; letter-spacing: -0.02em; color: var(--ap-text); }
+[data-testid="stMetricLabel"] p { color: var(--ap-sub) !important; font-size: 13px; }
 
-.ap-title {
-  font-size: 30px; font-weight: 700; letter-spacing: -0.025em; line-height: 1.08;
-  color: var(--ap-text); margin: .25rem 0 .45rem 0;
-}
-.ap-sub { font-size: 15px; line-height: 1.42; color: var(--ap-sub); margin-bottom: .4rem; }
-.ap-section {
-  font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--ap-text);
-  border-top: 1px solid #e5e5ea; padding-top: 1.05rem; margin: 1.15rem 0 .55rem 0;
-}
-
-/* Champs */
-[data-testid="stSidebar"] [data-baseweb="input"],
-[data-testid="stSidebar"] [data-testid="stTextInputRootElement"],
-[data-testid="stSidebar"] [data-baseweb="select"] > div {
-  background: var(--ap-card) !important;
-  border: 1px solid var(--ap-line) !important;
-  border-radius: 12px !important;
-  transition: border-color .15s, box-shadow .15s;
-}
-[data-testid="stSidebar"] [data-baseweb="input"] > div,
-[data-testid="stSidebar"] [data-testid="stTextInputRootElement"] input { background: transparent !important; }
-[data-testid="stSidebar"] [data-baseweb="input"]:focus-within,
-[data-testid="stSidebar"] [data-testid="stTextInputRootElement"]:focus-within,
-[data-testid="stSidebar"] [data-baseweb="select"] > div:focus-within {
-  border-color: var(--ap-blue) !important;
-  box-shadow: 0 0 0 4px rgba(0,113,227,.18);
-}
-[data-testid="stSidebar"] input {
-  color: var(--ap-text) !important; -webkit-text-fill-color: var(--ap-text);
-  font-size: 15px !important;
-}
-[data-testid="stSidebar"] input::placeholder { color: #86868b !important; -webkit-text-fill-color: #86868b; }
-
-/* Boutons : pilules */
-[data-testid="stSidebar"] .stButton > button,
-[data-testid="stSidebar"] .stDownloadButton > button {
-  border-radius: 980px; border: none; min-height: 40px;
-  font-size: 15px; font-weight: 500;
-  background: var(--ap-soft); transition: background .15s, transform .1s;
-}
-[data-testid="stSidebar"] .stButton > button p,
-[data-testid="stSidebar"] .stDownloadButton > button p { color: var(--ap-blue) !important; font-weight: 500; }
-[data-testid="stSidebar"] .stButton > button:hover,
-[data-testid="stSidebar"] .stDownloadButton > button:hover { background: #dedee3; }
-[data-testid="stSidebar"] .stButton > button[kind="primary"],
-[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] { background: var(--ap-blue) !important; }
-[data-testid="stSidebar"] .stButton > button[kind="primary"] p,
-[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] p { color: #fff !important; }
-[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover,
-[data-testid="stSidebar"] [data-testid="stBaseButton-primary"]:hover { background: var(--ap-blue-hover) !important; }
-[data-testid="stSidebar"] .stButton > button:active { transform: scale(.98); }
-[data-testid="stSidebar"] .stButton > button:disabled { opacity: .45; }
-
-/* Choix du fond : contrôle segmenté */
-[data-testid="stSidebar"] [data-testid="stElementContainer"]:has([data-testid="stRadio"]),
-[data-testid="stSidebar"] .element-container:has(.stRadio),
-[data-testid="stSidebar"] [data-testid="stRadio"],
-[data-testid="stSidebar"] [data-testid="stRadio"] > div,
-[data-testid="stSidebar"] [data-testid="stRadioGroup"] { width: 100% !important; }
-[data-testid="stSidebar"] [role="radiogroup"] {
-  display: flex !important; flex-wrap: nowrap; gap: 0 !important; width: 100%;
-  background: var(--ap-soft); border-radius: 10px; padding: 3px;
-}
-[data-testid="stSidebar"] [role="radiogroup"] > div { flex: 1 1 0 !important; display: flex !important; }
-[data-testid="stSidebar"] [role="radiogroup"] label {
-  width: 100%;
-  flex: 1 1 0 !important; display: flex !important; justify-content: center !important;
-  margin: 0 !important; padding: 6px 4px !important; max-width: none !important;
-  border-radius: 8px; cursor: pointer; transition: background .15s, box-shadow .15s;
-}
-[data-testid="stSidebar"] label[data-baseweb="radio"] > div:first-of-type,
-[data-testid="stSidebar"] [data-testid="stRadioOption"] > div > div:not([data-testid="stMarkdownContainer"]) { display: none !important; }
-[data-testid="stSidebar"] [role="radiogroup"] label > div { padding-left: 0 !important; margin: 0 auto !important; }
-[data-testid="stSidebar"] [role="radiogroup"] label p { font-size: 13px; font-weight: 500; }
-[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
-  background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.04);
-}
-
-/* Interrupteurs : vert iOS quand activés */
-[data-testid="stSidebar"] [data-testid="stCheckbox"] label:has(input:checked) > div:first-of-type {
-  background: #34c759 !important;
-}
-[data-testid="stSidebar"] [data-testid="stCheckbox"] label:not(:has(input:checked)) > div:first-of-type {
-  background: #e9e9eb !important;
-}
-[data-testid="stSidebar"] [data-testid="stCheckbox"] label > div:first-of-type > div {
-  background: #fff !important; box-shadow: 0 1px 3px rgba(0,0,0,.25);
-}
-
-/* Étiquettes de sélection multiple : pilules grises */
-[data-baseweb="tag"], [data-tag] {
-  background: var(--ap-soft) !important; color: var(--ap-text) !important; border-radius: 980px !important;
-}
-[data-baseweb="tag"] *, [data-tag] * { color: var(--ap-text) !important; }
-
-/* Curseur */
-[data-testid="stSliderThumbValue"] p, [data-testid="stThumbValue"] { color: var(--ap-blue) !important; font-weight: 600; }
-[data-testid="stSidebar"] [data-testid="stSlider"] div[style*="translate(-50%, -50%)"],
-[data-testid="stSidebar"] [role="slider"] {
-  background: #fff !important; border: none !important;
-  box-shadow: 0 1px 4px rgba(0,0,0,.28), 0 0 0 .5px rgba(0,0,0,.08) !important;
-  width: 22px !important; height: 22px !important;
-}
-
-/* Dépliants et zones de dépôt */
-[data-testid="stSidebar"] [data-testid="stExpander"] details {
-  background: var(--ap-card); border: 1px solid #e5e5ea; border-radius: 14px;
-}
-[data-testid="stSidebar"] [data-testid="stExpander"] summary p { font-weight: 500; }
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] {
-  background: var(--ap-bg); border: 1px dashed #c7c7cc; border-radius: 12px;
-}
-[data-testid="stSidebar"] [data-testid="stFileUploaderDropzone"] button {
-  border-radius: 980px; background: #fff; border: 1px solid var(--ap-line);
-}
-
-/* Onglets sous la carte : contrôle segmenté */
-.stTabs [role="tablist"] {
-  gap: 2px !important; background: var(--ap-soft); border-radius: 10px; padding: 3px;
-  width: fit-content; border: none !important; box-shadow: none !important;
-}
-.stTabs [role="tab"] {
-  height: auto !important; padding: 6px 16px !important; border-radius: 8px;
-  background: transparent; border: none !important;
-}
-.stTabs [role="tab"] p { font-size: 13.5px; font-weight: 500; color: var(--ap-text) !important; }
-.stTabs [role="tab"][aria-selected="true"] { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12); }
-.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"],
-.stTabs .react-aria-SelectionIndicator { display: none !important; }
-
-.ap-h2 {
-  font-size: 28px; font-weight: 700; letter-spacing: -0.02em; color: var(--ap-text);
-  margin: 1.6rem 0 .8rem .2rem;
-}
-.ap-empty { text-align: center; padding: 18vh 1rem 0 1rem; }
-.ap-empty .t { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; color: var(--ap-text); line-height: 1.08; }
-.ap-empty .s { font-size: 19px; color: var(--ap-sub); margin-top: .8rem; }
+[data-testid="stFileUploaderDropzone"] { background: #fff; border: 1px dashed #c7c7cc; border-radius: 14px; }
+[data-testid="stFileUploaderDropzone"] button { border-radius: 980px; }
+[data-testid="stExpander"] details { background: #fff; border: 1px solid #e5e5ea; border-radius: 14px; }
+[data-testid="stMain"] .stDownloadButton > button, [data-testid="stMain"] .stButton > button {
+  border-radius: 980px; border: none; background: var(--ap-soft); min-height: 42px; padding: 0 20px; }
+[data-testid="stMain"] .stDownloadButton > button p, [data-testid="stMain"] .stButton > button p { color: var(--ap-blue) !important; font-weight: 500; }
+[data-testid="stMain"] .stDownloadButton > button:hover { background: #dedee3; }
+[data-testid="stMain"] iframe { border: none; }
 </style>
 """
-st.markdown(APPLE_CSS, unsafe_allow_html=True)
+st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
 UA = {"User-Agent": "CB-Transport-Hub/1.0"}
-OSM_RAYON_MAX = 100  # km — au-delà, Overpass devient trop lent
 
 # Statuts de la base unifiée
 S_HIST_ANN = "Utilisée · dans l'annuaire"
 S_HIST = "Utilisée · hors annuaire"
 S_HIST_SEUL = "Utilisée"
 S_ANN = "Annuaire · jamais utilisée"
-
-# Couleurs des marqueurs
-C_VERT, C_ORANGE, C_ROUGE, C_GRIS = "#00a854", "#f57c00", "#e53935", "#78909c"
-C_ANNUAIRE = "#00acc1"
-C_PISTE = "#aa00ff"
-C_CENTRE = "#e53935"
-
 
 # ─── Utilitaires ─────────────────────────────────────────────────────────────
 def normalize(text) -> str:
@@ -434,155 +261,8 @@ PRECISION_LBL = {
 }
 
 
-# ─── Recherche de nouvelles stations (sans cache Streamlit : appelées en threads) ─
-NAME_RX = (
-    "tank ?clean|tank ?wash|tankreinig|tankinnenreinig|tankwasch|tankreiniging|"
-    "lavage.{0,12}citerne|nettoyage.{0,12}citerne|station de lavage poids|"
-    "lavaggio.{0,6}cisterne|limpieza.{0,6}cisternas|cleaning station"
-)
-OVERPASS_URLS = [
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-]
 
-
-def search_osm(lat: float, lon: float, radius_km: float):
-    """Bbox au lieu de 'around' (beaucoup plus rapide), rayon plafonné."""
-    r = min(radius_km, OSM_RAYON_MAX)
-    dlat = r / 111.0
-    dlon = r / (111.0 * max(math.cos(math.radians(lat)), 0.1))
-    s, w, n, e = lat - dlat, lon - dlon, lat + dlat, lon + dlon
-    query = f"""
-[out:json][timeout:25][bbox:{s:.4f},{w:.4f},{n:.4f},{e:.4f}];
-(
-  nw["name"~"{NAME_RX}",i][!"highway"];
-  nw["amenity"="vehicle_wash"]["hgv"~"yes|designated|only"];
-  nw["amenity"="truck_wash"];
-);
-out center tags;
-"""
-    body = uparse.urlencode({"data": query}).encode()
-    data = None
-    for url in OVERPASS_URLS:
-        try:
-            data = _post_json(url, body, {"Content-Type": "application/x-www-form-urlencoded"}, timeout=30)
-            break
-        except Exception:
-            continue
-    if data is None:
-        return None  # None = erreur, [] = aucun résultat
-
-    out = []
-    for el in data.get("elements", []):
-        t = el.get("tags", {})
-        la = el.get("lat") or el.get("center", {}).get("lat")
-        lo = el.get("lon") or el.get("center", {}).get("lon")
-        if la is None or lo is None:
-            continue
-        rue = " ".join(x for x in [t.get("addr:street"), t.get("addr:housenumber")] if x)
-        ville = " ".join(x for x in [t.get("addr:postcode"), t.get("addr:city")] if x)
-        out.append({
-            "nom": t.get("name") or t.get("operator") or "Station de lavage PL (sans nom)",
-            "adresse": ", ".join(x for x in [rue, ville] if x),
-            "lat": float(la), "lon": float(lo),
-            "telephone": t.get("phone") or t.get("contact:phone") or "",
-            "site": t.get("website") or t.get("contact:website") or "",
-            "source": "OpenStreetMap",
-        })
-    return out
-
-
-def get_google_key():
-    try:
-        return st.secrets.get("GOOGLE_PLACES_API_KEY")
-    except Exception:
-        return None
-
-
-GOOGLE_TERMES = ["tank cleaning station", "lavage citerne camion", "Tankreinigung", "tankreiniging"]
-
-
-def _google_terme(terme, lat, lon, radius_km, api_key):
-    headers = {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": (
-            "places.id,places.displayName,places.formattedAddress,places.location,"
-            "places.nationalPhoneNumber,places.websiteUri"
-        ),
-    }
-    body = json.dumps({
-        "textQuery": terme,
-        "pageSize": 20,
-        "locationBias": {"circle": {
-            "center": {"latitude": lat, "longitude": lon},
-            "radius": float(min(radius_km * 1000, 50000)),
-        }},
-    }).encode()
-    try:
-        data = _post_json("https://places.googleapis.com/v1/places:searchText", body, headers, timeout=12)
-    except Exception:
-        return []
-    out = []
-    for p in data.get("places", []):
-        loc = p.get("location", {})
-        if "latitude" not in loc:
-            continue
-        out.append({
-            "nom": p.get("displayName", {}).get("text", "?"),
-            "adresse": p.get("formattedAddress", ""),
-            "lat": float(loc["latitude"]), "lon": float(loc["longitude"]),
-            "telephone": p.get("nationalPhoneNumber", ""),
-            "site": p.get("websiteUri", ""),
-            "source": "Google",
-        })
-    return out
-
-
-def fetch_new_stations(lat, lon, radius_km, use_osm, google_key):
-    """Lance OSM et tous les termes Google en parallèle."""
-    t0 = time.time()
-    trouves, osm_erreur = [], False
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        f_osm = ex.submit(search_osm, lat, lon, radius_km) if use_osm else None
-        f_g = [ex.submit(_google_terme, t, lat, lon, radius_km, google_key) for t in GOOGLE_TERMES] if google_key else []
-        for f in f_g:
-            trouves += f.result()
-        if f_osm is not None:
-            res = f_osm.result()
-            if res is None:
-                osm_erreur = True
-            else:
-                trouves += res
-    return {"trouves": trouves, "osm_erreur": osm_erreur, "duree": time.time() - t0}
-
-
-# ─── Fonds de carte et frontières ────────────────────────────────────────────
-ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/{}/MapServer/tile/{{z}}/{{y}}/{{x}}"
-FONDS = {
-    "Clair": {
-        "couches": [
-            ("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
-             "© OpenStreetMap contributors © CARTO", False, 20),
-        ],
-        "frontiere": "#003087", "halo": "#ffffff", "point": "#0057A8",
-    },
-    "Sombre": {
-        "couches": [
-            (ESRI.format("Canvas/World_Dark_Gray_Base"), "Tiles © Esri", False, 16),
-            (ESRI.format("Canvas/World_Dark_Gray_Reference"), "© Esri", True, 16),
-        ],
-        "frontiere": "#ffd54f", "halo": "#000000", "point": "#8ab4f8",
-    },
-    "Satellite": {
-        "couches": [
-            (ESRI.format("World_Imagery"), "Tiles © Esri", False, 18),
-            (ESRI.format("Reference/World_Boundaries_and_Places"), "© Esri", True, 18),
-        ],
-        "frontiere": "#ffd54f", "halo": "#000000", "point": "#ffffff",
-    },
-}
-
+# ─── Frontières (Natural Earth) ──────────────────────────────────────────────
 BORDER_URLS = [
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_boundary_lines_land.geojson",
     "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_boundary_lines_land.geojson",
@@ -630,102 +310,6 @@ def load_borders():
                 "geometry": {"type": "MultiLineString", "coordinates": lignes},
             }]}
     raise RuntimeError("frontières indisponibles")
-
-
-CSS_CARTE = """
-<style>
-.cb-icon { background: none; border: none; }
-.cb-pill {
-  display: inline-block; white-space: nowrap; transform: translate(-50%, -50%);
-  padding: 2px 8px; border-radius: 11px; border: 2px solid #fff;
-  font: 600 12px/1.25 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
-  color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.35); cursor: pointer;
-}
-.cb-carre {
-  width: 14px; height: 14px; transform: translate(-50%, -50%);
-  background: #00acc1; border: 2px solid #fff; border-radius: 4px;
-  box-shadow: 0 2px 6px rgba(0,0,0,.35); cursor: pointer;
-}
-.cb-losange {
-  width: 13px; height: 13px; transform: translate(-50%, -50%) rotate(45deg);
-  background: #aa00ff; border: 2px solid #fff; border-radius: 2px;
-  box-shadow: 0 2px 6px rgba(0,0,0,.35); cursor: pointer;
-}
-.cb-centre {
-  width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 50%;
-  border: 5px solid #e53935; background: rgba(255,255,255,.95);
-  box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(0,0,0,.45);
-}
-
-/* Contrôles Leaflet façon Apple */
-.leaflet-bar { border: none !important; border-radius: 12px !important; overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.08) !important; }
-.leaflet-bar a { background: rgba(255,255,255,.88) !important; color: #1d1d1f !important;
-  border-bottom: .5px solid rgba(0,0,0,.1) !important; width: 34px !important; height: 34px !important;
-  line-height: 34px !important; }
-.leaflet-control-attribution { background: rgba(255,255,255,.72) !important; border-radius: 8px 0 0 0;
-  font: 10px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; color: #6e6e73; }
-.leaflet-control-scale-line { background: rgba(255,255,255,.72); border-color: #6e6e73; color: #1d1d1f;
-  font: 10px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
-.leaflet-popup-content-wrapper { border-radius: 14px; box-shadow: 0 10px 34px rgba(0,0,0,.18); }
-.leaflet-popup-content {
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
-  color: #1d1d1f; margin: 14px 16px;
-}
-.leaflet-popup-content a { color: #0066cc; text-decoration: none; }
-.leaflet-tooltip { border-radius: 8px; border: none; box-shadow: 0 4px 14px rgba(0,0,0,.18);
-  font: 500 12px -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
-
-/* Panneaux flottants (verre dépoli) */
-.ap-glass {
-  position: absolute; z-index: 1000;
-  background: rgba(255,255,255,.80);
-  backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
-  border-radius: 18px; box-shadow: 0 10px 34px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.08);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
-  color: #1d1d1f;
-}
-.ap-info { top: 14px; right: 14px; width: 270px; padding: 16px 18px 14px 18px; }
-.ap-info .k { font-size: 12px; font-weight: 500; color: #6e6e73; }
-.ap-info .t { font-size: 17px; font-weight: 600; letter-spacing: -.01em; line-height: 1.25; margin: 2px 0 12px 0;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.ap-info .s { font-size: 12.5px; color: #6e6e73; line-height: 1.4; }
-.ap-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 12px; }
-.ap-stats .n { font-size: 26px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
-.ap-stats .l { font-size: 11.5px; color: #6e6e73; }
-.ap-row { display: flex; justify-content: space-between; align-items: baseline;
-  border-top: .5px solid rgba(0,0,0,.12); padding: 8px 0 2px 0; font-size: 13px; }
-.ap-row span { color: #6e6e73; }
-.ap-row b { font-weight: 600; }
-.ap-row b.vert { color: #00a854; }
-.ap-leg { left: 14px; bottom: 52px; padding: 10px 14px; font-size: 11.5px;
-  display: grid; grid-template-columns: auto auto; gap: 5px 16px; }
-.ap-leg div { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
-.ap-leg i { display: inline-block; flex: none; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
-</style>
-"""
-
-
-def icone(cls, texte="", bg=None):
-    style = f' style="background:{bg}"' if bg else ""
-    return folium.DivIcon(html=f'<div class="{cls}"{style}>{texte}</div>',
-                          icon_size=(0, 0), icon_anchor=(0, 0), class_name="cb-icon")
-
-
-def base_map(fond: str, frontieres):
-    cfg = FONDS[fond]
-    m = folium.Map(location=[49.8, 5.5], zoom_start=6, tiles=None, control_scale=True)
-    for url, attr, overlay, natif in cfg["couches"]:
-        folium.TileLayer(tiles=url, attr=attr, name=fond, overlay=overlay, control=False,
-                         max_native_zoom=natif, max_zoom=19).add_to(m)
-    if frontieres is not None:
-        # Halo large puis trait net : la frontière ressort sur n'importe quel fond
-        folium.GeoJson(frontieres, name="Frontières halo", control=False,
-                       style_function=lambda f, c=cfg["halo"]: {"color": c, "weight": 7, "opacity": 0.75}).add_to(m)
-        folium.GeoJson(frontieres, name="Frontières", control=False,
-                       style_function=lambda f, c=cfg["frontiere"]: {"color": c, "weight": 2.6, "opacity": 1}).add_to(m)
-    m.get_root().header.add_child(folium.Element(CSS_CARTE))
-    return m
 
 
 # ─── Chargement ──────────────────────────────────────────────────────────────
@@ -897,37 +481,6 @@ def build_base(hist: pd.DataFrame, ann: pd.DataFrame | None) -> pd.DataFrame:
     return base.drop_duplicates("_cle").reset_index(drop=True)
 
 
-def prepare_pistes(trouves, center, rayon, df_geo):
-    """Filtre au rayon, dédoublonne, et marque ce qui est déjà dans la base (historique + annuaire)."""
-    if not trouves:
-        return pd.DataFrame()
-    df_new = pd.DataFrame(trouves)
-    df_new["dist_km"] = haversine(center["lat"], center["lon"], df_new["lat"], df_new["lon"])
-    df_new = df_new[df_new["dist_km"] <= rayon]
-    if df_new.empty:
-        return df_new
-
-    gardes = []
-    for _, r in df_new.iterrows():
-        if all(haversine(r["lat"], r["lon"], g["lat"], g["lon"]) > 0.15 for g in gardes):
-            gardes.append(r)
-    df_new = pd.DataFrame(gardes)
-
-    def deja_connue(r):
-        if df_geo.empty:
-            return ""
-        d = haversine(r["lat"], r["lon"], df_geo["lat"].values, df_geo["lon"].values)
-        proches = df_geo[d < 5].assign(_d=d[d < 5])
-        for _, k in proches.iterrows():
-            sim = similarite(normalize_nom(r["nom"]), normalize_nom(k["nom"]))
-            if k["_d"] < 0.4 or sim > 0.75:
-                return k["nom"]
-        return ""
-
-    df_new["deja_connue"] = df_new.apply(deja_connue, axis=1)
-    return df_new.sort_values("dist_km")
-
-
 def excel_auto(sheets: dict) -> bytes:
     """Export Excel multi-onglets avec largeurs de colonnes ajustées."""
     buf = io.BytesIO()
@@ -944,74 +497,803 @@ def excel_auto(sheets: dict) -> bytes:
 
 
 
-# ─── Panneaux flottants de la carte ──────────────────────────────────────────
-def section(c, titre):
-    c.markdown(f'<div class="ap-section">{titre}</div>', unsafe_allow_html=True)
 
 
-def panneau_info(center, rayon, n_hist, n_ann, n_pistes, prix_zone, moins_chere):
-    if not center:
-        return ('<div class="ap-glass ap-info"><div class="k">Aucune position</div>'
-                '<div class="t">Choisissez un point</div>'
-                '<div class="s">Tapez une adresse dans le panneau de gauche, ou cliquez directement sur la carte.</div>'
-                '</div>')
+# ─── Page HTML de la carte plein écran ───────────────────────────────────────
+APP_HTML = r'''<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lavages citernes</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%AA%A3%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root {
+  --bg: #f5f5f7; --card: #ffffff; --text: #1d1d1f; --sub: #6e6e73; --line: #d2d2d7; --soft: #e8e8ed;
+  --blue: #0071e3; --blue-h: #0077ed; --green: #34c759;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif;
+  --pw: 380px; --gap: 12px; --map-left: calc(var(--pw) + 2 * var(--gap));
+  --ease: cubic-bezier(.32, .72, 0, 1);
+}
+body.collapsed { --map-left: 0px; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; font-family: var(--font); color: var(--text);
+  background: var(--bg); -webkit-font-smoothing: antialiased; }
+button, input { font-family: var(--font); }
+#map { position: absolute; inset: 0; z-index: 0; background: #e5e3df; }
+.glass { background: rgba(255,255,255,.82); backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  box-shadow: 0 10px 34px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.08); }
 
-    def stat(v, l):
-        return f'<div><div class="n">{v}</div><div class="l">{l}</div></div>'
+/* ── Panneau latéral ── */
+#panel { position: absolute; z-index: 1001; top: var(--gap); left: var(--gap); bottom: var(--gap);
+  width: var(--pw); max-width: calc(100vw - 2 * var(--gap)); border-radius: 20px; overflow-y: auto;
+  padding: 24px 22px 28px; background: rgba(255,255,255,.9); transition: transform .34s var(--ease); }
+body.collapsed #panel { transform: translateX(calc(-100% - 2 * var(--gap))); }
+#collapse { position: absolute; z-index: 1002; top: 30px; left: calc(var(--pw) + var(--gap)); width: 24px; height: 52px;
+  border: none; border-radius: 0 12px 12px 0; cursor: pointer; color: var(--sub);
+  display: flex; align-items: center; justify-content: center; transition: left .34s var(--ease); }
+#collapse svg { transition: transform .34s var(--ease); }
+body.collapsed #collapse { left: 0; }
+body.collapsed #collapse svg { transform: rotate(180deg); }
+.title { font-size: 30px; font-weight: 700; letter-spacing: -.025em; line-height: 1.08; margin: 0 0 6px; }
+.lede { font-size: 15px; line-height: 1.42; color: var(--sub); margin: 0; }
+.sec { border-top: 1px solid #e5e5ea; margin-top: 20px; padding-top: 18px; }
+.sec h2 { font-size: 17px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 12px; }
+.lbl { font-size: 13px; font-weight: 500; color: var(--sub); margin: 0 0 8px; }
+.hint { font-size: 12.5px; color: var(--sub); line-height: 1.45; margin: 10px 0 0; }
 
-    stats = stat(n_hist, "utilisées") + stat(n_ann, "annuaire") + stat(n_pistes, "pistes")
-    prix = f"{prix_zone:.0f} €" if pd.notna(prix_zone) else "—"
-    lignes = f'<div class="ap-row"><span>Prix médian de la zone</span><b>{prix}</b></div>'
-    if moins_chere is not None:
-        lignes += (f'<div class="ap-row"><span>Moins chère</span><b class="vert">{moins_chere["prix_med"]:.0f} €</b></div>'
-                   f'<div class="s">{esc(moins_chere["nom"])}</div>')
-    return (f'<div class="ap-glass ap-info"><div class="k">Rayon de {rayon} km autour de</div>'
-            f'<div class="t">{esc(center["label"])}</div><div class="ap-stats">{stats}</div>{lignes}</div>')
+/* Recherche */
+.search { position: relative; }
+.search input { width: 100%; height: 46px; border: 1px solid var(--line); border-radius: 12px; background: #fff;
+  padding: 0 40px 0 40px; font-size: 15px; color: var(--text); outline: none;
+  transition: border-color .15s, box-shadow .15s; }
+.search input::placeholder { color: #86868b; }
+.search input:focus { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(0,113,227,.18); }
+.search .ico { position: absolute; left: 14px; top: 15px; color: #86868b; pointer-events: none; }
+.search .clear { position: absolute; right: 10px; top: 12px; width: 22px; height: 22px; border-radius: 50%;
+  border: none; background: #c7c7cc; color: #fff; cursor: pointer; display: none; font-size: 13px; line-height: 22px; padding: 0; }
+.search.filled .clear { display: block; }
+#results { list-style: none; margin: 8px 0 0; padding: 5px; background: #fff; border-radius: 14px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.06); display: none; }
+#results.show { display: block; }
+#results li { padding: 9px 12px; border-radius: 9px; cursor: pointer; font-size: 14px; line-height: 1.3; }
+#results li small { display: block; color: var(--sub); font-size: 12px; margin-top: 2px; }
+#results li:hover, #results li.active { background: var(--bg); }
+#results li.vide { color: var(--sub); cursor: default; }
+#results li.vide:hover { background: none; }
+
+/* Curseur */
+.range-head { display: flex; justify-content: space-between; align-items: baseline; margin-top: 18px; }
+.range-head b { color: var(--blue); font-weight: 600; font-size: 15px; }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 2px;
+  margin: 16px 0 4px; outline: none; cursor: pointer;
+  background: linear-gradient(to right, var(--blue) var(--p, 25%), var(--soft) var(--p, 25%)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 26px; height: 26px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 5px rgba(0,0,0,.28), 0 0 0 .5px rgba(0,0,0,.08); }
+input[type=range]::-moz-range-thumb { width: 26px; height: 26px; border: none; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 5px rgba(0,0,0,.28), 0 0 0 .5px rgba(0,0,0,.08); }
+.range-scale { display: flex; justify-content: space-between; font-size: 11.5px; color: #86868b; }
+
+/* Contrôle segmenté */
+.seg { display: flex; background: var(--soft); border-radius: 10px; padding: 3px; }
+.seg button { flex: 1; border: none; background: transparent; padding: 7px 10px; border-radius: 8px;
+  font-size: 13px; font-weight: 500; color: var(--text); cursor: pointer; white-space: nowrap;
+  transition: background .15s, box-shadow .15s; }
+.seg button.on { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.04); }
+
+/* Interrupteurs */
+.rows { margin-top: 10px; }
+.row { display: flex; justify-content: space-between; align-items: center; padding: 11px 0; font-size: 15px; }
+.row + .row { border-top: .5px solid #e5e5ea; }
+.sw { position: relative; width: 51px; height: 31px; flex: none; }
+.sw input { position: absolute; opacity: 0; width: 0; height: 0; }
+.sw span { position: absolute; inset: 0; background: #e9e9eb; border-radius: 31px; cursor: pointer; transition: background .2s; }
+.sw span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+  background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.16); transition: transform .2s var(--ease); }
+.sw input:checked + span { background: var(--green); }
+.sw input:checked + span::after { transform: translateX(20px); }
+.sw input:focus-visible + span { box-shadow: 0 0 0 4px rgba(0,113,227,.25); }
+
+/* Boutons */
+.btn { width: 100%; height: 44px; border: none; border-radius: 980px; font-size: 15px; font-weight: 500;
+  cursor: pointer; transition: background .15s, transform .1s, opacity .15s; }
+.btn.primary { background: var(--blue); color: #fff; }
+.btn.primary:hover { background: var(--blue-h); }
+.btn.secondary { background: var(--soft); color: var(--blue); }
+.btn.secondary:hover { background: #dedee3; }
+.btn:active { transform: scale(.98); }
+.btn:disabled { opacity: .4; cursor: default; transform: none; }
+.btn + .btn { margin-top: 10px; }
+.facts { font-size: 13px; color: var(--sub); line-height: 1.6; margin: 0; }
+.facts b { color: var(--text); font-weight: 600; }
+
+/* ── Synthèse en haut à droite ── */
+#info { position: absolute; z-index: 1000; top: var(--gap); right: var(--gap); width: 280px; padding: 16px 18px 14px;
+  border-radius: 18px; }
+#info .k { font-size: 12px; font-weight: 500; color: var(--sub); }
+#info .t { font-size: 17px; font-weight: 600; letter-spacing: -.01em; line-height: 1.25; margin: 2px 0 12px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+#info .s { font-size: 12.5px; color: var(--sub); line-height: 1.4; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 12px; }
+.stats .n { font-size: 26px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; }
+.stats .l { font-size: 11.5px; color: var(--sub); }
+.kv { display: flex; justify-content: space-between; align-items: baseline; border-top: .5px solid rgba(0,0,0,.12);
+  padding: 8px 0 2px; font-size: 13px; }
+.kv span { color: var(--sub); }
+.kv b { font-weight: 600; }
+.kv b.vert { color: #00a854; }
+
+/* ── Légende ── */
+#legend { position: absolute; z-index: 999; left: max(var(--gap), var(--map-left)); bottom: var(--gap);
+  padding: 10px 14px; border-radius: 16px; font-size: 11.5px; display: grid; grid-template-columns: auto auto;
+  gap: 5px 16px; transition: left .34s var(--ease), opacity .2s; }
+#legend div { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+#legend i { display: inline-block; flex: none; border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+body.sheet-open #legend { opacity: 0; pointer-events: none; }
+
+/* ── Bouton « Détail » en bas ── */
+#chip { position: absolute; z-index: 1000; bottom: 22px;
+  left: calc(var(--map-left) + (100vw - var(--map-left)) / 2); transform: translateX(-50%);
+  border: none; border-radius: 980px; padding: 11px 20px; font-size: 14px; font-weight: 500; color: var(--text);
+  cursor: pointer; display: flex; align-items: center; gap: 8px;
+  transition: left .34s var(--ease), opacity .2s, transform .1s; }
+#chip:active { transform: translateX(-50%) scale(.97); }
+#chip .count { background: var(--blue); color: #fff; border-radius: 980px; padding: 1px 8px; font-size: 12px; font-weight: 600; }
+body.sheet-open #chip { opacity: 0; pointer-events: none; }
+
+/* ── Feuille de détail ── */
+#sheet { position: absolute; z-index: 1003; left: max(var(--gap), var(--map-left)); right: var(--gap); bottom: var(--gap);
+  height: min(48vh, 520px); border-radius: 20px; background: rgba(255,255,255,.96); display: flex; flex-direction: column;
+  transform: translateY(calc(100% + 40px)); transition: transform .4s var(--ease), left .34s var(--ease); }
+body.sheet-open #sheet { transform: translateY(0); }
+.grab { width: 38px; height: 5px; border-radius: 3px; background: #c7c7cc; margin: 8px auto 4px; }
+.sheet-head { display: flex; align-items: center; gap: 12px; padding: 6px 18px 12px; flex-wrap: wrap; }
+.sheet-head .seg { flex: none; }
+.sheet-head .grow { flex: 1; }
+.filter { position: relative; width: 240px; }
+.filter input { width: 100%; height: 34px; border-radius: 10px; border: none; background: var(--soft);
+  padding: 0 12px 0 32px; font-size: 13.5px; outline: none; color: var(--text); }
+.filter input:focus { box-shadow: 0 0 0 3px rgba(0,113,227,.25); }
+.filter svg { position: absolute; left: 10px; top: 10px; color: #86868b; }
+.small-btn { height: 34px; border: none; border-radius: 980px; padding: 0 16px; background: var(--soft);
+  color: var(--blue); font-size: 13.5px; font-weight: 500; cursor: pointer; }
+.small-btn:hover { background: #dedee3; }
+.close { width: 30px; height: 30px; border-radius: 50%; border: none; background: var(--soft); color: var(--sub);
+  cursor: pointer; font-size: 15px; line-height: 30px; padding: 0; }
+.tbl-wrap { flex: 1; overflow: auto; padding: 0 18px 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { position: sticky; top: 0; background: rgba(255,255,255,.98); text-align: left; font-weight: 600; color: var(--sub);
+  font-size: 12px; padding: 9px 10px; border-bottom: .5px solid var(--line); cursor: pointer; white-space: nowrap;
+  user-select: none; }
+th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+th .arr { color: var(--blue); }
+td { padding: 9px 10px; border-bottom: .5px solid #ececf0; white-space: nowrap; }
+tr.click { cursor: pointer; }
+tr.click:hover td { background: #f5f5f7; }
+td.min { background: #e3f6ea; font-weight: 600; color: #00753a; }
+td a { color: #0066cc; text-decoration: none; }
+.badge { display: inline-block; padding: 2px 9px; border-radius: 980px; font-size: 11.5px; font-weight: 500; }
+.b-used { background: #e8f1fc; color: #0057A8; }
+.b-ann { background: #e0f6f8; color: #00808f; }
+.b-hors { background: #fff1e0; color: #b45a00; }
+.empty { padding: 34px 0; text-align: center; color: var(--sub); font-size: 14px; }
+
+/* ── Marqueurs ── */
+.cb-icon { background: none; border: none; }
+.cb-pill { display: inline-block; white-space: nowrap; transform: translate(-50%, -50%); padding: 2px 8px;
+  border-radius: 11px; border: 2px solid #fff; font: 600 12px/1.25 var(--font); color: #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,.35); cursor: pointer; }
+.cb-carre { width: 14px; height: 14px; transform: translate(-50%, -50%); background: #00acc1; border: 2px solid #fff;
+  border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,.35); cursor: pointer; }
+.cb-losange { width: 13px; height: 13px; transform: translate(-50%, -50%) rotate(45deg); background: #aa00ff;
+  border: 2px solid #fff; border-radius: 2px; box-shadow: 0 2px 6px rgba(0,0,0,.35); cursor: pointer; }
+.cb-centre { width: 22px; height: 22px; transform: translate(-50%, -50%); border-radius: 50%;
+  border: 5px solid #e53935; background: rgba(255,255,255,.95); box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(0,0,0,.45); }
+
+/* ── Leaflet façon Apple ── */
+.leaflet-bar { border: none !important; border-radius: 12px !important; overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.08) !important; }
+.leaflet-bar a { background: rgba(255,255,255,.9) !important; color: var(--text) !important; width: 36px !important;
+  height: 36px !important; line-height: 36px !important; border-bottom: .5px solid rgba(0,0,0,.1) !important; }
+.leaflet-popup-content-wrapper { border-radius: 14px; box-shadow: 0 10px 34px rgba(0,0,0,.18); }
+.leaflet-popup-content { font: 13px/1.5 var(--font); color: var(--text); margin: 14px 16px; }
+.leaflet-popup-content a { color: #0066cc; text-decoration: none; }
+.leaflet-tooltip { border-radius: 8px; border: none; box-shadow: 0 4px 14px rgba(0,0,0,.18); font: 500 12px var(--font); }
+.leaflet-control-attribution { background: rgba(255,255,255,.72) !important; border-radius: 8px 0 0 0;
+  font: 10px var(--font); color: var(--sub); }
+.leaflet-control-scale-line { background: rgba(255,255,255,.72); border-color: var(--sub); color: var(--text); font: 10px var(--font); }
+.leaflet-bottom.leaflet-right { margin-bottom: 4px; }
+
+@media (max-width: 760px) {
+  :root { --pw: calc(100vw - 24px); }
+  #info { display: none; }
+  .filter { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<aside id="panel" class="glass">
+  <h1 class="title">Lavages citernes</h1>
+  <p class="lede">Stations utilisées, prix pratiqués et nouvelles stations autour d’un point.</p>
+
+  <div class="sec">
+    <h2>Position</h2>
+    <div class="search" id="searchbox">
+      <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="q" type="text" autocomplete="off" placeholder="Adresse, ville, code postal ou station" aria-label="Rechercher une adresse ou une station">
+      <button class="clear" id="qclear" aria-label="Effacer">✕</button>
+    </div>
+    <ul id="results" role="listbox"></ul>
+    <p class="hint">Ou cliquez directement sur la carte.</p>
+    <div class="range-head"><span class="lbl" style="margin:0">Rayon de recherche</span><b id="rval">50 km</b></div>
+    <input id="rayon" type="range" min="5" max="200" step="5" value="50" aria-label="Rayon de recherche">
+    <div class="range-scale"><span>5 km</span><span>200 km</span></div>
+  </div>
+
+  <div class="sec">
+    <h2>Affichage</h2>
+    <div class="seg" id="fonds"></div>
+    <div class="rows">
+      <label class="row">Frontières renforcées<span class="sw"><input type="checkbox" id="t-borders" checked><span></span></span></label>
+      <label class="row">Stations hors rayon<span class="sw"><input type="checkbox" id="t-hors" checked><span></span></span></label>
+    </div>
+  </div>
+
+  <div class="sec">
+    <h2>Nouvelles stations</h2>
+    <button class="btn primary" id="b-pistes" disabled>Chercher de nouvelles stations</button>
+    <p class="hint" id="pistes-etat">Choisissez d’abord une position.</p>
+  </div>
+
+  <div class="sec">
+    <h2>Données</h2>
+    <p class="facts" id="facts"></p>
+  </div>
+</aside>
+<button id="collapse" class="glass" aria-label="Réduire le panneau">
+  <svg width="10" height="16" viewBox="0 0 10 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2 2 8l6 6"/></svg>
+</button>
+
+<div id="info" class="glass"></div>
+<div id="legend" class="glass"></div>
+
+<button id="chip" class="glass">
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 8l4-4 4 4"/></svg>
+  <span id="chip-txt">Afficher le détail</span><span class="count" id="chip-n">0</span>
+</button>
+
+<section id="sheet" class="glass" aria-label="Détail">
+  <div class="grab"></div>
+  <div class="sheet-head">
+    <div class="seg" id="tabs"></div>
+    <div class="grow"></div>
+    <div class="filter">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="filtre" type="text" placeholder="Filtrer" aria-label="Filtrer le tableau">
+    </div>
+    <button class="small-btn" id="export">Exporter</button>
+    <button class="close" id="close" aria-label="Fermer le détail">✕</button>
+  </div>
+  <div class="tbl-wrap" id="tbl"></div>
+</section>
+
+<script>
+const D = __DATA__;
+const BORDERS = __BORDERS__;
+const ST = D.stations;
+const LAV = D.lavages || [];
+const HAS_PROD = LAV.length > 0;
+const C = { vert: '#00a854', orange: '#f57c00', rouge: '#e53935', gris: '#78909c', ann: '#00acc1', piste: '#aa00ff', centre: '#e53935' };
+function esri(s) { return `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`; }
+const FONDS = {
+  'Clair': { layers: [['https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', '© OpenStreetMap contributors © CARTO', 20]],
+             front: '#003087', halo: '#ffffff', point: '#0057A8' },
+  'Sombre': { layers: [[esri('Canvas/World_Dark_Gray_Base'), 'Tiles © Esri', 16], [esri('Canvas/World_Dark_Gray_Reference'), '© Esri', 16]],
+              front: '#ffd54f', halo: '#000000', point: '#8ab4f8' },
+  'Satellite': { layers: [[esri('World_Imagery'), 'Tiles © Esri', 18], [esri('Reference/World_Boundaries_and_Places'), '© Esri', 18]],
+                 front: '#ffd54f', halo: '#000000', point: '#ffffff' },
+};
+const OSM_MAX = 100;
+const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const NAME_RX = 'tank ?clean|tank ?wash|tankreinig|tankinnenreinig|tankwasch|tankreiniging|lavage.{0,12}citerne|nettoyage.{0,12}citerne|station de lavage poids|lavaggio.{0,6}cisterne|limpieza.{0,6}cisternas|cleaning station';
+
+const state = { center: null, rayon: 50, fond: 'Clair', borders: true, hors: true,
+                pistes: {}, tab: 'proches', sort: { key: 'dist', dir: 1 }, filtre: '',
+                proches: [], used: [], ann: [], pis: [] };
+const $ = id => document.getElementById(id);
+
+// ── Utilitaires ──
+function esc(v) { return v == null ? '' : String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function hav(a, b, c, d) {
+  const r = Math.PI / 180, x = Math.sin((c - a) * r / 2) ** 2 + Math.cos(a * r) * Math.cos(c * r) * Math.sin((d - b) * r / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(x));
+}
+function quant(a, q) { const p = (a.length - 1) * q, lo = Math.floor(p), hi = Math.ceil(p); return a[lo] + (a[hi] - a[lo]) * (p - lo); }
+function median(a) { const s = a.slice().sort((x, y) => x - y); return s.length ? quant(s, .5) : null; }
+const FJ = /\b(SA|SAS|SASU|SARL|EURL|SNC|SPRL|SRL|SC|NV|BV|BVBA|VOF|GMBH|AG|KG|CO|LTD|SPA|SL|ETS|ETABLISSEMENTS|STE|SOCIETE)\b/g;
+function nn(t) { return (t || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z0-9 ]/g, ' ').replace(FJ, ' ').replace(/\s+/g, ' ').trim(); }
+function sim(a, b) {
+  if (!a || !b) return 0; if (a === b) return 1;
+  if (a.length >= 5 && b.length >= 5 && (a.includes(b) || b.includes(a))) return .9;
+  const bg = s => { const m = new Map(); for (let i = 0; i < s.length - 1; i++) { const k = s.substr(i, 2); m.set(k, (m.get(k) || 0) + 1); } return m; };
+  const A = bg(a), B = bg(b); let inter = 0, tot = 0;
+  A.forEach((v, k) => { inter += Math.min(v, B.get(k) || 0); tot += v; }); B.forEach(v => tot += v);
+  return tot ? 2 * inter / tot : 0;
+}
+function eur(v, d = 2) { return v == null ? '—' : v.toLocaleString('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d }) + ' €'; }
+function km(v) { return v == null ? '—' : v.toLocaleString('fr-FR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }); }
+function dfr(s) { if (!s) return '—'; const [y, m, d] = s.split('-'); return `${d}/${m}/${y}`; }
+function gmaps(la, lo) { return `https://www.google.com/maps/search/?api=1&query=${la.toFixed(6)},${lo.toFixed(6)}`; }
+function divIcon(cls, txt = '', bg = null) {
+  return L.divIcon({ className: 'cb-icon', html: `<div class="${cls}"${bg ? ` style="background:${bg}"` : ''}>${txt}</div>`, iconSize: [0, 0], iconAnchor: [0, 0] });
+}
+ST.forEach((s, i) => { s.i = i; s._nn = nn(s.nom); });
+
+// ── Carte ──
+const map = L.map('map', { zoomControl: false, worldCopyJump: true }).setView([49.8, 5.5], 6);
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.control.scale({ position: 'bottomright', imperial: false }).addTo(map);
+const lyr = L.layerGroup().addTo(map);
+let tiles = [], bHalo = null, bLine = null, circle = null;
+const mk = {};
+
+function mapLeft() { return document.body.classList.contains('collapsed') ? 0 : $('panel').offsetWidth + 24; }
+function fitTo(bounds) {
+  map.fitBounds(bounds, { paddingTopLeft: [mapLeft() + 16, 20], paddingBottomRight: [window.innerWidth > 760 ? 310 : 20, 20], maxZoom: 14 });
+}
+
+function applyFond() {
+  tiles.forEach(t => map.removeLayer(t)); tiles = [];
+  FONDS[state.fond].layers.forEach(([u, a, z], i) => tiles.push(L.tileLayer(u, { attribution: a, maxNativeZoom: z, maxZoom: 19, zIndex: i }).addTo(map)));
+  drawBorders(); render();
+}
+function drawBorders() {
+  [bHalo, bLine].forEach(l => l && map.removeLayer(l)); bHalo = bLine = null;
+  if (!state.borders || !BORDERS) return;
+  const f = FONDS[state.fond];
+  bHalo = L.geoJSON(BORDERS, { interactive: false, style: { color: f.halo, weight: 7, opacity: .75 } }).addTo(map);
+  bLine = L.geoJSON(BORDERS, { interactive: false, style: { color: f.front, weight: 2.6, opacity: 1 } }).addTo(map);
+}
+
+function popupStation(s) {
+  const l = [`<b style="font-size:14px">${esc(s.nom)}</b>`];
+  if (s.adresse) l.push(esc(s.adresse));
+  l.push(`${esc(s.cp)} ${esc(s.localite)} ${esc(s.pays)}`.trim());
+  if (s.nb > 0) {
+    l.push(`Prix médian : <b>${eur(s.prix_med)}</b>${s.prix_min != null ? ` (min ${eur(s.prix_min)}, max ${eur(s.prix_max)})` : ''}`);
+    l.push(`${s.nb} lavage(s), dernier le ${dfr(s.dernier_lavage)}`);
+  } else l.push('Dans l’annuaire, jamais utilisée. Prix à demander.');
+  if (s.telephone) l.push(`Tél. ${esc(s.telephone)}`);
+  if (s.email) l.push(esc(s.email));
+  if (s.dist != null) l.push(`À ${km(s.dist)} km`);
+  if (s.precision === 'localité') l.push('<i>Position approximative (centre de la commune)</i>');
+  l.push(`<a href="${gmaps(s.lat, s.lon)}" target="_blank" rel="noopener">Ouvrir dans Google Maps</a>`);
+  return l.join('<br>');
+}
+function popupPiste(p) {
+  return `<b style="font-size:14px">${esc(p.nom)}</b><br>${esc(p.adresse) || 'Adresse non renseignée'}<br>Jamais utilisée. Prix à demander.<br>À ${km(p.dist)} km, source ${p.source}<br>`
+    + (p.telephone ? `Tél. ${esc(p.telephone)}<br>` : '')
+    + (p.site ? `<a href="${esc(p.site)}" target="_blank" rel="noopener">Site web</a><br>` : '')
+    + `<a href="${gmaps(p.lat, p.lon)}" target="_blank" rel="noopener">Ouvrir dans Google Maps</a>`;
+}
+
+// ── Nouvelles pistes (OpenStreetMap) ──
+function pisteCache() {
+  const c = state.center; if (!c) return null;
+  const pre = `${c.lat.toFixed(3)}|${c.lon.toFixed(3)}|`;
+  const cible = Math.min(state.rayon, OSM_MAX);
+  let best = null;
+  for (const k in state.pistes) if (k.startsWith(pre) && +k.slice(pre.length) >= cible) best = state.pistes[k];
+  return best;
+}
+function preparePistes() {
+  const res = pisteCache(); if (!res) return null;
+  const c = state.center, out = [];
+  res.trouves.forEach(p => {
+    const d = hav(c.lat, c.lon, p.lat, p.lon); if (d > state.rayon) return;
+    if (out.some(g => hav(p.lat, p.lon, g.lat, g.lon) <= .15)) return;
+    const pn = nn(p.nom);
+    const connue = ST.some(s => { const dd = hav(p.lat, p.lon, s.lat, s.lon); return dd < 5 && (dd < .4 || sim(pn, s._nn) > .75); });
+    if (!connue) out.push({ ...p, dist: d });
+  });
+  return out.sort((a, b) => a.dist - b.dist);
+}
+async function chercherPistes() {
+  const c = state.center; if (!c) return;
+  const r = Math.min(state.rayon, OSM_MAX), dlat = r / 111, dlon = r / (111 * Math.max(Math.cos(c.lat * Math.PI / 180), .1));
+  const bb = [c.lat - dlat, c.lon - dlon, c.lat + dlat, c.lon + dlon].map(v => v.toFixed(4)).join(',');
+  const q = `[out:json][timeout:25][bbox:${bb}];(nw["name"~"${NAME_RX}",i][!"highway"];nw["amenity"="vehicle_wash"]["hgv"~"yes|designated|only"];nw["amenity"="truck_wash"];);out center tags;`;
+  const btn = $('b-pistes'); btn.disabled = true; btn.textContent = 'Recherche en cours…';
+  $('pistes-etat').textContent = 'Interrogation d’OpenStreetMap…';
+  const t0 = performance.now(); let data = null;
+  for (const url of OVERPASS) {
+    try { const res = await fetch(url, { method: 'POST', body: new URLSearchParams({ data: q }) }); if (res.ok) { data = await res.json(); break; } } catch (e) { }
+  }
+  btn.textContent = 'Chercher de nouvelles stations';
+  if (!data) { btn.disabled = false; $('pistes-etat').textContent = 'OpenStreetMap n’a pas répondu à temps. Relancez dans une minute.'; return; }
+  const trouves = [];
+  (data.elements || []).forEach(el => {
+    const t = el.tags || {}, la = el.lat ?? el.center?.lat, lo = el.lon ?? el.center?.lon; if (la == null || lo == null) return;
+    const rue = [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(' ');
+    const ville = [t['addr:postcode'], t['addr:city']].filter(Boolean).join(' ');
+    trouves.push({ nom: t.name || t.operator || 'Station de lavage PL (sans nom)', adresse: [rue, ville].filter(Boolean).join(', '),
+      lat: +la, lon: +lo, telephone: t.phone || t['contact:phone'] || '', site: t.website || t['contact:website'] || '', source: 'OpenStreetMap' });
+  });
+  state.pistes[`${c.lat.toFixed(3)}|${c.lon.toFixed(3)}|${r}`] = { trouves, duree: (performance.now() - t0) / 1000 };
+  render();
+}
+
+// ── Rendu principal ──
+function render() {
+  lyr.clearLayers(); for (const k in mk) delete mk[k];
+  if (circle) { map.removeLayer(circle); circle = null; }
+  const c = state.center, R = state.rayon, f = FONDS[state.fond];
+  ST.forEach(s => s.dist = c ? hav(c.lat, c.lon, s.lat, s.lon) : null);
+  let proches = [];
+  if (c) {
+    circle = L.circle([c.lat, c.lon], { radius: R * 1000, color: C.centre, weight: 2, dashArray: '6 6', fillOpacity: .05, interactive: false }).addTo(map);
+    lyr.addLayer(L.marker([c.lat, c.lon], { icon: divIcon('cb-centre'), interactive: false, keyboard: false, zIndexOffset: -1000 }));
+    proches = ST.filter(s => s.dist <= R).sort((a, b) => a.dist - b.dist);
+  }
+  const dedans = new Set(proches.map(s => s.i));
+  if (state.hors) ST.forEach(s => {
+    if (dedans.has(s.i)) return;
+    const m = L.circleMarker([s.lat, s.lon], { radius: 5, color: '#fff', weight: 1.5, fillColor: s.nb === 0 ? C.ann : f.point, fillOpacity: .95, bubblingMouseEvents: false })
+      .bindTooltip(`${esc(s.nom)} (${esc(s.localite)})`).bindPopup(() => popupStation(s), { maxWidth: 320 });
+    lyr.addLayer(m); mk['s' + s.i] = m;
+  });
+  const used = proches.filter(s => s.nb > 0), ann = proches.filter(s => s.nb === 0);
+  const px = used.map(s => s.prix_med).filter(v => v != null).sort((a, b) => a - b);
+  const [q1, q2] = px.length >= 3 ? [quant(px, 1 / 3), quant(px, 2 / 3)] : [Infinity, Infinity];
+  const add = (key, ll, icon, tip, pop) => {
+    const m = L.marker(ll, { icon, riseOnHover: true }).bindTooltip(esc(tip), { direction: 'top', offset: [0, -12] }).bindPopup(pop, { maxWidth: 320 });
+    lyr.addLayer(m); mk[key] = m;
+  };
+  ann.forEach(s => add('s' + s.i, [s.lat, s.lon], divIcon('cb-carre'), `${s.nom} (jamais utilisée)`, () => popupStation(s)));
+  used.forEach(s => {
+    const p = s.prix_med, col = p == null ? C.gris : (p <= q1 ? C.vert : p <= q2 ? C.orange : C.rouge);
+    const txt = p == null ? '? €' : `${Math.round(p)} €`;
+    add('s' + s.i, [s.lat, s.lon], divIcon('cb-pill', txt, col), `${s.nom} : ${txt}`, () => popupStation(s));
+  });
+  const pis = preparePistes();
+  (pis || []).forEach((p, j) => { p.j = j; add('p' + j, [p.lat, p.lon], divIcon('cb-losange'), `Nouvelle piste : ${p.nom}`, () => popupPiste(p)); });
+  Object.assign(state, { proches, used, ann, pis });
+  updateInfo(); updateEtatPistes(); updateChip();
+  if (document.body.classList.contains('sheet-open')) renderSheet();
+}
+
+function updateInfo() {
+  const c = state.center;
+  if (!c) {
+    $('info').innerHTML = '<div class="k">Aucune position</div><div class="t">Choisissez un point</div><div class="s">Recherchez une adresse ou une station dans le panneau, ou cliquez directement sur la carte.</div>';
+    return;
+  }
+  const px = state.used.filter(s => s.prix_med != null);
+  const moins = px.slice().sort((a, b) => a.prix_med - b.prix_med)[0];
+  const stat = (v, l) => `<div><div class="n">${v}</div><div class="l">${l}</div></div>`;
+  $('info').innerHTML = `<div class="k">Rayon de ${state.rayon} km autour de</div><div class="t">${esc(c.label)}</div>
+    <div class="stats">${stat(state.used.length, 'utilisées')}${stat(D.has_annuaire ? state.ann.length : '—', 'annuaire')}${stat(state.pis ? state.pis.length : '—', 'pistes')}</div>
+    <div class="kv"><span>Prix médian de la zone</span><b>${px.length ? Math.round(median(px.map(s => s.prix_med))) + ' €' : '—'}</b></div>`
+    + (moins ? `<div class="kv"><span>Moins chère</span><b class="vert">${Math.round(moins.prix_med)} €</b></div><div class="s">${esc(moins.nom)}</div>` : '');
+}
+function updateEtatPistes() {
+  const btn = $('b-pistes'), e = $('pistes-etat');
+  if (!state.center) { btn.disabled = true; e.textContent = 'Choisissez d’abord une position.'; return; }
+  const res = pisteCache();
+  btn.disabled = !!res;
+  if (res) e.textContent = `${state.pis.length} nouvelle(s) station(s) trouvée(s) en ${res.duree.toFixed(1)} s, hors stations déjà connues.`;
+  else e.textContent = state.rayon > OSM_MAX ? `Source OpenStreetMap, recherche limitée à ${OSM_MAX} km.` : 'Source OpenStreetMap. Lancée uniquement sur demande.';
+}
+function updateChip() {
+  const n = state.center ? state.proches.length : ST.length;
+  $('chip-txt').textContent = state.center ? 'Afficher le détail de la zone' : 'Afficher toutes les stations';
+  $('chip-n').textContent = n;
+}
+
+function legend() {
+  const it = (css, t) => `<div><i style="${css}"></i>${t}</div>`, pill = c => `width:20px;height:11px;border-radius:7px;background:${c}`;
+  $('legend').innerHTML = it(pill(C.vert), 'Prix bas') + it(`width:10px;height:10px;border-radius:3px;background:${C.ann}`, 'Annuaire, jamais utilisée')
+    + it(pill(C.orange), 'Prix moyen') + it(`width:9px;height:9px;transform:rotate(45deg);background:${C.piste}`, 'Nouvelle piste')
+    + it(pill(C.rouge), 'Prix élevé') + it(`width:10px;height:10px;border-radius:50%;border:3px solid ${C.centre};background:#fff`, 'Centre de recherche')
+    + it(pill(C.gris), 'Prix inconnu') + it(`width:8px;height:8px;border-radius:50%;background:${FONDS[state.fond].point}`, 'Hors rayon');
+}
+
+function setCenter(c, fit = true) {
+  state.center = c; render();
+  if (fit && circle) fitTo(circle.getBounds());
+}
+
+// ── Recherche d'adresse ──
+let tmr = null, resultats = [], actif = -1;
+function afficherResultats() {
+  const ul = $('results');
+  if (!resultats.length) { ul.innerHTML = '<li class="vide">Aucun résultat. Essayez avec le code postal.</li>'; ul.classList.add('show'); return; }
+  ul.innerHTML = resultats.map((r, i) => `<li role="option" data-i="${i}" class="${i === actif ? 'active' : ''}">${esc(r.label)}<small>${esc(r.sub)}</small></li>`).join('');
+  ul.classList.add('show');
+}
+async function chercherAdresse(q) {
+  const qn = nn(q);
+  const loc = ST.filter(s => s._nn.includes(qn)).slice(0, 3)
+    .map(s => ({ label: s.nom, sub: `Station de la base, ${[s.cp, s.localite].filter(Boolean).join(' ')}`, lat: s.lat, lon: s.lon }));
+  let geo = [];
+  try {
+    const j = await (await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lang=fr`)).json();
+    geo = (j.features || []).map(f => {
+      const p = f.properties || {}, [lo, la] = f.geometry.coordinates;
+      const rue = [p.street, p.housenumber].filter(Boolean).join(' ');
+      return { label: p.name || rue || p.city || q, sub: [p.name ? rue : '', [p.postcode, p.city].filter(Boolean).join(' '), p.country].filter(Boolean).join(', '), lat: la, lon: lo };
+    });
+  } catch (e) {
+    try {
+      const j = await (await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5`)).json();
+      geo = j.map(d => ({ label: d.display_name.split(',')[0], sub: d.display_name.split(',').slice(1, 4).join(',').trim(), lat: +d.lat, lon: +d.lon }));
+    } catch (e2) { }
+  }
+  if ($('q').value.trim() !== q) return;
+  resultats = loc.concat(geo); actif = resultats.length ? 0 : -1; afficherResultats();
+}
+function choisir(i) {
+  const r = resultats[i]; if (!r) return;
+  $('q').value = r.label; $('results').classList.remove('show');
+  setCenter({ lat: r.lat, lon: r.lon, label: [r.label, r.sub].filter(Boolean).join(', ') });
+}
+$('q').addEventListener('input', () => {
+  const q = $('q').value.trim(); $('searchbox').classList.toggle('filled', q.length > 0);
+  clearTimeout(tmr); if (q.length < 2) { $('results').classList.remove('show'); return; }
+  tmr = setTimeout(() => chercherAdresse(q), 280);
+});
+$('q').addEventListener('keydown', e => {
+  if (!$('results').classList.contains('show')) return;
+  if (e.key === 'ArrowDown') { actif = Math.min(actif + 1, resultats.length - 1); afficherResultats(); e.preventDefault(); }
+  else if (e.key === 'ArrowUp') { actif = Math.max(actif - 1, 0); afficherResultats(); e.preventDefault(); }
+  else if (e.key === 'Enter') choisir(Math.max(actif, 0));
+  else if (e.key === 'Escape') $('results').classList.remove('show');
+});
+$('results').addEventListener('mousedown', e => { const li = e.target.closest('li[data-i]'); if (li) { e.preventDefault(); choisir(+li.dataset.i); } });
+$('q').addEventListener('blur', () => setTimeout(() => $('results').classList.remove('show'), 120));
+$('qclear').addEventListener('click', () => { $('q').value = ''; $('searchbox').classList.remove('filled'); $('results').classList.remove('show'); $('q').focus(); });
+
+map.on('click', async e => {
+  const lat = e.latlng.lat, lon = e.latlng.lng;
+  const c = { lat, lon, label: `Point sélectionné (${lat.toFixed(4)}, ${lon.toFixed(4)})` };
+  setCenter(c, false);
+  try {
+    const j = await (await fetch(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}&lang=fr`)).json();
+    const p = (j.features || [])[0]?.properties;
+    if (p && state.center === c) {
+      c.label = [[p.street, p.housenumber].filter(Boolean).join(' '), [p.postcode, p.city || p.name].filter(Boolean).join(' '), p.country].filter(Boolean).join(', ') || c.label;
+      updateInfo();
+    }
+  } catch (err) { }
+});
+
+// ── Réglages ──
+function majRayon() {
+  const r = $('rayon'); $('rval').textContent = `${r.value} km`;
+  r.style.setProperty('--p', `${(r.value - r.min) / (r.max - r.min) * 100}%`);
+}
+$('rayon').addEventListener('input', () => { majRayon(); state.rayon = +$('rayon').value; render(); });
+$('rayon').addEventListener('change', () => { if (circle) fitTo(circle.getBounds()); });
+$('fonds').innerHTML = Object.keys(FONDS).map(k => `<button data-f="${k}" class="${k === state.fond ? 'on' : ''}">${k}</button>`).join('');
+$('fonds').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.fond = b.dataset.f; [...$('fonds').children].forEach(x => x.classList.toggle('on', x === b)); legend(); applyFond();
+});
+$('t-borders').addEventListener('change', e => { state.borders = e.target.checked; drawBorders(); });
+$('t-hors').addEventListener('change', e => { state.hors = e.target.checked; render(); });
+$('b-pistes').addEventListener('click', chercherPistes);
+$('collapse').addEventListener('click', () => {
+  document.body.classList.toggle('collapsed');
+  $('collapse').setAttribute('aria-label', document.body.classList.contains('collapsed') ? 'Afficher le panneau' : 'Réduire le panneau');
+});
+
+// ── Feuille de détail ──
+const TABS = [['proches', 'Stations'], ['pistes', 'Nouvelles pistes']].concat(HAS_PROD ? [['produit', 'Prix par produit']] : []);
+$('tabs').innerHTML = TABS.map(([k, l]) => `<button data-t="${k}" class="${k === state.tab ? 'on' : ''}">${l}</button>`).join('');
+$('tabs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.tab = b.dataset.t; state.sort = { key: state.tab === 'produit' ? 'produit' : 'dist', dir: 1 };
+  [...$('tabs').children].forEach(x => x.classList.toggle('on', x === b)); renderSheet();
+});
+$('chip').addEventListener('click', () => { document.body.classList.add('sheet-open'); renderSheet(); });
+$('close').addEventListener('click', () => document.body.classList.remove('sheet-open'));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.activeElement !== $('q')) document.body.classList.remove('sheet-open'); });
+$('filtre').addEventListener('input', () => { state.filtre = nn($('filtre').value); renderSheet(); });
+$('tbl').addEventListener('click', e => {
+  const th = e.target.closest('th[data-k]');
+  if (th) { const k = th.dataset.k; state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : 1 }; renderSheet(); return; }
+  if (e.target.closest('a')) return;
+  const tr = e.target.closest('tr[data-key]'); if (!tr) return;
+  const m = mk[tr.dataset.key];
+  const ll = tr.dataset.ll.split(',').map(Number);
+  map.flyTo(ll, Math.max(map.getZoom(), 12), { duration: .6 });
+  if (m) setTimeout(() => m.openPopup(), 650);
+});
+
+function statutBadge(s) {
+  if (s.nb === 0) return '<span class="badge b-ann">Annuaire</span>';
+  return s.statut && s.statut.includes('hors') ? '<span class="badge b-hors">Hors annuaire</span>' : '<span class="badge b-used">Utilisée</span>';
+}
+function tableau() {
+  if (state.tab === 'pistes') {
+    if (!state.center) return { vide: 'Choisissez d’abord une position.' };
+    if (!state.pis) return { vide: 'Lancez « Chercher de nouvelles stations » dans le panneau.' };
+    return {
+      cols: [['nom', 'Station'], ['adresse', 'Adresse'], ['dist', 'Distance (km)', 'num', km], ['telephone', 'Téléphone'],
+             ['site', 'Site', '', v => v ? `<a href="${esc(v)}" target="_blank" rel="noopener">Ouvrir</a>` : ''], ['source', 'Source']],
+      rows: state.pis.map(p => ({ ...p, _key: 'p' + p.j })), vide: 'Aucune nouvelle station dans ce rayon. Élargissez le rayon.'
+    };
+  }
+  if (state.tab === 'produit') {
+    const base = state.center ? state.used : ST.filter(s => s.nb > 0);
+    const ids = new Set(base.map(s => s.i)), parP = {};
+    LAV.forEach(([si, prod, prix]) => { if (!ids.has(si)) return; ((parP[prod] ??= {})[si] ??= []).push(prix); });
+    const stations = base.filter(s => Object.values(parP).some(o => o[s.i]));
+    const rows = Object.keys(parP).map(prod => { const r = { produit: prod }; stations.forEach(s => r['s' + s.i] = parP[prod][s.i] ? median(parP[prod][s.i]) : null); return r; });
+    return {
+      cols: [['produit', 'Produit']].concat(stations.map(s => ['s' + s.i, s.nom, 'num', v => eur(v)])),
+      rows, pivot: true, vide: 'Pas de lavage avec prix et produit identifiés dans cette zone.'
+    };
+  }
+  const src = state.center ? state.proches : ST;
+  return {
+    cols: [['statut', 'Statut', '', (v, r) => statutBadge(r)], ['nom', 'Station'], ['adresse', 'Adresse'], ['localite', 'Localité'], ['cp', 'CP'],
+           ['dist', 'Distance (km)', 'num', km], ['nb', 'Lavages', 'num'], ['prix_med', 'Prix médian', 'num', v => eur(v)],
+           ['prix_min', 'Min', 'num', v => eur(v)], ['prix_max', 'Max', 'num', v => eur(v)], ['dernier_prix', 'Dernier prix', 'num', v => eur(v)],
+           ['dernier_lavage', 'Dernier lavage', '', dfr], ['telephone', 'Téléphone'], ['email', 'E-mail']],
+    rows: src.map(s => ({ ...s, _key: 's' + s.i })), vide: `Aucune station de la base dans un rayon de ${state.rayon} km.`
+  };
+}
+function renderSheet() {
+  const t = tableau();
+  if (!t.rows || !t.rows.length) { $('tbl').innerHTML = `<div class="empty">${t.vide}</div>`; return; }
+  let rows = t.rows;
+  if (state.filtre) rows = rows.filter(r => nn(t.cols.map(([k]) => r[k] ?? '').join(' ')).includes(state.filtre));
+  const { key, dir } = state.sort;
+  if (t.cols.some(([k]) => k === key)) rows = rows.slice().sort((a, b) => {
+    const x = a[key], y = b[key]; if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1;
+    return (typeof x === 'number' ? x - y : String(x).localeCompare(String(y), 'fr')) * dir;
+  });
+  const th = t.cols.map(([k, l, cl]) => `<th data-k="${k}" class="${cl || ''}">${esc(l)}${k === key ? ` <span class="arr">${dir > 0 ? '↑' : '↓'}</span>` : ''}</th>`).join('');
+  const body = rows.map(r => {
+    let mn = null;
+    if (t.pivot) { const v = t.cols.slice(1).map(([k]) => r[k]).filter(x => x != null); mn = v.length > 1 ? Math.min(...v) : null; }
+    const tds = t.cols.map(([k, , cl, fmt]) => {
+      const v = r[k], txt = fmt ? fmt(v, r) : esc(v ?? '');
+      return `<td class="${cl || ''}${t.pivot && v != null && v === mn ? ' min' : ''}">${txt}</td>`;
+    }).join('');
+    return r._key ? `<tr class="click" data-key="${r._key}" data-ll="${r.lat},${r.lon}">${tds}</tr>` : `<tr>${tds}</tr>`;
+  }).join('');
+  $('tbl').innerHTML = `<table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table>`;
+}
+$('export').addEventListener('click', () => {
+  const t = tableau(); if (!t.rows || !t.rows.length) return;
+  const data = t.rows.map(r => Object.fromEntries(t.cols.map(([k, l]) => [l, k === 'statut' ? (r.statut || '') : (k === 'dernier_lavage' ? dfr(r[k]) : (r[k] ?? ''))])));
+  const nom = { proches: 'stations', pistes: 'nouvelles_pistes', produit: 'prix_par_produit' }[state.tab];
+  if (window.XLSX) {
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), nom.slice(0, 31));
+    XLSX.writeFile(wb, `lavages_${nom}.xlsx`);
+  } else {
+    const cols = Object.keys(data[0]);
+    const csv = '\ufeff' + [cols.join(';')].concat(data.map(r => cols.map(c => `"${String(r[c]).replace(/"/g, '""')}"`).join(';'))).join('\n');
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = `lavages_${nom}.csv`; a.click();
+  }
+});
+
+// ── Démarrage ──
+const nUsed = ST.filter(s => s.nb > 0).length;
+$('facts').innerHTML = `<b>${ST.length}</b> stations sur la carte, dont <b>${nUsed}</b> déjà utilisées`
+  + (D.has_annuaire ? ` et <b>${ST.length - nUsed}</b> de l’annuaire jamais utilisées` : '') + '.'
+  + (D.non_geo ? `<br>${D.non_geo} station(s) non géocodée(s), absentes de la carte.` : '')
+  + `<br>Base préparée le ${esc(D.generated)} dans le HUB.`;
+majRayon(); legend(); applyFond();
+if (ST.length) fitTo(L.latLngBounds(ST.map(s => [s.lat, s.lon])));
+</script>
+</body>
+</html>
+'''
+
+# ─── Application carte plein écran ───────────────────────────────────────────
+def _js_val(x):
+    """Valeur pandas/numpy → valeur JSON propre (NaN/NaT → null)."""
+    if x is None:
+        return None
+    try:
+        if pd.isna(x):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(x, pd.Timestamp):
+        return x.strftime("%Y-%m-%d")
+    if isinstance(x, np.integer):
+        return int(x)
+    if isinstance(x, (float, np.floating)):
+        return round(float(x), 2)
+    return x
 
 
-def panneau_legende(couleur_point):
-    def item(css, txt):
-        return f'<div><i style="{css}"></i>{txt}</div>'
-    pill = "width:20px;height:11px;border-radius:7px;background:{}"
-    return ('<div class="ap-glass ap-leg">'
-            + item(pill.format(C_VERT), "Prix bas")
-            + item(f"width:10px;height:10px;border-radius:3px;background:{C_ANNUAIRE}", "Annuaire, jamais utilisée")
-            + item(pill.format(C_ORANGE), "Prix moyen")
-            + item(f"width:9px;height:9px;transform:rotate(45deg);background:{C_PISTE}", "Nouvelle piste")
-            + item(pill.format(C_ROUGE), "Prix élevé")
-            + item(f"width:10px;height:10px;border-radius:50%;border:3px solid {C_CENTRE} !important;background:#fff",
-                   "Centre de recherche")
-            + item(pill.format(C_GRIS), "Prix inconnu")
-            + item(f"width:8px;height:8px;border-radius:50%;background:{couleur_point}", "Hors rayon")
-            + "</div>")
+def build_app_html(df_geo: pd.DataFrame, df_lav: pd.DataFrame, has_ann: bool, non_geo: int, borders) -> str:
+    champs = ["nom", "adresse", "cp", "localite", "pays", "telephone", "email", "nb", "prix_med", "prix_min",
+              "prix_max", "dernier_prix", "dernier_lavage", "precision", "statut"]
+    stations = []
+    for r in df_geo[champs + ["lat", "lon"]].to_dict("records"):
+        d = {c: _js_val(r[c]) for c in champs}
+        d["nb"] = int(r["nb"])
+        d["lat"], d["lon"] = round(float(r["lat"]), 6), round(float(r["lon"]), 6)
+        stations.append(d)
+    index_cle = {k: i for i, k in enumerate(df_geo["_cle"])}
+
+    lavages = []
+    if "Produit" in df_lav.columns:
+        sel = df_lav[df_lav["_prix"].notna() & df_lav["Produit"].notna() & df_lav["_cle"].isin(index_cle)]
+        lavages = [[index_cle[k], str(p), round(float(v), 2)] for k, p, v in zip(sel["_cle"], sel["Produit"], sel["_prix"])]
+
+    payload = {
+        "stations": stations, "lavages": lavages, "has_annuaire": has_ann, "non_geo": int(non_geo),
+        "generated": datetime.now().strftime("%d/%m/%Y à %H:%M"),
+    }
+    data = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    front = json.dumps(borders, separators=(",", ":")) if borders else "null"
+    return APP_HTML.replace("__DATA__", data, 1).replace("__BORDERS__", front, 1)
 
 
-# ─── Panneau latéral : structure ─────────────────────────────────────────────
-sb = st.sidebar
-sb.markdown('<div class="ap-title">Lavages citernes</div>'
-            '<div class="ap-sub">Stations utilisées, prix pratiqués et nouvelles stations autour d’un point.</div>',
+def bouton_ouvrir(app_html: str):
+    """Bouton qui ouvre la carte dans un nouvel onglet (page autonome, sans Streamlit autour)."""
+    contenu = json.dumps(app_html).replace("</", "<\\/")
+    components.html(f"""
+<style>
+  body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif; }}
+  button {{ height: 48px; padding: 0 28px; border: none; border-radius: 980px; background: #0071e3; color: #fff;
+           font: 500 17px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif;
+           cursor: pointer; transition: background .15s, transform .1s; }}
+  button:hover {{ background: #0077ed; }}
+  button:active {{ transform: scale(.98); }}
+  p {{ margin: 10px 0 0 4px; font-size: 13px; color: #6e6e73; }}
+</style>
+<button id="ouvrir">Ouvrir la carte plein écran</button>
+<p id="msg">S’ouvre dans un nouvel onglet.</p>
+<script>
+const PAGE = {contenu};
+document.getElementById('ouvrir').addEventListener('click', () => {{
+  const url = URL.createObjectURL(new Blob([PAGE], {{ type: 'text/html' }}));
+  const w = window.open(url, '_blank');
+  document.getElementById('msg').textContent = w
+    ? 'Carte ouverte dans un nouvel onglet.'
+    : 'Le navigateur a bloqué l’ouverture : autorisez les fenêtres pop-up pour le HUB, ou téléchargez la carte ci-dessous.';
+}});
+</script>
+""", height=90)
+
+
+# ─── Page de préparation ─────────────────────────────────────────────────────
+st.markdown('<div class="ap-hero"><h1>Lavages citernes</h1>'
+            '<p>Préparez la base des stations, puis ouvrez la carte en plein écran dans un nouvel onglet.</p></div>',
             unsafe_allow_html=True)
-c_pos = sb.container()
-c_aff = sb.container()
-c_new = sb.container()
-c_data = sb.container()
 
-# ─── Données (rempli en premier, affiché en bas du panneau) ─────────────────
-section(c_data, "Données")
-with c_data.expander("Fichiers", expanded=not st.session_state.get("lavages")):
-    lavages_file = st.file_uploader("Historique des lavages", type=["xlsx", "xls"], key="lavages",
+st.markdown('<div class="ap-section">Fichiers</div>', unsafe_allow_html=True)
+c1, c2 = st.columns(2)
+with c1:
+    lavages_file = st.file_uploader("Historique des lavages (obligatoire)", type=["xlsx", "xls"], key="lavages",
                                     help="liste_lavages : N° Dossier, Date, Nom 1, Localité, Code postal, Prix…")
-    annuaire_file = st.file_uploader("Adresses des stations", type=["xlsx", "xls"], key="annuaire",
-                                     help="Annuaire : nom, adresse, CP, localité, téléphone…")
-    missions_file = st.file_uploader("Missions CA CIT", type=["xlsx", "xls"], key="missions",
+    missions_file = st.file_uploader("Missions CA CIT (facultatif)", type=["xlsx", "xls"], key="missions",
                                      help="Sert à afficher les prix par produit transporté")
-    ref_file = st.file_uploader("Base géocodée", type=["xlsx"], key="ref",
-                                help="Export « Base stations » : évite de regéocoder les stations")
+with c2:
+    annuaire_file = st.file_uploader("Adresses des stations (facultatif)", type=["xlsx", "xls"], key="annuaire",
+                                     help="Annuaire : nom, adresse, CP, localité, téléphone…")
+    ref_file = st.file_uploader("Base géocodée (facultatif)", type=["xlsx"], key="ref",
+                                help="Export « base géocodée » : évite de regéocoder les stations")
 
 if not lavages_file:
-    st.markdown('<div class="ap-empty"><div class="t">Chargez l’historique des lavages.</div>'
-                '<div class="s">Ouvrez « Fichiers » dans le panneau de gauche. L’annuaire des stations, '
-                'les missions et la base géocodée sont facultatifs.</div></div>', unsafe_allow_html=True)
+    st.caption("Chargez au minimum l’historique des lavages pour préparer la carte.")
     st.stop()
 
 try:
@@ -1032,16 +1314,18 @@ if df_a_raw is not None:
     detect = detect_colonnes(df_a_raw.columns)
     options = ["—"] + list(df_a_raw.columns)
     mapping = {}
-    with c_data.expander("Colonnes de l’annuaire", expanded="nom" not in detect):
-        st.caption(f"Détectées automatiquement sur {len(df_a_raw)} lignes. Corrigez si besoin.")
-        for champ, (lbl, _) in CHAMPS_ANNUAIRE.items():
+    with st.expander("Colonnes de l’annuaire (détectées automatiquement, corrigez si besoin)",
+                     expanded="nom" not in detect):
+        cols = st.columns(3)
+        for i, (champ, (lbl, _)) in enumerate(CHAMPS_ANNUAIRE.items()):
             defaut = detect.get(champ)
-            v = st.selectbox(lbl, options, index=options.index(defaut) if defaut else 0, key=f"map_{champ}")
+            v = cols[i % 3].selectbox(lbl, options, index=options.index(defaut) if defaut else 0, key=f"map_{champ}")
             mapping[champ] = None if v == "—" else v
+        st.caption(f"{len(df_a_raw)} ligne(s) dans le fichier adresses.")
     if not mapping["nom"]:
-        c_data.warning("Indiquez la colonne du nom de station pour fusionner l’annuaire.")
+        st.warning("Indiquez la colonne du nom de station pour fusionner l’annuaire.")
     elif not any(mapping[c] for c in ["cp", "localite", "adresse", "lat"]):
-        c_data.warning("L’annuaire doit contenir un CP, une localité, une adresse ou des coordonnées.")
+        st.warning("L’annuaire doit contenir un CP, une localité, une adresse ou des coordonnées.")
     else:
         df_ann = build_annuaire(df_a_raw, tuple(sorted(mapping.items())))
 
@@ -1051,10 +1335,9 @@ if df_hist.empty:
     st.error("Aucune station exploitable dans l’historique (colonne Nom 1 vide).")
     st.stop()
 df_base = build_base(df_hist, df_ann)
-has_produit = "Produit" in df_lav.columns
 has_ann = df_ann is not None
 
-# ─── Géocodage (référentiel > coordonnées annuaire > géocodage) ─────────────
+# ─── Géocodage (base géocodée > coordonnées annuaire > géocodage) ───────────
 coords = st.session_state.setdefault("coords", {})
 
 ref_sig = (ref_file.name, ref_file.size) if ref_file else None
@@ -1067,7 +1350,7 @@ if ref_file and st.session_state.get("ref_charge") != ref_sig:
                                 prec if isinstance(prec, str) and prec else "référentiel")
         st.session_state["ref_charge"] = ref_sig
     except Exception as e:
-        c_data.warning(f"Base géocodée ignorée ({e}). Colonnes attendues : cle, lat, lon, precision.")
+        st.warning(f"Base géocodée ignorée ({e}). Colonnes attendues : cle, lat, lon, precision.")
 
 for k, la, lo in df_base.loc[df_base["lat_ann"].notna() & df_base["lon_ann"].notna(),
                              ["_cle", "lat_ann", "lon_ann"]].itertuples(index=False):
@@ -1101,357 +1384,78 @@ if not todo.empty:
 df_base["lat"] = df_base["_cle"].map(lambda k: coords.get(k, (np.nan,) * 3)[0])
 df_base["lon"] = df_base["_cle"].map(lambda k: coords.get(k, (np.nan,) * 3)[1])
 df_base["precision"] = df_base["_cle"].map(lambda k: coords.get(k, (np.nan,) * 3)[2])
-df_geo = df_base.dropna(subset=["lat", "lon"]).copy()
-
-# ─── Panneau : position ──────────────────────────────────────────────────────
-with c_pos:
-    section(st, "Position")
-    adresse = st.text_input("Adresse, ville ou code postal", placeholder="Zone industrielle, 57190 Florange")
-    propositions = search_address(adresse) if adresse.strip() else []
-    choix = None
-    if propositions:
-        choix = st.selectbox("Résultats", propositions, format_func=lambda p: p["label"],
-                             label_visibility="collapsed")
-    elif adresse.strip():
-        st.caption("Adresse introuvable. Essayez avec le code postal, ou cliquez sur la carte.")
-    if st.button("Centrer ici", type="primary", use_container_width=True, disabled=choix is None):
-        st.session_state["center"] = {"lat": choix["lat"], "lon": choix["lon"], "label": choix["label"]}
-    st.caption("Vous pouvez aussi cliquer directement sur la carte.")
-    rayon = st.slider("Rayon de recherche", 5, 200, 50, step=5, format="%d km")
-
-center = st.session_state.get("center")
-
-# ─── Panneau : affichage ─────────────────────────────────────────────────────
-with c_aff:
-    section(st, "Affichage")
-    fond = st.radio("Fond de carte", list(FONDS), horizontal=True, key="fond_carte")
-    show_borders = st.toggle("Frontières renforcées", value=True)
-    show_hors = st.toggle("Stations hors rayon", value=True)
-
-# ─── Panneau : nouvelles stations ────────────────────────────────────────────
-google_key = get_google_key()
-with c_new:
-    section(st, "Nouvelles stations")
-    use_osm = st.toggle("OpenStreetMap", value=True,
-                        help=f"Gratuit mais incomplet. Rayon limité à {OSM_RAYON_MAX} km.")
-    use_google = st.toggle("Google Places", value=bool(google_key), disabled=not google_key,
-                           help=None if google_key else "Ajoutez GOOGLE_PLACES_API_KEY dans les secrets Streamlit")
-    lancer = st.button("Chercher de nouvelles stations", use_container_width=True,
-                       disabled=not center or not (use_osm or use_google))
-    etat_recherche = st.empty()
-
-sig = None
-if center:
-    sig = (round(center["lat"], 3), round(center["lon"], 3), rayon, use_osm, bool(use_google and google_key))
-pistes_cache = st.session_state.setdefault("pistes_cache", {})
-if lancer and sig not in pistes_cache:
-    st.session_state["recherche_en_attente"] = sig
-
-# ─── Calculs de zone ─────────────────────────────────────────────────────────
-df_proche = pd.DataFrame()
-if center and not df_geo.empty:
-    df_geo["dist_km"] = haversine(center["lat"], center["lon"], df_geo["lat"], df_geo["lon"])
-    df_proche = df_geo[df_geo["dist_km"] <= rayon].sort_values("dist_km").copy()
-proche_hist = df_proche[df_proche["nb"] > 0] if not df_proche.empty else pd.DataFrame()
-proche_ann = df_proche[df_proche["nb"] == 0] if not df_proche.empty else pd.DataFrame()
-
-res_pistes = pistes_cache.get(sig) if sig else None
-df_new = prepare_pistes(res_pistes["trouves"], center, rayon, df_geo) if res_pistes else pd.DataFrame()
-df_pistes = df_new[df_new["deja_connue"] == ""] if not df_new.empty else pd.DataFrame()
-
-prix_ok = proche_hist.dropna(subset=["prix_med"]) if not proche_hist.empty else pd.DataFrame()
-prix_zone = prix_ok["prix_med"].median() if not prix_ok.empty else np.nan
-moins_chere = prix_ok.sort_values("prix_med").iloc[0] if not prix_ok.empty else None
-
-if not center:
-    etat_recherche.caption("Choisissez d’abord une position.")
-elif res_pistes and res_pistes["osm_erreur"]:
-    etat_recherche.caption("OpenStreetMap n’a pas répondu à temps. Relancez dans une minute.")
-elif res_pistes:
-    etat_recherche.caption(f"{len(df_pistes)} nouvelle(s) station(s) trouvée(s) en {res_pistes['duree']:.1f} s.")
-elif use_osm and rayon > OSM_RAYON_MAX:
-    etat_recherche.caption(f"Recherche OpenStreetMap limitée à {OSM_RAYON_MAX} km.")
-else:
-    etat_recherche.caption("Recherche lancée uniquement sur demande.")
+df_geo = df_base.dropna(subset=["lat", "lon"]).reset_index(drop=True)
+non_geo = len(df_base) - len(df_geo)
 
 # ─── Carte ───────────────────────────────────────────────────────────────────
-frontieres = None
-if show_borders:
-    try:
-        frontieres = load_borders()
-    except Exception:
-        st.caption("Tracé des frontières indisponible pour le moment.")
+try:
+    frontieres = load_borders()
+except Exception:
+    frontieres = None
 
-cfg = FONDS[fond]
-m = base_map(fond, frontieres)
+app_html = build_app_html(df_geo, df_lav, has_ann, non_geo, frontieres)
 
-if center:
-    dlat = rayon / 111.0
-    dlon = rayon / (111.0 * max(math.cos(math.radians(center["lat"])), 0.1))
-    m.fit_bounds([[center["lat"] - dlat, center["lon"] - dlon], [center["lat"] + dlat, center["lon"] + dlon]])
-    folium.Circle([center["lat"], center["lon"]], radius=rayon * 1000,
-                  color=C_CENTRE, weight=2, dash_array="6 6", fill=True, fill_opacity=0.05).add_to(m)
-    # Centre posé en premier : les stations restent cliquables par-dessus
-    folium.Marker([center["lat"], center["lon"]], tooltip=center["label"], icon=icone("cb-centre")).add_to(m)
-elif not df_geo.empty:
-    m.fit_bounds([[df_geo["lat"].min(), df_geo["lon"].min()], [df_geo["lat"].max(), df_geo["lon"].max()]])
+st.markdown('<div class="ap-section">Carte</div>', unsafe_allow_html=True)
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Stations sur la carte", len(df_geo))
+m2.metric("Déjà utilisées", int((df_geo["nb"] > 0).sum()))
+m3.metric("Annuaire, jamais utilisées", int((df_geo["nb"] == 0).sum()) if has_ann else "—")
+m4.metric("Non géocodées", non_geo)
+st.write("")
+bouton_ouvrir(app_html)
+if frontieres is None:
+    st.caption("Tracé des frontières indisponible pour le moment : la carte s’ouvre sans.")
 
-if show_hors:
-    ids_proches = set(df_proche["_cle"]) if not df_proche.empty else set()
-    for _, r in df_geo[~df_geo["_cle"].isin(ids_proches)].iterrows():
-        remplissage = C_ANNUAIRE if r["nb"] == 0 else cfg["point"]
-        folium.CircleMarker([r["lat"], r["lon"]], radius=5, color="#ffffff", weight=1.5,
-                            fill=True, fill_color=remplissage, fill_opacity=0.95,
-                            tooltip=f"{r['nom']} ({r['localite']})").add_to(m)
+base_out = df_base[["_cle", "statut", "nom", "adresse", "cp", "localite", "pays", "telephone", "email",
+                    "nb", "prix_med", "prix_min", "prix_max", "dernier_prix", "dernier_lavage",
+                    "lat", "lon", "precision", "rapprochement", "nom_annuaire"]].rename(columns={"_cle": "cle"})
+base_xls = base_out.copy()
+base_xls["dernier_lavage"] = base_xls["dernier_lavage"].dt.date
 
+d1, d2, _ = st.columns([1, 1, 1])
+with d1:
+    st.download_button("Télécharger la carte (HTML)", app_html.encode("utf-8"), file_name="carte_lavages_citernes.html",
+                       mime="text/html", use_container_width=True)
+with d2:
+    st.download_button("Télécharger la base géocodée", excel_auto({"Base stations": base_xls}),
+                       file_name="base_stations_lavage.xlsx", use_container_width=True,
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+st.caption("Le fichier HTML s’ouvre dans n’importe quel navigateur, sans le HUB. "
+           "Rechargez la base géocodée au prochain lancement : plus aucun géocodage à attendre.")
 
-def popup_station(r) -> str:
-    lignes = [f"<b style='font-size:14px'>{esc(r['nom'])}</b>"]
-    if r["adresse"]:
-        lignes.append(esc(r["adresse"]))
-    lignes.append(f"{esc(r['cp'])} {esc(r['localite'])} {esc(r['pays'])}".strip())
-    if r["nb"] > 0:
-        p = r["prix_med"]
-        prix_txt = "—" if pd.isna(p) else f"{p:.2f} € (min {r['prix_min']:.2f}, max {r['prix_max']:.2f})"
-        date_txt = r["dernier_lavage"].strftime("%d/%m/%Y") if pd.notna(r["dernier_lavage"]) else "—"
-        lignes.append(f"Prix médian : <b>{prix_txt}</b>")
-        lignes.append(f"{r['nb']} lavage(s), dernier le {date_txt}")
-    else:
-        lignes.append("Dans l’annuaire, jamais utilisée. Prix à demander.")
-    if r["telephone"]:
-        lignes.append(f"Tél. {esc(r['telephone'])}")
-    if r["email"]:
-        lignes.append(esc(r["email"]))
-    lignes.append(f"À {r['dist_km']:.1f} km")
-    if r["precision"] == "localité":
-        lignes.append("<i>Position approximative (centre de la commune)</i>")
-    lignes.append(f"<a href='{gmaps_link(r['lat'], r['lon'])}' target='_blank'>Ouvrir dans Google Maps</a>")
-    return "<br>".join(lignes)
-
-
-for _, r in proche_ann.iterrows():
-    folium.Marker([r["lat"], r["lon"]], tooltip=f"{r['nom']} (jamais utilisée)",
-                  popup=folium.Popup(popup_station(r), max_width=320),
-                  icon=icone("cb-carre")).add_to(m)
-
-if not proche_hist.empty:
-    prix_dispo = proche_hist["prix_med"].dropna()
-    q1, q2 = (prix_dispo.quantile(1 / 3), prix_dispo.quantile(2 / 3)) if len(prix_dispo) >= 3 else (np.inf, np.inf)
-    for _, r in proche_hist.iterrows():
-        p = r["prix_med"]
-        couleur = C_GRIS if pd.isna(p) else (C_VERT if p <= q1 else C_ORANGE if p <= q2 else C_ROUGE)
-        texte = "? €" if pd.isna(p) else f"{p:.0f} €"
-        folium.Marker([r["lat"], r["lon"]], tooltip=f"{r['nom']} : {texte}",
-                      popup=folium.Popup(popup_station(r), max_width=320),
-                      icon=icone("cb-pill", texte, couleur)).add_to(m)
-
-if not df_pistes.empty:
-    for _, r in df_pistes.iterrows():
-        popup = (f"<b style='font-size:14px'>{esc(r['nom'])}</b><br>{esc(r['adresse']) or 'Adresse non renseignée'}<br>"
-                 f"Jamais utilisée. Prix à demander.<br>À {r['dist_km']:.1f} km, source {r['source']}<br>"
-                 + (f"Tél. {esc(r['telephone'])}<br>" if r["telephone"] else "")
-                 + (f"<a href='{esc(r['site'])}' target='_blank'>Site web</a><br>" if r["site"] else "")
-                 + f"<a href='{gmaps_link(r['lat'], r['lon'])}' target='_blank'>Ouvrir dans Google Maps</a>")
-        folium.Marker([r["lat"], r["lon"]], tooltip=f"Nouvelle piste : {r['nom']}",
-                      popup=folium.Popup(popup, max_width=320),
-                      icon=icone("cb-losange")).add_to(m)
-
-m.get_root().html.add_child(folium.Element(
-    panneau_info(center, rayon, len(proche_hist), len(proche_ann) if has_ann else "—",
-                 len(df_pistes) if res_pistes else "—", prix_zone, moins_chere)
-    + panneau_legende(cfg["point"])
-))
-
-carte = st_folium(m, height=780, use_container_width=True, returned_objects=["last_clicked"], key="carte_lavages")
-
-# Clic sur la carte → nouveau centre (pas de recherche externe automatique)
-clic = (carte or {}).get("last_clicked")
-if clic:
-    sig_clic = (round(clic["lat"], 5), round(clic["lng"], 5))
-    if sig_clic != st.session_state.get("dernier_clic"):
-        st.session_state["dernier_clic"] = sig_clic
-        st.session_state["center"] = {"lat": clic["lat"], "lon": clic["lng"],
-                                      "label": f"Point sélectionné ({clic['lat']:.4f}, {clic['lng']:.4f})"}
-        st.rerun()
-
-# Recherche externe : lancée APRÈS l'affichage de la carte, puis rafraîchissement
-en_attente = st.session_state.get("recherche_en_attente")
-if en_attente and en_attente == sig:
-    with st.spinner("Recherche de nouvelles stations… La carte se met à jour à la fin."):
-        pistes_cache[sig] = fetch_new_stations(
-            center["lat"], center["lon"], rayon, use_osm, google_key if use_google else None
-        )
-    st.session_state["recherche_en_attente"] = None
-    st.rerun()
-
-# ─── Détail sous la carte ────────────────────────────────────────────────────
-st.markdown('<div class="ap-h2">Détail</div>', unsafe_allow_html=True)
-onglets = ["Stations dans le rayon", "Nouvelles pistes"]
-if has_produit:
-    onglets.append("Prix par produit")
+# ─── Contrôles qualité ───────────────────────────────────────────────────────
 if has_ann:
-    onglets.append("Rapprochement")
-onglets.append("Base stations")
-tabs = st.tabs(onglets)
-t_connues, t_pistes = tabs[0], tabs[1]
-t_produit = tabs[onglets.index("Prix par produit")] if has_produit else None
-t_rappro = tabs[onglets.index("Rapprochement")] if has_ann else None
-t_base = tabs[-1]
-
-with t_connues:
-    if not center:
-        st.info("Choisissez d’abord une position.")
-    elif df_proche.empty:
-        st.info(f"Aucune station de la base dans un rayon de {rayon} km. Lancez la recherche de nouvelles stations.")
-    else:
-        statuts = sorted(df_proche["statut"].unique())
-        filtre = st.multiselect("Statut", statuts, default=statuts)
-        vue = df_proche[df_proche["statut"].isin(filtre)]
-        vue = vue[["statut", "nom", "adresse", "localite", "cp", "dist_km", "nb", "prix_med", "prix_min",
-                   "prix_max", "dernier_prix", "dernier_lavage", "telephone", "email", "precision",
-                   "lat", "lon"]].copy()
-        vue["precision"] = vue["precision"].map(lambda p: PRECISION_LBL.get(p, p))
-        vue["maps"] = [gmaps_link(a, b) for a, b in zip(vue["lat"], vue["lon"])]
-        st.dataframe(
-            vue.drop(columns=["lat", "lon"]), hide_index=True, use_container_width=True,
-            column_config={
-                "statut": "Statut", "nom": "Station", "adresse": "Adresse", "localite": "Localité", "cp": "CP",
-                "dist_km": st.column_config.NumberColumn("Distance (km, vol d'oiseau)", format="%.1f"),
-                "nb": st.column_config.NumberColumn("Nb lavages"),
-                "prix_med": st.column_config.NumberColumn("Prix médian", format="%.2f €"),
-                "prix_min": st.column_config.NumberColumn("Min", format="%.2f €"),
-                "prix_max": st.column_config.NumberColumn("Max", format="%.2f €"),
-                "dernier_prix": st.column_config.NumberColumn("Dernier prix", format="%.2f €"),
-                "dernier_lavage": st.column_config.DateColumn("Dernier lavage", format="DD/MM/YYYY"),
-                "telephone": "Téléphone", "email": "E-mail",
-                "precision": "Géocodage",
-                "maps": st.column_config.LinkColumn("Maps", display_text="Ouvrir"),
-            },
-        )
-
-with t_pistes:
-    if not center:
-        st.info("Choisissez d’abord une position.")
-    elif not res_pistes:
-        st.info("Lancez « Chercher de nouvelles stations » dans le panneau de gauche.")
-    elif df_pistes.empty:
-        st.info("Aucune nouvelle station dans ce rayon. OpenStreetMap est incomplet sur ce type de site : "
-                "élargissez le rayon ou activez Google Places.")
-    else:
-        vue_n = df_pistes[["nom", "adresse", "dist_km", "telephone", "site", "source"]].copy()
-        vue_n["prix"] = "À demander"
-        vue_n["maps"] = [gmaps_link(a, b) for a, b in zip(df_pistes["lat"], df_pistes["lon"])]
-        st.dataframe(
-            vue_n, hide_index=True, use_container_width=True,
-            column_config={
-                "nom": "Station", "adresse": "Adresse",
-                "dist_km": st.column_config.NumberColumn("Distance (km)", format="%.1f"),
-                "telephone": "Téléphone",
-                "site": st.column_config.LinkColumn("Site"),
-                "source": "Source", "prix": "Prix",
-                "maps": st.column_config.LinkColumn("Maps", display_text="Ouvrir"),
-            },
-        )
-    if not df_new.empty and (df_new["deja_connue"] != "").any():
-        with st.expander(f"Résultats écartés car déjà dans la base ({(df_new['deja_connue'] != '').sum()})"):
-            st.dataframe(df_new[df_new["deja_connue"] != ""][["nom", "adresse", "source", "deja_connue"]]
-                         .rename(columns={"deja_connue": "Correspond à"}), hide_index=True)
-
-if t_produit is not None:
-    with t_produit:
-        if not center or proche_hist.empty:
-            st.info("Aucune station utilisée dans le rayon.")
-        else:
-            lav_zone = df_lav[df_lav["_cle"].isin(proche_hist["_cle"])].dropna(subset=["_prix"])
-            lav_zone = lav_zone[lav_zone["Produit"].notna()]
-            if lav_zone.empty:
-                st.info("Pas de lavage avec prix et produit identifiés dans cette zone.")
-            else:
-                st.markdown("**Prix médian par station et par produit transporté**")
-                pivot = lav_zone.pivot_table(index="Produit", columns="Nom 1", values="_prix", aggfunc="median")
-                st.dataframe(pivot.style.format("{:.2f} €", na_rep="—").highlight_min(axis=1, color="#c8f0d6"),
-                             use_container_width=True)
-                st.caption("En vert : station la moins chère pour ce produit dans la zone.")
-                st.markdown("**Détail des lavages de la zone**")
-                cols_det = [c for c in ["N° Dossier", "Date", "Nom 1", "Localité", "Produit", "Prix",
-                                        "Chauffeur", "Tracteur", "Remorque"] if c in lav_zone.columns]
-                st.dataframe(lav_zone[cols_det].sort_values("Date", ascending=False),
-                             hide_index=True, use_container_width=True)
-
-if t_rappro is not None:
-    with t_rappro:
-        n_exact = (df_base["rapprochement"] == "exact").sum()
-        approchants = df_base[(df_base["rapprochement"].str.len() > 0) & (df_base["rapprochement"] != "exact")]
-        hors_ann = df_base[df_base["statut"] == S_HIST]
-        jamais = df_base[df_base["statut"] == S_ANN]
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Rapprochements exacts", int(n_exact))
-        r2.metric("Rapprochements approchants", len(approchants))
-        r3.metric("Utilisées, absentes de l’annuaire", len(hors_ann))
-        r4.metric("Annuaire, jamais utilisées", len(jamais))
-
-        st.markdown("**Rapprochements approchants à vérifier**")
-        if approchants.empty:
-            st.caption("Aucun.")
-        else:
+    st.markdown('<div class="ap-section">Rapprochement avec l’annuaire</div>', unsafe_allow_html=True)
+    approchants = df_base[(df_base["rapprochement"].str.len() > 0) & (df_base["rapprochement"] != "exact")]
+    hors_ann = df_base[df_base["statut"] == S_HIST]
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Exacts", int((df_base["rapprochement"] == "exact").sum()))
+    r2.metric("Approchants", len(approchants))
+    r3.metric("Utilisées, absentes de l’annuaire", len(hors_ann))
+    r4.metric("Annuaire, jamais utilisées", int((df_base["statut"] == S_ANN).sum()))
+    if not approchants.empty:
+        with st.expander(f"Rapprochements approchants à vérifier ({len(approchants)})"):
             st.dataframe(approchants[["nom", "nom_annuaire", "cp", "localite", "rapprochement"]]
                          .rename(columns={"nom": "Nom (historique)", "nom_annuaire": "Nom (annuaire)",
                                           "cp": "CP", "localite": "Localité", "rapprochement": "Type"}),
                          hide_index=True, use_container_width=True)
             st.caption("Si un rapprochement est faux, corrigez le nom ou le CP dans l’annuaire "
                        "pour qu’il corresponde au « Nom 1 » des lavages.")
-
-        st.markdown("**Stations utilisées mais absentes de l’annuaire**")
-        if hors_ann.empty:
-            st.caption("Aucune.")
-        else:
+    if not hors_ann.empty:
+        with st.expander(f"Stations utilisées mais absentes de l’annuaire ({len(hors_ann)})"):
             st.dataframe(hors_ann[["nom", "cp", "localite", "pays", "nb", "dernier_lavage"]]
-                         .sort_values("nb", ascending=False),
-                         hide_index=True, use_container_width=True,
+                         .sort_values("nb", ascending=False), hide_index=True, use_container_width=True,
                          column_config={"dernier_lavage": st.column_config.DateColumn("Dernier lavage",
                                                                                      format="DD/MM/YYYY")})
 
-base_out = df_base[["_cle", "statut", "nom", "adresse", "cp", "localite", "pays", "telephone", "email",
-                    "nb", "prix_med", "prix_min", "prix_max", "dernier_prix", "dernier_lavage",
-                    "lat", "lon", "precision", "rapprochement", "nom_annuaire"]].rename(columns={"_cle": "cle"})
-
-with t_base:
-    echecs = base_out[base_out["precision"] == "échec"]
-    approx = base_out[base_out["precision"] == "localité"]
-    b1, b2, b3, b4 = st.columns(4)
-    b1.metric("Stations dans la base", len(base_out))
-    b2.metric("Dont jamais utilisées", int((base_out["nb"] == 0).sum()))
-    b3.metric("Position approximative", len(approx))
-    b4.metric("Non géocodées", len(echecs))
-    st.caption("Exportez la base depuis le panneau de gauche et rechargez-la comme « Base géocodée » : "
-               "le géocodage devient instantané. Les lat/lon peuvent être corrigées à la main dans le fichier.")
+echecs = base_out[base_out["precision"] == "échec"]
+approx = base_out[base_out["precision"] == "localité"]
+if not echecs.empty or not approx.empty:
+    st.markdown('<div class="ap-section">Positions à vérifier</div>', unsafe_allow_html=True)
     if not echecs.empty:
-        st.markdown("**Non géocodées**")
-        st.dataframe(echecs[["nom", "adresse", "localite", "cp"]], hide_index=True)
-
-# ─── Panneau : exports ───────────────────────────────────────────────────────
-with c_data:
-    base_xls = base_out.copy()
-    base_xls["dernier_lavage"] = base_xls["dernier_lavage"].dt.date
-    st.download_button("Télécharger la base géocodée", excel_auto({"Base stations": base_xls}),
-                       file_name="base_stations_lavage.xlsx", use_container_width=True,
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    if center and (not df_proche.empty or not df_pistes.empty):
-        internes = ["_cle", "lat_ann", "lon_ann"]
-        feuilles = {}
-        if not proche_hist.empty:
-            feuilles["Stations utilisées"] = proche_hist.drop(columns=internes, errors="ignore")
-        if not proche_ann.empty:
-            feuilles["Annuaire non utilisées"] = proche_ann.drop(
-                columns=internes + ["nb", "prix_med", "prix_min", "prix_max", "dernier_prix", "dernier_lavage"],
-                errors="ignore")
-        if not df_pistes.empty:
-            feuilles["Nouvelles pistes"] = df_pistes.drop(columns=["deja_connue"])
-        for f in feuilles.values():
-            if "dernier_lavage" in f.columns:
-                f["dernier_lavage"] = f["dernier_lavage"].dt.date
-        st.download_button("Exporter cette recherche", excel_auto(feuilles),
-                           file_name=f"lavages_autour_{center['lat']:.3f}_{center['lon']:.3f}.xlsx",
-                           use_container_width=True,
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        with st.expander(f"Non géocodées, absentes de la carte ({len(echecs)})"):
+            st.dataframe(echecs[["nom", "adresse", "cp", "localite", "pays"]], hide_index=True, use_container_width=True)
+    if not approx.empty:
+        with st.expander(f"Placées au centre de la commune ({len(approx)})"):
+            st.dataframe(approx[["nom", "adresse", "cp", "localite", "pays"]], hide_index=True, use_container_width=True)
+    st.caption("Corrigez les lat/lon dans la base géocodée exportée, puis rechargez-la.")
