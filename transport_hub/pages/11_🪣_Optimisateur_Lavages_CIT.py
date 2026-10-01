@@ -2,7 +2,8 @@
 Page Streamlit : Optimisateur Lavages Citernes — recherche autour d'une position
 - On choisit une position : adresse tapée OU clic sur la carte
 - Stations connues (historique lavages) dans le rayon, avec prix pratiqués
-- Nouvelles stations potentielles (OpenStreetMap, + Google Places si clé API)
+- Nouvelles stations potentielles (OpenStreetMap, + Google Places si clé API),
+  recherchées à la demande, après affichage de la carte
 - Référentiel géocodé exportable pour ne pas regéocoder à chaque fois
 
 Dépendances à ajouter dans requirements.txt :
@@ -13,10 +14,13 @@ Dépendances à ajouter dans requirements.txt :
 import io
 import re
 import json
+import time
+import math
 import difflib
 import unicodedata
 import urllib.request as ureq
 import urllib.parse as uparse
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pandas as pd
@@ -60,6 +64,7 @@ h1, h2, h3, .stMarkdown { color: #e8f4fd; }
 """, unsafe_allow_html=True)
 
 UA = {"User-Agent": "CB-Transport-Hub/1.0"}
+OSM_RAYON_MAX = 100  # km — au-delà, Overpass devient trop lent
 
 # ─── Utilitaires ─────────────────────────────────────────────────────────────
 def normalize(text) -> str:
@@ -106,7 +111,7 @@ def _get_json(url, timeout=10):
         return json.loads(r.read())
 
 
-def _post_json(url, body: bytes, headers: dict, timeout=45):
+def _post_json(url, body: bytes, headers: dict, timeout=30):
     req = ureq.Request(url, data=body, headers={**UA, **headers}, method="POST")
     with ureq.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
@@ -154,19 +159,17 @@ def search_address(query: str):
 def geocode_station(nom: str, localite: str, cp: str, pays: str = ""):
     """
     Géocode une station. Le résultat par nom n'est accepté que si le CP ou la
-    localité retournés correspondent (évite les homonymes à l'autre bout de l'Europe).
+    localité retournés correspondent (évite les homonymes ailleurs en Europe).
     Retour : (lat, lon, précision) ou None.
     """
     cp_n, loc_n = normalize(cp), normalize(localite)
 
-    # 1) Nom de la station + adresse
     for f in _photon(f"{nom}, {cp} {localite} {pays}".strip(" ,"), limit=3):
         p = f.get("properties", {})
         if normalize(p.get("postcode")) == cp_n or (loc_n and normalize(p.get("city")) == loc_n):
             lon, lat = f["geometry"]["coordinates"]
             return float(lat), float(lon), "station"
 
-    # 2) CP + localité (position approximative au centre de la commune)
     q_loc = f"{cp} {localite} {pays}".strip()
     feats = _photon(q_loc, limit=1)
     if feats:
@@ -178,7 +181,7 @@ def geocode_station(nom: str, localite: str, cp: str, pays: str = ""):
     return None
 
 
-# ─── Recherche de nouvelles stations ─────────────────────────────────────────
+# ─── Recherche de nouvelles stations (sans cache Streamlit : appelées en threads) ─
 NAME_RX = (
     "tank ?clean|tank ?wash|tankreinig|tankinnenreinig|tankwasch|tankreiniging|"
     "lavage.{0,12}citerne|nettoyage.{0,12}citerne|station de lavage poids|"
@@ -190,15 +193,18 @@ OVERPASS_URLS = [
 ]
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def search_osm(lat: float, lon: float, radius_km: int):
-    r = int(min(radius_km, 150) * 1000)
+def search_osm(lat: float, lon: float, radius_km: float):
+    """Bbox au lieu de 'around' (beaucoup plus rapide), rayon plafonné."""
+    r = min(radius_km, OSM_RAYON_MAX)
+    dlat = r / 111.0
+    dlon = r / (111.0 * max(math.cos(math.radians(lat)), 0.1))
+    s, w, n, e = lat - dlat, lon - dlon, lat + dlat, lon + dlon
     query = f"""
-[out:json][timeout:40];
+[out:json][timeout:25][bbox:{s:.4f},{w:.4f},{n:.4f},{e:.4f}];
 (
-  nwr(around:{r},{lat},{lon})["name"~"{NAME_RX}",i][!"highway"];
-  nwr(around:{r},{lat},{lon})["amenity"="vehicle_wash"]["hgv"~"yes|designated|only"];
-  nwr(around:{r},{lat},{lon})["amenity"="truck_wash"];
+  nw["name"~"{NAME_RX}",i][!"highway"];
+  nw["amenity"="vehicle_wash"]["hgv"~"yes|designated|only"];
+  nw["amenity"="truck_wash"];
 );
 out center tags;
 """
@@ -206,7 +212,7 @@ out center tags;
     data = None
     for url in OVERPASS_URLS:
         try:
-            data = _post_json(url, body, {"Content-Type": "application/x-www-form-urlencoded"})
+            data = _post_json(url, body, {"Content-Type": "application/x-www-form-urlencoded"}, timeout=30)
             break
         except Exception:
             continue
@@ -240,47 +246,62 @@ def get_google_key():
         return None
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def search_google(lat: float, lon: float, radius_km: int, api_key: str):
-    termes = ["tank cleaning station", "lavage citerne camion", "Tankreinigung", "tankreiniging"]
+GOOGLE_TERMES = ["tank cleaning station", "lavage citerne camion", "Tankreinigung", "tankreiniging"]
+
+
+def _google_terme(terme, lat, lon, radius_km, api_key):
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": (
             "places.id,places.displayName,places.formattedAddress,places.location,"
-            "places.nationalPhoneNumber,places.websiteUri,places.googleMapsUri"
+            "places.nationalPhoneNumber,places.websiteUri"
         ),
     }
-    out, vus = [], set()
-    for terme in termes:
-        body = json.dumps({
-            "textQuery": terme,
-            "pageSize": 20,
-            "locationBias": {"circle": {
-                "center": {"latitude": lat, "longitude": lon},
-                "radius": float(min(radius_km * 1000, 50000)),
-            }},
-        }).encode()
-        try:
-            data = _post_json("https://places.googleapis.com/v1/places:searchText", body, headers, timeout=15)
-        except Exception:
+    body = json.dumps({
+        "textQuery": terme,
+        "pageSize": 20,
+        "locationBias": {"circle": {
+            "center": {"latitude": lat, "longitude": lon},
+            "radius": float(min(radius_km * 1000, 50000)),
+        }},
+    }).encode()
+    try:
+        data = _post_json("https://places.googleapis.com/v1/places:searchText", body, headers, timeout=12)
+    except Exception:
+        return []
+    out = []
+    for p in data.get("places", []):
+        loc = p.get("location", {})
+        if "latitude" not in loc:
             continue
-        for p in data.get("places", []):
-            if p.get("id") in vus:
-                continue
-            vus.add(p.get("id"))
-            loc = p.get("location", {})
-            if "latitude" not in loc:
-                continue
-            out.append({
-                "nom": p.get("displayName", {}).get("text", "?"),
-                "adresse": p.get("formattedAddress", ""),
-                "lat": float(loc["latitude"]), "lon": float(loc["longitude"]),
-                "telephone": p.get("nationalPhoneNumber", ""),
-                "site": p.get("websiteUri", ""),
-                "source": "Google",
-            })
+        out.append({
+            "nom": p.get("displayName", {}).get("text", "?"),
+            "adresse": p.get("formattedAddress", ""),
+            "lat": float(loc["latitude"]), "lon": float(loc["longitude"]),
+            "telephone": p.get("nationalPhoneNumber", ""),
+            "site": p.get("websiteUri", ""),
+            "source": "Google",
+        })
     return out
+
+
+def fetch_new_stations(lat, lon, radius_km, use_osm, google_key):
+    """Lance OSM et tous les termes Google en parallèle."""
+    t0 = time.time()
+    trouves, osm_erreur = [], False
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        f_osm = ex.submit(search_osm, lat, lon, radius_km) if use_osm else None
+        f_g = [ex.submit(_google_terme, t, lat, lon, radius_km, google_key) for t in GOOGLE_TERMES] if google_key else []
+        for f in f_g:
+            trouves += f.result()
+        if f_osm is not None:
+            res = f_osm.result()
+            if res is None:
+                osm_erreur = True
+            else:
+                trouves += res
+    return {"trouves": trouves, "osm_erreur": osm_erreur, "duree": time.time() - t0}
 
 
 # ─── Chargement ──────────────────────────────────────────────────────────────
@@ -302,7 +323,6 @@ def build_lavages(df_l: pd.DataFrame, df_m: pd.DataFrame | None):
     df["_pays"] = df["Pays"].fillna("").str.strip() if "Pays" in df.columns else ""
     df["_cle"] = df["Nom 1"].map(normalize) + "|" + df["Code postal"]
 
-    # Produit transporté (le prix d'un lavage dépend du produit précédent)
     if df_m is not None and {"N° Dossier", "Produit"}.issubset(df_m.columns) and "N° Dossier" in df.columns:
         prod = df_m[["N° Dossier", "Produit"]].copy()
         prod["N° Dossier"] = prod["N° Dossier"].str.strip()
@@ -327,6 +347,37 @@ def build_stations(df: pd.DataFrame) -> pd.DataFrame:
         dernier_lavage=("Date", "max"),
     ).reset_index()
     return st_df[st_df["nom"] != ""]
+
+
+def prepare_pistes(trouves, center, rayon, df_st_geo):
+    """Filtre au rayon, dédoublonne, et marque ce qui est déjà dans l'historique."""
+    if not trouves:
+        return pd.DataFrame()
+    df_new = pd.DataFrame(trouves)
+    df_new["dist_km"] = haversine(center["lat"], center["lon"], df_new["lat"], df_new["lon"])
+    df_new = df_new[df_new["dist_km"] <= rayon]
+    if df_new.empty:
+        return df_new
+
+    gardes = []
+    for _, r in df_new.iterrows():
+        if all(haversine(r["lat"], r["lon"], g["lat"], g["lon"]) > 0.15 for g in gardes):
+            gardes.append(r)
+    df_new = pd.DataFrame(gardes)
+
+    def deja_connue(r):
+        if df_st_geo.empty:
+            return ""
+        d = haversine(r["lat"], r["lon"], df_st_geo["lat"].values, df_st_geo["lon"].values)
+        proches = df_st_geo[d < 5].assign(_d=d[d < 5])
+        for _, k in proches.iterrows():
+            sim = difflib.SequenceMatcher(None, normalize(r["nom"]), normalize(k["nom"])).ratio()
+            if k["_d"] < 0.4 or sim > 0.75:
+                return k["nom"]
+        return ""
+
+    df_new["deja_connue"] = df_new.apply(deja_connue, axis=1)
+    return df_new.sort_values("dist_km")
 
 
 # ─── En-tête ─────────────────────────────────────────────────────────────────
@@ -366,21 +417,20 @@ df_st = build_stations(df_lav)
 has_produit = "Produit" in df_lav.columns
 
 # ─── Géocodage des stations connues (session + référentiel) ─────────────────
-if "coords" not in st.session_state:
-    st.session_state["coords"] = {}
-coords = st.session_state["coords"]
+coords = st.session_state.setdefault("coords", {})
 
-if ref_file:
+if ref_file and not st.session_state.get("ref_charge"):
     try:
         ref = load_excel(ref_file.getvalue())
         for _, r in ref.dropna(subset=["cle", "lat", "lon"]).iterrows():
-            coords.setdefault(r["cle"], (float(r["lat"]), float(r["lon"]), r.get("precision", "référentiel")))
+            coords[r["cle"]] = (float(r["lat"]), float(r["lon"]), r.get("precision", "référentiel"))
+        st.session_state["ref_charge"] = True
     except Exception as e:
         st.warning(f"Référentiel ignoré ({e}) — colonnes attendues : cle, lat, lon, precision")
 
 a_geocoder = df_st[~df_st["_cle"].isin(coords.keys())]
 if not a_geocoder.empty:
-    bar = st.progress(0, text=f"Géocodage de {len(a_geocoder)} station(s)… (une seule fois par session)")
+    bar = st.progress(0, text=f"Géocodage de {len(a_geocoder)} station(s)… (une seule fois — exportez ensuite le référentiel)")
     for i, (_, r) in enumerate(a_geocoder.iterrows()):
         res = geocode_station(r["nom"], r["localite"], r["cp"], r["pays"])
         coords[r["_cle"]] = res if res else (np.nan, np.nan, "échec")
@@ -413,78 +463,49 @@ with col_c:
     if st.button("📍 Centrer ici", use_container_width=True, disabled=choix is None):
         st.session_state["center"] = {"lat": choix["lat"], "lon": choix["lon"], "label": choix["label"]}
 
-col_o1, col_o2 = st.columns(2)
-with col_o1:
-    chercher_osm = st.checkbox("🔎 Chercher de nouvelles stations (OpenStreetMap)", value=True)
-google_key = get_google_key()
-with col_o2:
-    chercher_google = st.checkbox("🔎 Chercher aussi via Google Places", value=bool(google_key),
-                                  disabled=not google_key,
-                                  help=None if google_key else "Ajoutez GOOGLE_PLACES_API_KEY dans les secrets Streamlit")
-
 center = st.session_state.get("center")
+google_key = get_google_key()
 
-# ─── Calculs autour de la position ───────────────────────────────────────────
-df_proche = pd.DataFrame()
-df_new = pd.DataFrame()
-osm_erreur = False
+col_o1, col_o2, col_o3 = st.columns([2, 2, 2])
+with col_o1:
+    use_osm = st.checkbox("Source OpenStreetMap", value=True,
+                          help=f"Gratuit, mais incomplet. Rayon plafonné à {OSM_RAYON_MAX} km.")
+with col_o2:
+    use_google = st.checkbox("Source Google Places", value=bool(google_key), disabled=not google_key,
+                             help=None if google_key else "Ajoutez GOOGLE_PLACES_API_KEY dans les secrets Streamlit")
+with col_o3:
+    lancer = st.button("🔎 Chercher de nouvelles stations", use_container_width=True,
+                       disabled=not center or not (use_osm or use_google))
 
+# Signature de la recherche : position + rayon + sources
+sig = None
 if center:
+    sig = (round(center["lat"], 3), round(center["lon"], 3), rayon, use_osm, bool(use_google and google_key))
+pistes_cache = st.session_state.setdefault("pistes_cache", {})
+if lancer and sig not in pistes_cache:
+    st.session_state["recherche_en_attente"] = sig
+
+# ─── Stations connues autour (instantané) ────────────────────────────────────
+df_proche = pd.DataFrame()
+if center and not df_st_geo.empty:
     df_st_geo["dist_km"] = haversine(center["lat"], center["lon"], df_st_geo["lat"], df_st_geo["lon"])
     df_proche = df_st_geo[df_st_geo["dist_km"] <= rayon].sort_values("dist_km").copy()
 
-    trouves = []
-    lat_r, lon_r = round(center["lat"], 3), round(center["lon"], 3)
-    with st.spinner("Recherche de nouvelles stations…"):
-        if chercher_google and google_key:
-            trouves += search_google(lat_r, lon_r, rayon, google_key)
-        if chercher_osm:
-            res_osm = search_osm(lat_r, lon_r, rayon)
-            if res_osm is None:
-                osm_erreur = True
-            else:
-                trouves += res_osm
-
-    if trouves:
-        df_new = pd.DataFrame(trouves)
-        df_new["dist_km"] = haversine(center["lat"], center["lon"], df_new["lat"], df_new["lon"])
-        df_new = df_new[df_new["dist_km"] <= rayon]
-
-        # Dédoublonnage entre sources (< 150 m = même site)
-        gardes = []
-        for _, r in df_new.iterrows():
-            if all(haversine(r["lat"], r["lon"], g["lat"], g["lon"]) > 0.15 for g in gardes):
-                gardes.append(r)
-        df_new = pd.DataFrame(gardes)
-
-        # Déjà dans notre historique ? (proximité ou nom similaire)
-        def deja_connue(r):
-            if df_st_geo.empty:
-                return ""
-            d = haversine(r["lat"], r["lon"], df_st_geo["lat"].values, df_st_geo["lon"].values)
-            proches = df_st_geo[d < 5].assign(_d=d[d < 5])
-            for _, k in proches.iterrows():
-                sim = difflib.SequenceMatcher(None, normalize(r["nom"]), normalize(k["nom"])).ratio()
-                if k["_d"] < 0.4 or sim > 0.75:
-                    return k["nom"]
-            return ""
-
-        if not df_new.empty:
-            df_new["deja_connue"] = df_new.apply(deja_connue, axis=1)
-            df_new = df_new.sort_values("dist_km")
-
+# Nouvelles pistes : uniquement si déjà cherchées pour cette position
+res_pistes = pistes_cache.get(sig) if sig else None
+df_new = prepare_pistes(res_pistes["trouves"], center, rayon, df_st_geo) if res_pistes else pd.DataFrame()
 df_pistes = df_new[df_new["deja_connue"] == ""] if not df_new.empty else pd.DataFrame()
 
 # ─── KPIs ────────────────────────────────────────────────────────────────────
 if center:
     st.markdown(f"### 📍 {center['label']} — rayon {rayon} km")
     k1, k2, k3, k4 = st.columns(4)
-    prix_zone = df_proche["prix_med"].median() if not df_proche.empty else np.nan
-    moins_chere = (df_proche.dropna(subset=["prix_med"]).sort_values("prix_med").iloc[0]
-                   if not df_proche.dropna(subset=["prix_med"]).empty else None)
+    prix_ok = df_proche.dropna(subset=["prix_med"]) if not df_proche.empty else pd.DataFrame()
+    prix_zone = prix_ok["prix_med"].median() if not prix_ok.empty else np.nan
+    moins_chere = prix_ok.sort_values("prix_med").iloc[0] if not prix_ok.empty else None
     vals = [
         (len(df_proche), "Stations déjà utilisées"),
-        (len(df_pistes), "Nouvelles pistes"),
+        (len(df_pistes) if res_pistes else "—", "Nouvelles pistes"),
         (f"{prix_zone:.0f} €" if pd.notna(prix_zone) else "—", "Prix médian zone"),
         (f"{moins_chere['prix_med']:.0f} €" if moins_chere is not None else "—",
          f"Moins chère : {moins_chere['nom'][:28]}" if moins_chere is not None else "Moins chère"),
@@ -492,10 +513,12 @@ if center:
     for col, (v, lbl) in zip([k1, k2, k3, k4], vals):
         col.markdown(f'<div class="kpi-box"><div class="kpi-val">{v}</div><div class="kpi-lbl">{lbl}</div></div>',
                      unsafe_allow_html=True)
-    if osm_erreur:
-        st.warning("OpenStreetMap (Overpass) ne répond pas pour le moment — réessayez dans une minute.")
+    if res_pistes and res_pistes["osm_erreur"]:
+        st.warning("OpenStreetMap n'a pas répondu à temps — relancez la recherche dans une minute.")
+    if use_osm and rayon > OSM_RAYON_MAX:
+        st.caption(f"ℹ️ La recherche OpenStreetMap est limitée à {OSM_RAYON_MAX} km pour rester rapide.")
 
-# ─── Carte ───────────────────────────────────────────────────────────────────
+# ─── Carte (affichée tout de suite) ──────────────────────────────────────────
 if center:
     m = folium.Map(location=[center["lat"], center["lon"]], zoom_start=9, tiles="CartoDB dark_matter")
     folium.Circle([center["lat"], center["lon"]], radius=rayon * 1000,
@@ -508,16 +531,14 @@ elif not df_st_geo.empty:
 else:
     m = folium.Map(location=[49.8, 5.5], zoom_start=6, tiles="CartoDB dark_matter")
 
-# Stations connues hors rayon : petits points discrets
 ids_proches = set(df_proche["_cle"]) if not df_proche.empty else set()
 for _, r in df_st_geo[~df_st_geo["_cle"].isin(ids_proches)].iterrows():
     folium.CircleMarker([r["lat"], r["lon"]], radius=3, color="#5a7085", fill=True, fill_opacity=0.7,
                         tooltip=f"{r['nom']} ({r['localite']})").add_to(m)
 
-# Stations connues dans le rayon : couleur selon le prix médian (tiers de la zone)
 if not df_proche.empty:
-    prix_ok = df_proche["prix_med"].dropna()
-    q1, q2 = (prix_ok.quantile(1 / 3), prix_ok.quantile(2 / 3)) if len(prix_ok) >= 3 else (np.inf, np.inf)
+    prix_dispo = df_proche["prix_med"].dropna()
+    q1, q2 = (prix_dispo.quantile(1 / 3), prix_dispo.quantile(2 / 3)) if len(prix_dispo) >= 3 else (np.inf, np.inf)
     for _, r in df_proche.iterrows():
         p = r["prix_med"]
         couleur = "gray" if pd.isna(p) else ("green" if p <= q1 else "orange" if p <= q2 else "red")
@@ -532,7 +553,6 @@ if not df_proche.empty:
                       popup=folium.Popup(popup, max_width=320),
                       icon=folium.Icon(color=couleur, icon="tint", prefix="fa")).add_to(m)
 
-# Nouvelles pistes
 if not df_pistes.empty:
     for _, r in df_pistes.iterrows():
         popup = (f"<b>{r['nom']}</b><br>{r['adresse'] or '(adresse non renseignée)'}<br>"
@@ -550,17 +570,32 @@ st.markdown("<small>🟢 moins cher de la zone &nbsp;|&nbsp; 🟠 prix moyen &nb
             "⚪ prix inconnu &nbsp;|&nbsp; 🟣 nouvelle piste &nbsp;|&nbsp; ⚫ centre de recherche &nbsp;|&nbsp; "
             "points gris : stations connues hors rayon</small>", unsafe_allow_html=True)
 
+# Clic sur la carte → nouveau centre (pas de recherche externe automatique)
 clic = (carte or {}).get("last_clicked")
 if clic:
-    sig = (round(clic["lat"], 5), round(clic["lng"], 5))
-    if sig != st.session_state.get("dernier_clic"):
-        st.session_state["dernier_clic"] = sig
+    sig_clic = (round(clic["lat"], 5), round(clic["lng"], 5))
+    if sig_clic != st.session_state.get("dernier_clic"):
+        st.session_state["dernier_clic"] = sig_clic
         st.session_state["center"] = {"lat": clic["lat"], "lon": clic["lng"],
                                       "label": f"Point sélectionné ({clic['lat']:.4f}, {clic['lng']:.4f})"}
         st.rerun()
 
+# Recherche externe : lancée APRÈS l'affichage de la carte, puis rafraîchissement
+en_attente = st.session_state.get("recherche_en_attente")
+if en_attente and en_attente == sig:
+    with st.spinner("Recherche de nouvelles stations… (la carte se met à jour à la fin)"):
+        pistes_cache[sig] = fetch_new_stations(
+            center["lat"], center["lon"], rayon, use_osm, google_key if use_google else None
+        )
+    st.session_state["recherche_en_attente"] = None
+    st.rerun()
+
 if not center:
     st.info("👆 Tapez une adresse puis « Centrer ici », ou cliquez sur la carte.")
+elif not res_pistes:
+    st.caption("Les nouvelles stations ne sont cherchées que sur demande : bouton « Chercher de nouvelles stations ».")
+else:
+    st.caption(f"Recherche de nouvelles stations effectuée en {res_pistes['duree']:.1f} s.")
 
 # ─── Onglets de résultats ────────────────────────────────────────────────────
 onglets = ["🧼 Stations connues", "🆕 Nouvelles pistes"]
@@ -576,7 +611,7 @@ with t_connues:
     if not center:
         st.info("Choisissez d'abord une position.")
     elif df_proche.empty:
-        st.info(f"Aucune station de l'historique dans un rayon de {rayon} km. Voir l'onglet Nouvelles pistes.")
+        st.info(f"Aucune station de l'historique dans un rayon de {rayon} km. Lancez la recherche de nouvelles stations.")
     else:
         vue = df_proche[["nom", "localite", "cp", "dist_km", "nb", "prix_med", "prix_min", "prix_max",
                          "dernier_prix", "dernier_lavage", "precision"]].copy()
@@ -600,8 +635,8 @@ with t_connues:
 with t_pistes:
     if not center:
         st.info("Choisissez d'abord une position.")
-    elif not chercher_osm and not chercher_google:
-        st.info("Activez au moins une source de recherche au-dessus de la carte.")
+    elif not res_pistes:
+        st.info("Cliquez sur « Chercher de nouvelles stations » pour interroger les sources externes.")
     elif df_pistes.empty:
         st.info("Aucune nouvelle station trouvée dans ce rayon. OpenStreetMap est incomplet sur ce type de site : "
                 "élargissez le rayon ou activez Google Places.")
@@ -636,8 +671,7 @@ if t_produit is not None:
                 st.info("Pas de lavage avec prix et produit identifiés dans cette zone.")
             else:
                 st.markdown("**Prix médian par station et par produit transporté**")
-                pivot = lav_zone.pivot_table(index="Produit", columns="Nom 1", values="_prix",
-                                             aggfunc="median")
+                pivot = lav_zone.pivot_table(index="Produit", columns="Nom 1", values="_prix", aggfunc="median")
                 st.dataframe(pivot.style.format("{:.2f} €", na_rep="—").highlight_min(axis=1, color="#1f5e3a"),
                              use_container_width=True)
                 st.caption("En vert : station la moins chère pour ce produit dans la zone.")
