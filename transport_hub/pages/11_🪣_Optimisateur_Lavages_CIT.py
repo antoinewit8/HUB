@@ -354,6 +354,8 @@ def build_lavages(df_l: pd.DataFrame, df_ca: pd.DataFrame | None, map_ca: tuple 
     df["_prix_lav"] = df["Prix"].apply(parse_prix) if "Prix" in df.columns else np.nan
     df["_pays"] = df["Pays"].fillna("").str.strip() if "Pays" in df.columns else ""
     df["_cle"] = df["Nom 1"].map(normalize) + "|" + df["Code postal"]
+    # Station de lavage = « Nom 2 » renseigné ; laiterie / usine = « Nom 2 » vide
+    df["_nom2"] = df["Nom 2"].fillna("").astype(str).str.strip() if "Nom 2" in df.columns else "?"
     df["_dos"] = df["N° Dossier"].map(dossier_norm) if "N° Dossier" in df.columns else ""
     df["_prix"] = df["_prix_lav"]
     df["_prix_src"] = np.where(df["_prix_lav"].notna(), "Fichier lavages", "")
@@ -410,7 +412,11 @@ def build_stations(df: pd.DataFrame) -> pd.DataFrame:
         prix_max=("_prix", "max"),
         dernier_prix=("_prix", "last"),
         dernier_lavage=("Date", "max"),
+        nb_nom2=("_nom2", lambda x: int((x != "").sum())),
     ).reset_index()
+    st_df["type"] = np.where(st_df["nb_nom2"] > 0, "station", "laiterie")
+    # Classement mixte : certaines lignes avec « Nom 2 », d'autres sans
+    st_df["type_mixte"] = (st_df["nb_nom2"] > 0) & (st_df["nb_nom2"] < st_df["nb"])
     return st_df[st_df["nom"] != ""].reset_index(drop=True)
 
 
@@ -529,6 +535,7 @@ def build_base(hist: pd.DataFrame, ann: pd.DataFrame | None) -> pd.DataFrame:
         "_cle": seules["nom"].map(normalize) + "|" + seules["cp"],
         "nom": seules["nom"], "localite": seules["localite"], "cp": seules["cp"], "pays": seules["pays"],
         "nb": 0, "prix_med": np.nan, "prix_min": np.nan, "prix_max": np.nan,
+        "type": "station", "type_mixte": False, "nb_nom2": 0,
         "dernier_prix": np.nan, "dernier_lavage": pd.NaT,
         "adresse": seules["adresse"], "telephone": seules["telephone"], "email": seules["email"],
         "nom_annuaire": seules["nom"], "rapprochement": "",
@@ -799,10 +806,15 @@ td a { color: #0066cc; text-decoration: none; }
 
   <div class="sec">
     <h2>Affichage</h2>
+    <div id="bloc-types">
+      <p class="lbl">Type de lieu</p>
+      <div class="seg" id="types"></div>
+      <p class="lbl" style="margin-top:16px">Fond de carte</p>
+    </div>
     <div class="seg" id="fonds"></div>
     <div class="rows">
       <label class="row">Frontières renforcées<span class="sw"><input type="checkbox" id="t-borders" checked><span></span></span></label>
-      <label class="row">Stations hors rayon<span class="sw"><input type="checkbox" id="t-hors" checked><span></span></span></label>
+      <label class="row">Lieux hors rayon<span class="sw"><input type="checkbox" id="t-hors" checked><span></span></span></label>
     </div>
   </div>
 
@@ -850,6 +862,8 @@ const BORDERS = __BORDERS__;
 const ST = D.stations;
 const LAV = D.lavages || [];
 const HAS_PROD = LAV.length > 0;
+const TYPE_C = { station: '#0a84ff', laiterie: '#ff9f0a' };
+const TYPE_L = { station: 'Station de lavage', laiterie: 'Laiterie ou usine' };
 const C = { vert: '#00a854', orange: '#f57c00', rouge: '#e53935', gris: '#78909c', ann: '#00acc1', piste: '#aa00ff', centre: '#e53935' };
 function esri(s) { return `https://server.arcgisonline.com/ArcGIS/rest/services/${s}/MapServer/tile/{z}/{y}/{x}`; }
 const FONDS = {
@@ -862,7 +876,7 @@ const OSM_MAX = 100;
 const OVERPASS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 const NAME_RX = 'tank ?clean|tank ?wash|tankreinig|tankinnenreinig|tankwasch|tankreiniging|lavage.{0,12}citerne|nettoyage.{0,12}citerne|station de lavage poids|lavaggio.{0,6}cisterne|limpieza.{0,6}cisternas|cleaning station';
 
-const state = { center: null, rayon: 50, fond: 'Satellite', borders: true, hors: true,
+const state = { type: 'tout', center: null, rayon: 50, fond: 'Satellite', borders: true, hors: true,
                 pistes: {}, tab: 'proches', sort: { key: 'dist', dir: 1 }, filtre: '',
                 proches: [], used: [], ann: [], pis: [] };
 const $ = id => document.getElementById(id);
@@ -892,7 +906,8 @@ function gmaps(la, lo) { return `https://www.google.com/maps/search/?api=1&query
 function divIcon(cls, txt = '', bg = null) {
   return L.divIcon({ className: 'cb-icon', html: `<div class="${cls}"${bg ? ` style="background:${bg}"` : ''}>${txt}</div>`, iconSize: [0, 0], iconAnchor: [0, 0] });
 }
-ST.forEach((s, i) => { s.i = i; s._nn = nn(s.nom); });
+ST.forEach((s, i) => { s.i = i; s._nn = nn(s.nom); s.type = s.type || 'station'; });
+const vis = s => state.type === 'tout' || s.type === state.type;
 
 // ── Carte ──
 const map = L.map('map', { zoomControl: false, worldCopyJump: true }).setView([49.8, 5.5], 6);
@@ -922,6 +937,7 @@ function drawBorders() {
 
 function popupStation(s) {
   const l = [`<b style="font-size:14px">${esc(s.nom)}</b>`];
+  if (D.has_type) l.push(`<span style="color:${TYPE_C[s.type]};font-weight:600">${TYPE_L[s.type]}</span>`);
   if (s.adresse) l.push(esc(s.adresse));
   l.push(`${esc(s.cp)} ${esc(s.localite)} ${esc(s.pays)}`.trim());
   if (s.nb > 0) {
@@ -998,12 +1014,13 @@ function render() {
   if (c) {
     circle = L.circle([c.lat, c.lon], { radius: R * 1000, color: C.centre, weight: 2, dashArray: '6 6', fillOpacity: .05, interactive: false }).addTo(map);
     lyr.addLayer(L.marker([c.lat, c.lon], { icon: divIcon('cb-centre'), interactive: false, keyboard: false, zIndexOffset: -1000 }));
-    proches = ST.filter(s => s.dist <= R).sort((a, b) => a.dist - b.dist);
+    proches = ST.filter(s => vis(s) && s.dist <= R).sort((a, b) => a.dist - b.dist);
   }
   const dedans = new Set(proches.map(s => s.i));
   if (state.hors) ST.forEach(s => {
-    if (dedans.has(s.i)) return;
-    const m = L.circleMarker([s.lat, s.lon], { radius: 5, color: '#fff', weight: 1.5, fillColor: s.nb === 0 ? C.ann : f.point, fillOpacity: .95, bubblingMouseEvents: false })
+    if (dedans.has(s.i) || !vis(s)) return;
+    const fill = s.nb === 0 ? C.ann : (state.type === 'tout' && D.has_type ? TYPE_C[s.type] : f.point);
+    const m = L.circleMarker([s.lat, s.lon], { radius: 5, color: '#fff', weight: 1.5, fillColor: fill, fillOpacity: .95, bubblingMouseEvents: false })
       .bindTooltip(`${esc(s.nom)} (${esc(s.localite)})`).bindPopup(() => popupStation(s), { maxWidth: 320 });
     lyr.addLayer(m); mk['s' + s.i] = m;
   });
@@ -1016,14 +1033,16 @@ function render() {
   };
   ann.forEach(s => add('s' + s.i, [s.lat, s.lon], divIcon('cb-carre'), `${s.nom} (jamais utilisée)`, () => popupStation(s)));
   used.forEach(s => {
-    const p = s.prix_med, col = p == null ? C.gris : (p <= q1 ? C.vert : p <= q2 ? C.orange : C.rouge);
+    const p = s.prix_med;
+    const col = (state.type === 'tout' && D.has_type) ? TYPE_C[s.type]
+      : (p == null ? C.gris : (p <= q1 ? C.vert : p <= q2 ? C.orange : C.rouge));
     const txt = p == null ? '? €' : `${Math.round(p)} €`;
     add('s' + s.i, [s.lat, s.lon], divIcon('cb-pill', txt, col), `${s.nom} : ${txt}`, () => popupStation(s));
   });
-  const pis = preparePistes();
+  const pis = state.type === 'laiterie' ? null : preparePistes();
   (pis || []).forEach((p, j) => { p.j = j; add('p' + j, [p.lat, p.lon], divIcon('cb-losange'), `Nouvelle piste : ${p.nom}`, () => popupPiste(p)); });
   Object.assign(state, { proches, used, ann, pis });
-  updateInfo(); updateEtatPistes(); updateChip();
+  updateInfo(); updateEtatPistes(); updateChip(); legend();
   if (document.body.classList.contains('sheet-open')) renderSheet();
 }
 
@@ -1038,29 +1057,37 @@ function updateInfo() {
   const stat = (v, l) => `<div><div class="n">${v}</div><div class="l">${l}</div></div>`;
   $('info').innerHTML = `<div class="k">Rayon de ${state.rayon} km autour de</div><div class="t">${esc(c.label)}</div>
     <div class="stats">${stat(state.used.length, 'utilisées')}${stat(D.has_annuaire ? state.ann.length : '—', 'annuaire')}${stat(state.pis ? state.pis.length : '—', 'pistes')}</div>
-    <div class="kv"><span>Prix médian de la zone</span><b>${px.length ? Math.round(median(px.map(s => s.prix_med))) + ' €' : '—'}</b></div>`
-    + (moins ? `<div class="kv"><span>Moins chère</span><b class="vert">${Math.round(moins.prix_med)} €</b></div><div class="s">${esc(moins.nom)}</div>` : '');
+    ` + (state.type === 'tout' && D.has_type
+      ? ['station', 'laiterie'].map(t => { const v = px.filter(s => s.type === t).map(s => s.prix_med);
+          return `<div class="kv"><span>Prix médian ${t === 'station' ? 'stations de lavage' : 'laiteries'}</span><b>${v.length ? Math.round(median(v)) + ' €' : '—'}</b></div>`; }).join('')
+      : `<div class="kv"><span>Prix médian de la zone</span><b>${px.length ? Math.round(median(px.map(s => s.prix_med))) + ' €' : '—'}</b></div>`)
+    + (moins ? `<div class="kv"><span>Moins cher</span><b class="vert">${Math.round(moins.prix_med)} €</b></div><div class="s">${esc(moins.nom)}${D.has_type && state.type === 'tout' ? ` (${TYPE_L[moins.type].toLowerCase()})` : ''}</div>` : '');
 }
 function updateEtatPistes() {
   const btn = $('b-pistes'), e = $('pistes-etat');
   if (!state.center) { btn.disabled = true; e.textContent = 'Choisissez d’abord une position.'; return; }
+  if (state.type === 'laiterie') { btn.disabled = true; e.textContent = 'Les nouvelles pistes concernent les stations de lavage.'; return; }
   const res = pisteCache();
   btn.disabled = !!res;
   if (res) e.textContent = `${state.pis.length} nouvelle(s) station(s) trouvée(s) en ${res.duree.toFixed(1)} s, hors stations déjà connues.`;
   else e.textContent = state.rayon > OSM_MAX ? `Source OpenStreetMap, recherche limitée à ${OSM_MAX} km.` : 'Source OpenStreetMap. Lancée uniquement sur demande.';
 }
 function updateChip() {
-  const n = state.center ? state.proches.length : ST.length;
+  const n = state.center ? state.proches.length : ST.filter(vis).length;
   $('chip-txt').textContent = state.center ? 'Afficher le détail de la zone' : 'Afficher toutes les stations';
   $('chip-n').textContent = n;
 }
 
 function legend() {
   const it = (css, t) => `<div><i style="${css}"></i>${t}</div>`, pill = c => `width:20px;height:11px;border-radius:7px;background:${c}`;
-  $('legend').innerHTML = it(pill(C.vert), 'Prix bas') + it(`width:10px;height:10px;border-radius:3px;background:${C.ann}`, 'Annuaire, jamais utilisée')
-    + it(pill(C.orange), 'Prix moyen') + it(`width:9px;height:9px;transform:rotate(45deg);background:${C.piste}`, 'Nouvelle piste')
-    + it(pill(C.rouge), 'Prix élevé') + it(`width:10px;height:10px;border-radius:50%;border:3px solid ${C.centre};background:#fff`, 'Centre de recherche')
-    + it(pill(C.gris), 'Prix inconnu') + it(`width:8px;height:8px;border-radius:50%;background:${FONDS[state.fond].point}`, 'Hors rayon');
+  const commun = [it(`width:10px;height:10px;border-radius:3px;background:${C.ann}`, 'Annuaire, jamais utilisée'),
+    it(`width:9px;height:9px;transform:rotate(45deg);background:${C.piste}`, 'Nouvelle piste'),
+    it(`width:10px;height:10px;border-radius:50%;border:3px solid ${C.centre};background:#fff`, 'Centre de recherche'),
+    it(`width:8px;height:8px;border-radius:50%;background:${state.type === 'tout' && D.has_type ? TYPE_C.station : FONDS[state.fond].point}`, 'Hors rayon (petit point)')];
+  const prix = state.type === 'tout' && D.has_type
+    ? [it(pill(TYPE_C.station), 'Station de lavage'), it(pill(TYPE_C.laiterie), 'Laiterie ou usine'), '', '']
+    : [it(pill(C.vert), 'Prix bas'), it(pill(C.orange), 'Prix moyen'), it(pill(C.rouge), 'Prix élevé'), it(pill(C.gris), 'Prix inconnu')];
+  $('legend').innerHTML = prix.filter(Boolean).concat(commun).join('');
 }
 
 function setCenter(c, fit = true) {
@@ -1079,7 +1106,7 @@ function afficherResultats() {
 async function chercherAdresse(q) {
   const qn = nn(q);
   const loc = ST.filter(s => s._nn.includes(qn)).slice(0, 3)
-    .map(s => ({ label: s.nom, sub: `Station de la base, ${[s.cp, s.localite].filter(Boolean).join(' ')}`, lat: s.lat, lon: s.lon }));
+    .map(s => ({ label: s.nom, sub: `${D.has_type ? TYPE_L[s.type] : 'Lieu'} de la base, ${[s.cp, s.localite].filter(Boolean).join(' ')}`, lat: s.lat, lon: s.lon }));
   let geo = [];
   try {
     const j = await (await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=5&lang=fr`)).json();
@@ -1144,6 +1171,13 @@ $('fonds').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   state.fond = b.dataset.f; [...$('fonds').children].forEach(x => x.classList.toggle('on', x === b)); legend(); applyFond();
 });
+const TYPES = [['tout', 'Tout'], ['station', 'Stations'], ['laiterie', 'Laiteries']];
+$('types').innerHTML = TYPES.map(([k, l]) => `<button data-t="${k}" class="${k === state.type ? 'on' : ''}">${l}</button>`).join('');
+$('types').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  state.type = b.dataset.t; [...$('types').children].forEach(x => x.classList.toggle('on', x === b)); render();
+});
+if (!D.has_type) $('bloc-types').style.display = 'none';
 $('t-borders').addEventListener('change', e => { state.borders = e.target.checked; drawBorders(); });
 $('t-hors').addEventListener('change', e => { state.hors = e.target.checked; render(); });
 $('b-pistes').addEventListener('click', chercherPistes);
@@ -1190,7 +1224,7 @@ function tableau() {
     };
   }
   if (state.tab === 'produit') {
-    const base = state.center ? state.used : ST.filter(s => s.nb > 0);
+    const base = state.center ? state.used : ST.filter(s => s.nb > 0 && vis(s));
     const ids = new Set(base.map(s => s.i)), parP = {};
     LAV.forEach(([si, prod, prix]) => { if (!ids.has(si)) return; ((parP[prod] ??= {})[si] ??= []).push(prix); });
     const stations = base.filter(s => Object.values(parP).some(o => o[s.i]));
@@ -1200,12 +1234,14 @@ function tableau() {
       rows, pivot: true, vide: 'Pas de lavage avec prix et produit identifiés dans cette zone.'
     };
   }
-  const src = state.center ? state.proches : ST;
+  const src = state.center ? state.proches : ST.filter(vis);
   return {
-    cols: [['statut', 'Statut', '', (v, r) => statutBadge(r)], ['nom', 'Station'], ['adresse', 'Adresse'], ['localite', 'Localité'], ['cp', 'CP'],
+    cols: [['statut', 'Statut', '', (v, r) => statutBadge(r)]].concat(D.has_type
+           ? [['type', 'Type', '', v => `<span style="color:${TYPE_C[v]};font-weight:600">${v === 'station' ? 'Station' : 'Laiterie'}</span>`]] : [])
+           .concat([['nom', 'Lieu'], ['adresse', 'Adresse'], ['localite', 'Localité'], ['cp', 'CP'],
            ['dist', 'Distance (km)', 'num', km], ['nb', 'Lavages', 'num'], ['prix_med', 'Prix médian', 'num', v => eur(v)],
            ['prix_min', 'Min', 'num', v => eur(v)], ['prix_max', 'Max', 'num', v => eur(v)], ['dernier_prix', 'Dernier prix', 'num', v => eur(v)],
-           ['dernier_lavage', 'Dernier lavage', '', dfr], ['telephone', 'Téléphone'], ['email', 'E-mail']],
+           ['dernier_lavage', 'Dernier lavage', '', dfr], ['telephone', 'Téléphone'], ['email', 'E-mail']]),
     rows: src.map(s => ({ ...s, _key: 's' + s.i })), vide: `Aucune station de la base dans un rayon de ${state.rayon} km.`
   };
 }
@@ -1233,7 +1269,7 @@ function renderSheet() {
 }
 $('export').addEventListener('click', () => {
   const t = tableau(); if (!t.rows || !t.rows.length) return;
-  const data = t.rows.map(r => Object.fromEntries(t.cols.map(([k, l]) => [l, k === 'statut' ? (r.statut || '') : (k === 'dernier_lavage' ? dfr(r[k]) : (r[k] ?? ''))])));
+  const data = t.rows.map(r => Object.fromEntries(t.cols.map(([k, l]) => [l, k === 'statut' ? (r.statut || '') : k === 'type' ? TYPE_L[r.type] : (k === 'dernier_lavage' ? dfr(r[k]) : (r[k] ?? ''))])));
   const nom = { proches: 'stations', pistes: 'nouvelles_pistes', produit: 'prix_par_produit' }[state.tab];
   if (window.XLSX) {
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data), nom.slice(0, 31));
@@ -1277,8 +1313,9 @@ def _js_val(x):
     return x
 
 
-def build_app_html(df_geo: pd.DataFrame, df_lav: pd.DataFrame, has_ann: bool, non_geo: int, borders) -> str:
-    champs = ["nom", "adresse", "cp", "localite", "pays", "telephone", "email", "nb", "prix_med", "prix_min",
+def build_app_html(df_geo: pd.DataFrame, df_lav: pd.DataFrame, has_ann: bool, non_geo: int, borders,
+                   has_type: bool = True) -> str:
+    champs = ["nom", "type", "adresse", "cp", "localite", "pays", "telephone", "email", "nb", "prix_med", "prix_min",
               "prix_max", "dernier_prix", "dernier_lavage", "precision", "statut"]
     stations = []
     for r in df_geo[champs + ["lat", "lon"]].to_dict("records"):
@@ -1294,7 +1331,7 @@ def build_app_html(df_geo: pd.DataFrame, df_lav: pd.DataFrame, has_ann: bool, no
         lavages = [[index_cle[k], str(p), round(float(v), 2)] for k, p, v in zip(sel["_cle"], sel["Produit"], sel["_prix"])]
 
     payload = {
-        "stations": stations, "lavages": lavages, "has_annuaire": has_ann, "non_geo": int(non_geo),
+        "stations": stations, "lavages": lavages, "has_annuaire": has_ann, "has_type": bool(has_type), "non_geo": int(non_geo),
         "generated": datetime.now().strftime("%d/%m/%Y à %H:%M"),
     }
     data = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
@@ -1474,7 +1511,8 @@ try:
 except Exception:
     frontieres = None
 
-app_html = build_app_html(df_geo, df_lav, has_ann, non_geo, frontieres)
+has_type = "Nom 2" in df_l_raw.columns
+app_html = build_app_html(df_geo, df_lav, has_ann, non_geo, frontieres, has_type)
 
 st.markdown('<div class="ap-section">Carte</div>', unsafe_allow_html=True)
 m1, m2, m3, m4 = st.columns(4)
@@ -1482,12 +1520,19 @@ m1.metric("Stations sur la carte", len(df_geo))
 m2.metric("Déjà utilisées", int((df_geo["nb"] > 0).sum()))
 m3.metric("Annuaire, jamais utilisées", int((df_geo["nb"] == 0).sum()) if has_ann else "—")
 m4.metric("Non géocodées", non_geo)
+if has_type:
+    n_st = int(((df_geo["type"] == "station") & (df_geo["nb"] > 0)).sum())
+    n_lt = int((df_geo["type"] == "laiterie").sum())
+    st.caption(f"Parmi les lieux déjà utilisés : {n_st} station(s) de lavage (« Nom 2 » renseigné) "
+               f"et {n_lt} laiterie(s) ou usine(s) (« Nom 2 » vide).")
+else:
+    st.caption("Pas de colonne « Nom 2 » dans le fichier lavages : impossible de distinguer stations et laiteries.")
 st.write("")
 bouton_ouvrir(app_html)
 if frontieres is None:
     st.caption("Tracé des frontières indisponible pour le moment : la carte s’ouvre sans.")
 
-base_out = df_base[["_cle", "statut", "nom", "adresse", "cp", "localite", "pays", "telephone", "email",
+base_out = df_base[["_cle", "statut", "type", "nom", "adresse", "cp", "localite", "pays", "telephone", "email",
                     "nb", "prix_med", "prix_min", "prix_max", "dernier_prix", "dernier_lavage",
                     "lat", "lon", "precision", "rapprochement", "nom_annuaire"]].rename(columns={"_cle": "cle"})
 base_xls = base_out.copy()
@@ -1564,6 +1609,17 @@ if has_ann:
                          .sort_values("nb", ascending=False), hide_index=True, use_container_width=True,
                          column_config={"dernier_lavage": st.column_config.DateColumn("Dernier lavage",
                                                                                      format="DD/MM/YYYY")})
+
+mixtes = df_base[df_base["type_mixte"] == True]
+if has_type and not mixtes.empty:
+    st.markdown('<div class="ap-section">Type de lieu</div>', unsafe_allow_html=True)
+    with st.expander(f"Lieux classés à la fois avec et sans « Nom 2 » ({len(mixtes)})"):
+        st.dataframe(mixtes[["nom", "cp", "localite", "nb", "nb_nom2"]]
+                     .rename(columns={"nom": "Lieu", "cp": "CP", "localite": "Localité", "nb": "Lavages",
+                                      "nb_nom2": "Dont avec « Nom 2 »"}),
+                     hide_index=True, use_container_width=True)
+        st.caption("Classés en station de lavage dès qu’au moins un lavage a un « Nom 2 ». "
+                   "Complétez ou videz « Nom 2 » dans le fichier lavages pour corriger.")
 
 echecs = base_out[base_out["precision"] == "échec"]
 approx = base_out[base_out["precision"] == "localité"]
