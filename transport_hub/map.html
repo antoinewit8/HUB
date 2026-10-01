@@ -2,304 +2,395 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Carte manuelle</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%97%BA%EF%B8%8F%3C/text%3E%3C/svg%3E">
 
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
     <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
 
     <style>
+        :root {
+            --bg: #f5f5f7; --text: #1d1d1f; --sub: #6e6e73; --line: #d2d2d7; --soft: #e8e8ed; --hair: #e5e5ea;
+            --blue: #0071e3; --blue-h: #0077ed; --green: #34c759; --red: #e5383b; --orange: #b45a00; --teal: #1a9fb5;
+            --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Helvetica Neue", Arial, sans-serif;
+            --pw: 356px; --gap: 12px; --map-left: calc(var(--pw) + 2 * var(--gap));
+            --ease: cubic-bezier(.32, .72, 0, 1);
+            --tile: 0 0 0 .5px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
+        }
+        body:has(#info-box.collapsed) { --map-left: 0px; }
+        * { box-sizing: border-box; }
         html, body {
             height: 100%; width: 100%; margin: 0; padding: 0;
             overflow: hidden; touch-action: none; overscroll-behavior: none;
-            font-family: 'Segoe UI', Arial, sans-serif; background: #f4f6f8;
+            font-family: var(--font); color: var(--text); background: var(--bg);
+            -webkit-font-smoothing: antialiased;
         }
-        #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; }
+        button, input, select { font-family: var(--font); }
+        #map { position: absolute; inset: 0; width: 100%; height: 100%; background: #e5e3df; }
+        .glass {
+            background: rgba(255,255,255,.82);
+            backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+            box-shadow: 0 10px 34px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.08);
+        }
+        h4 { margin: 0 0 12px; font-size: 17px; font-weight: 600; letter-spacing: -.01em; color: var(--text); }
 
         /* ── Panneau ── */
         #info-box {
-            position: absolute; top: 20px; left: 20px;
-            background: rgba(255,255,255,0.96); backdrop-filter: blur(10px);
-            padding: 20px; border-radius: 12px;
-            box-shadow: 0 8px 20px rgba(0,0,0,0.15); z-index: 10;
-            width: 330px; max-height: calc(100% - 40px); overflow-y: auto;
-            border: 1px solid #e1e8ed;
+            position: absolute; z-index: 10; top: var(--gap); left: var(--gap); bottom: var(--gap);
+            width: var(--pw); max-width: calc(100vw - 2 * var(--gap));
+            border-radius: 20px; overflow-y: auto; padding: 18px 20px 24px;
+            background: rgba(255,255,255,.9);
         }
-        #info-box.collapsed { width: auto; padding: 10px 14px; }
+        #info-box.collapsed { bottom: auto; width: auto; padding: 7px 7px 7px 18px; border-radius: 980px; overflow: hidden; }
         #info-box.collapsed .hide-when-collapsed { display: none; }
+        #info-box.collapsed #panel-head { margin: 0; }
+        #info-box.collapsed #panel-title { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
 
-        #panel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
-        #panel-title { flex: 1; font-size: 16px; font-weight: 600; color: #2c3e50; }
+        #panel-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+        #panel-title { flex: 1; font-size: 28px; font-weight: 700; letter-spacing: -.025em; line-height: 1.1; }
         #btn-collapse {
-            background: #ecf0f1; border: none; border-radius: 6px; cursor: pointer;
-            font-size: 14px; padding: 5px 9px; color: #5d6d7e;
+            flex: none; position: relative; width: 32px; height: 32px; border: none; border-radius: 50%;
+            background: var(--soft); cursor: pointer; font-size: 0; color: transparent; transition: background .15s;
         }
-        #btn-collapse:hover { background: #dce1e7; }
+        #btn-collapse:hover { background: #dedee3; }
+        #btn-collapse::before {
+            content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px;
+            border-left: 2px solid var(--sub); border-bottom: 2px solid var(--sub);
+            transform: translate(-30%, -50%) rotate(45deg); transition: transform .25s var(--ease);
+        }
+        #info-box.collapsed #btn-collapse::before { transform: translate(-70%, -50%) rotate(-135deg); }
 
-        /* ── Départ / arrivée (façon Google Maps) ── */
-        #endpoints { display: flex; align-items: center; gap: 8px; }
-        #ep-fields { flex: 1; min-width: 0; }
-        .ep-row { display: flex; align-items: center; gap: 8px; }
+        /* ── Départ / arrivée ── */
+        #endpoints { display: flex; align-items: center; gap: 10px; }
+        #ep-fields {
+            flex: 1; min-width: 0; background: #fff; border: 1px solid var(--line); border-radius: 14px;
+            transition: border-color .15s, box-shadow .15s;
+        }
+        #ep-fields:focus-within { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(0,113,227,.16); }
+        .ep-row { display: flex; align-items: center; gap: 10px; padding-left: 14px; height: 48px; }
         .ep-icon { width: 18px; flex-shrink: 0; display: flex; justify-content: center; }
-        .ep-dot { width: 9px; height: 9px; border-radius: 50%;
-            border: 3px solid #27ae60; background: white; }
-        .ep-pin { width: 12px; height: 12px; background: #c0392b;
-            border-radius: 50% 50% 50% 0; transform: rotate(-45deg); margin-top: -3px; }
-        .ep-link { width: 18px; height: 10px; display: flex; justify-content: center; }
-        .ep-link::before { content: ''; border-left: 2px dotted #b0bac4; height: 100%; }
+        .ep-dot { width: 12px; height: 12px; border-radius: 50%; border: 3px solid #27ae60; background: #fff; }
+        .ep-pin { width: 12px; height: 12px; background: #c0392b; border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg); margin-top: -3px; }
+        .ep-link { position: relative; height: 0; margin-left: 42px; border-top: .5px solid var(--hair); }
+        .ep-link::before { content: ""; position: absolute; left: -20px; top: -10px; height: 20px;
+            border-left: 2px dotted #c7c7cc; }
 
         .ep-input-wrap { flex: 1; position: relative; min-width: 0; }
         .ep-input {
-            width: 100%; padding: 9px 28px 9px 10px; box-sizing: border-box;
-            border: 1px solid #dce1e7; border-radius: 6px; outline: none;
-            font-size: 13px; color: #2c3e50; background: #f8f9fa;
-            font-family: inherit; text-overflow: ellipsis; cursor: pointer;
+            width: 100%; height: 46px; padding: 0 36px 0 0; border: none; outline: none; background: transparent;
+            font-size: 15px; color: var(--text); text-overflow: ellipsis; cursor: pointer;
         }
-        .ep-input::placeholder { color: #a6b1bd; font-style: italic; }
-        .ep-input:hover { background: #fff; border-color: #c8d1da; }
-        .ep-input:focus {
-            background: #fff; border-color: #3498db; cursor: text;
-            box-shadow: 0 0 0 3px rgba(52,152,219,0.15);
-        }
+        .ep-input::placeholder { color: #86868b; }
+        .ep-input:focus { cursor: text; }
         .ep-clear {
-            position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
-            color: #95a5a6; cursor: pointer; font-size: 13px; padding: 2px 3px; line-height: 1;
+            position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+            width: 20px; height: 20px; border-radius: 50%; background: #c7c7cc; color: #fff;
+            font-size: 11px; line-height: 20px; text-align: center; cursor: pointer; transition: background .15s;
         }
-        .ep-clear:hover { color: #c0392b; }
+        .ep-clear:hover { background: #aeaeb2; }
         .ep-clear.off { display: none; }
 
         #btn-swap {
-            flex-shrink: 0; width: 34px; height: 34px; border-radius: 50%;
-            border: 1px solid #dce1e7; background: white; color: #5d6d7e;
-            font-size: 17px; line-height: 1; cursor: pointer;
+            flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; border: none;
+            background: var(--soft); color: var(--blue); font-size: 17px; line-height: 1; cursor: pointer;
             display: flex; align-items: center; justify-content: center;
-            transition: transform 0.25s ease, background 0.15s, border-color 0.15s;
+            transition: transform .3s var(--ease), background .15s, opacity .15s;
         }
-        #btn-swap:hover:not(:disabled) { background: #eaf4fb; border-color: #3498db; color: #2980b9; }
-        #btn-swap:disabled { opacity: 0.4; cursor: not-allowed; }
+        #btn-swap:hover:not(:disabled) { background: #dedee3; }
+        #btn-swap:disabled { opacity: .35; cursor: default; }
         #btn-swap.flipped { transform: rotate(180deg); }
-        @media (prefers-reduced-motion: reduce) { #btn-swap { transition: none; } }
 
-        /* Suggestions sous les champs départ/arrivée */
+        /* Suggestions */
         #ep-suggest {
-            display: none; margin-top: 8px; background: white;
-            border: 1px solid #dce1e7; border-radius: 8px;
-            box-shadow: 0 6px 16px rgba(0,0,0,0.10);
+            display: none; margin-top: 8px; padding: 5px; background: #fff; border-radius: 14px;
+            box-shadow: 0 8px 28px rgba(0,0,0,.12), 0 0 0 .5px rgba(0,0,0,.06);
             max-height: 320px; overflow-y: auto;
         }
         #ep-suggest.show { display: block; }
-        .sg-item {
-            display: flex; align-items: center; gap: 7px; padding: 8px 10px;
-            border-bottom: 1px solid #f0f3f5; cursor: pointer;
-        }
-        .sg-item:last-of-type { border-bottom: none; }
-        .sg-item.active, .sg-item:hover { background: #eaf4fb; }
-        .sg-status { padding: 10px; font-size: 12px; color: #7f8c8d; }
-        .sg-foot {
-            padding: 7px 10px; font-size: 11.5px; color: #95a5a6;
-            border-top: 1px solid #e9ecef; background: #fafbfc;
-        }
-        .sg-more { color: #2980b9; cursor: pointer; font-weight: 600; }
+        .sg-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 9px; cursor: pointer; }
+        .sg-item.active, .sg-item:hover { background: var(--bg); }
+        .sg-status { padding: 10px; font-size: 13px; color: var(--sub); }
+        .sg-foot { margin-top: 4px; padding: 8px 10px 5px; font-size: 12px; color: var(--sub); border-top: .5px solid var(--hair); }
+        .sg-more { color: var(--blue); cursor: pointer; font-weight: 500; }
         .sg-more:hover { text-decoration: underline; }
 
-        /* Ligne d'un résultat de géocodage (commune aux deux listes) */
         .hit-main { flex: 1; min-width: 0; }
-        .hit-head { font-size: 13px; font-weight: 600; color: #2c3e50;
-            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .hit-sub { font-size: 11.5px; color: #7f8c8d; margin-top: 2px;
-            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .hit-sub .pc { font-weight: bold; color: #2c3e50; background: #eef1f4;
-            border-radius: 3px; padding: 0 5px; margin-right: 5px; }
+        .hit-head { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .hit-sub { font-size: 12px; color: var(--sub); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .hit-sub .pc { font-weight: 600; color: var(--text); background: var(--soft); border-radius: 5px;
+            padding: 0 5px; margin-right: 5px; font-variant-numeric: tabular-nums; }
+        .sr-cc { flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--sub); background: var(--soft);
+            border-radius: 6px; padding: 2px 6px; }
+        .sr-type { flex-shrink: 0; font-size: 11px; color: var(--sub); border: .5px solid var(--line);
+            border-radius: 980px; padding: 1px 8px; }
 
-        .country-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-        .country-row label { font-size: 12px; color: #7f8c8d; flex-shrink: 0; }
-        #search-country {
-            flex: 1; padding: 6px 8px; border: 1px solid #dce1e7; border-radius: 6px;
-            font-size: 12.5px; background: white; color: #34495e; outline: none; font-family: inherit;
+        /* Pays + options */
+        .country-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+        .country-row label { font-size: 15px; flex-shrink: 0; }
+        #search-country, .fy-select {
+            -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; height: 36px;
+            padding: 0 30px 0 12px; border: 1px solid var(--line); border-radius: 10px; background-color: #fff;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 12px center;
+            font-size: 14px; color: var(--text); outline: none; cursor: pointer;
+            transition: border-color .15s, box-shadow .15s;
         }
-        #search-country:focus { border-color: #3498db; }
+        #search-country:focus, .fy-select:focus { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(0,113,227,.16); }
+        .fy-select:disabled { opacity: .55; cursor: default; }
 
-        .btn { margin-top: 9px; padding: 10px; border: none; border-radius: 6px;
-            cursor: pointer; font-size: 14px; width: 100%; font-weight: bold; transition: 0.2s; }
-        .btn:disabled { background: #bdc3c7 !important; cursor: not-allowed; }
-        .btn-primary { background: #2980b9; color: white; }
-        .btn-primary:hover { background: #216694; }
-        .btn-danger { background: #e74c3c; color: white; }
-        .btn-danger:hover { background: #c0392b; }
-        .btn-reset { background: #f39c12; color: white; }
-        .btn-reset:hover { background: #d68910; }
-        .btn-save { background: #27ae60; color: white; }
-        .btn-save:hover { background: #1e8449; }
+        .rows { margin-top: 6px; }
+        .row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; font-size: 15px; cursor: pointer; }
+        .row + .row { border-top: .5px solid var(--hair); }
+        .sw { position: relative; width: 51px; height: 31px; flex: none; }
+        .sw input { position: absolute; opacity: 0; width: 0; height: 0; }
+        .sw span { position: absolute; inset: 0; background: #e9e9eb; border-radius: 31px; transition: background .2s; }
+        .sw span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+            background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.15), 0 1px 1px rgba(0,0,0,.16); transition: transform .2s var(--ease); }
+        .sw input:checked + span { background: var(--green); }
+        .sw input:checked + span::after { transform: translateX(20px); }
+        .sw input:focus-visible + span { box-shadow: 0 0 0 4px rgba(0,113,227,.25); }
 
-        .opts { display: flex; gap: 14px; margin-top: 10px; }
-        .opts label { font-size: 12.5px; color: #5d6d7e; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+        /* Boutons */
+        .btn { display: block; width: 100%; height: 44px; margin-top: 10px; border: none; border-radius: 980px;
+            font-size: 15px; font-weight: 500; cursor: pointer; transition: background .15s, transform .1s, opacity .15s; }
+        .btn:active { transform: scale(.98); }
+        .btn:disabled { opacity: .4; cursor: default; transform: none; }
+        .btn-primary, .btn-save { background: var(--blue); color: #fff; }
+        .btn-primary:hover:not(:disabled), .btn-save:hover:not(:disabled) { background: var(--blue-h); }
+        .btn-reset { background: var(--soft); color: var(--blue); }
+        .btn-reset:hover:not(:disabled) { background: #dedee3; }
+        .btn-danger { background: var(--soft); color: var(--red); }
+        .btn-danger:hover:not(:disabled) { background: #fdecea; }
+        .btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .btn-row .btn { font-size: 14px; height: 40px; }
+        #btn-calc { margin-top: 12px; }
+        #btn-new { margin-top: 16px; }
 
-        /* ── Stats ── */
-        #stats-box { margin-top: 16px; padding-top: 14px; border-top: 1px solid #e1e8ed; display: none; }
+        /* ── Résultat ── */
+        #stats-box { display: none; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--hair); }
         #stats-box.show { display: block; }
-        .stat-row { display: flex; justify-content: space-between; align-items: center;
-            margin-bottom: 9px; font-size: 15px; color: #34495e; font-weight: 500; }
-        .badge { font-weight: bold; color: #2c3e50; font-size: 16px; background: #ecf0f1;
-            padding: 5px 9px; border-radius: 6px; text-align: right; min-width: 78px; }
-        .badge-blue { color: #2980b9; background: #e1f0fa; }
-        .stat-row.clickable { cursor: pointer; user-select: none; }
-        .stat-row.clickable:hover .badge { background: #d6e9f8; }
-        .caret { font-size: 10px; color: #7f8c8d; margin-left: 5px; transition: transform 0.2s; display: inline-block; }
-        .caret.open { transform: rotate(90deg); }
-        #toll-detail, #km-detail { display: none; margin: 2px 0 12px 0; padding: 11px 12px;
-            background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 8px; }
-        #toll-detail.show, #km-detail.show { display: block; }
-        .tc-fill.km { background: #16a085; }
-        .tc-row { margin-bottom: 9px; }
-        .tc-head { display: flex; justify-content: space-between; align-items: baseline;
-            font-size: 12.5px; color: #34495e; margin-bottom: 3px; }
-        .tc-name { font-weight: 600; }
-        .tc-amount { font-weight: bold; color: #2c3e50; }
-        .tc-bar { height: 5px; background: #e4e9ef; border-radius: 3px; overflow: hidden; }
-        .tc-fill { height: 100%; background: #2980b9; border-radius: 3px; }
-        .tc-none { font-size: 12px; color: #7f8c8d; line-height: 1.5; margin: 0; }
-        .tc-none code { background: #eef1f4; padding: 1px 5px; border-radius: 3px; font-size: 11.5px; }
+        #route-state { display: inline-block; margin: 0 0 12px; padding: 4px 11px; border-radius: 980px;
+            font-size: 12.5px; font-weight: 500; }
+        .state-original { background: #e3f6ea; color: #00753a; }
+        .state-modified { background: #fff1e0; color: var(--orange); }
 
-        /* ── Traversées (ferries / navettes) ── */
-        #ferry-box { display: none; margin: 4px 0 12px 0; padding: 11px 12px;
-            background: #f4f8fb; border: 1px solid #d6e4ef; border-radius: 8px; }
+        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        .stat { background: #fff; border-radius: 14px; padding: 12px 12px 10px; box-shadow: var(--tile); min-width: 0;
+            transition: background .15s, box-shadow .15s; }
+        .stat.clickable { cursor: pointer; user-select: none; }
+        .stat.clickable:hover { background: #fafafc; box-shadow: var(--tile), 0 0 0 1px rgba(0,113,227,.2); }
+        .stat .n { font-size: 18px; font-weight: 600; letter-spacing: -.02em; line-height: 1.15; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+        .stat .n.accent { color: var(--blue); }
+        .stat .l { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--sub); margin-top: 3px; }
+        .caret { display: inline-block; font-size: 8px; color: #86868b; transition: transform .2s var(--ease); }
+        .caret.open { transform: rotate(90deg); color: var(--blue); }
+
+        #km-detail, #toll-detail { display: none; margin-top: 10px; padding: 13px 14px 12px; background: #fff;
+            border-radius: 14px; box-shadow: var(--tile); }
+        #km-detail.show, #toll-detail.show { display: block; }
+        #km-detail::before, #toll-detail::before { display: block; margin-bottom: 10px; font-size: 13px; font-weight: 600; }
+        #km-detail::before { content: "Kilomètres par pays"; }
+        #toll-detail::before { content: "Péages par pays"; }
+        .tc-row { margin-bottom: 10px; }
+        .tc-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; margin-bottom: 4px; }
+        .tc-name { font-weight: 500; }
+        .tc-amount { font-weight: 600; font-variant-numeric: tabular-nums; }
+        .tc-bar { height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden; }
+        .tc-fill { height: 100%; background: var(--blue); border-radius: 3px; }
+        .tc-fill.km { background: var(--teal); }
+        .tc-none { font-size: 12.5px; color: var(--sub); line-height: 1.5; margin: 0; }
+        .tc-none code { font: 11.5px ui-monospace, "SF Mono", Menlo, monospace; background: var(--soft);
+            padding: 1px 5px; border-radius: 5px; color: var(--text); }
+
+        /* ── Traversées ── */
+        #ferry-box { display: none; margin-top: 10px; padding: 14px; background: #fff; border-radius: 14px; box-shadow: var(--tile); }
         #ferry-box.show { display: block; }
-        .fy-block + .fy-block { margin-top: 12px; padding-top: 12px; border-top: 1px solid #dde7ef; }
-        .fy-head { display: flex; align-items: center; gap: 7px; font-size: 13px;
-            font-weight: 600; color: #2c3e50; }
-        .fy-ico { font-size: 15px; flex-shrink: 0; }
+        #ferry-box h4 { font-size: 15px; margin-bottom: 10px; }
+        .fy-block + .fy-block { margin-top: 14px; padding-top: 14px; border-top: .5px solid var(--hair); }
+        .fy-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+        .fy-ico { font-size: 16px; flex-shrink: 0; }
         .fy-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .fy-forced { font-size: 10.5px; font-weight: bold; color: #d35400; background: #fdebd0;
-            border-radius: 10px; padding: 1px 7px; flex-shrink: 0; }
-        .fy-sub { font-size: 11.5px; color: #7f8c8d; margin: 3px 0 8px 22px; }
-        .fy-select { width: 100%; padding: 7px 8px; border: 1px solid #dce1e7; border-radius: 6px;
-            font-size: 12.5px; background: white; color: #34495e; outline: none; font-family: inherit; }
-        .fy-select:focus { border-color: #3498db; }
-        .fy-search { display: flex; gap: 6px; margin-top: 6px; }
-        .fy-search input { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid #dce1e7;
-            border-radius: 6px; font-size: 12px; outline: none; font-family: inherit; }
-        .fy-search input:focus { border-color: #3498db; }
-        .fy-search button { padding: 6px 10px; border: none; border-radius: 6px; background: #3498db;
-            color: white; font-size: 12px; font-weight: bold; cursor: pointer; flex-shrink: 0; }
-        .fy-search button:hover { background: #2980b9; }
-        .fy-status { font-size: 11px; color: #95a5a6; margin-top: 5px; line-height: 1.4; }
-        .fy-status.err { color: #c0392b; }
-
-        #route-state { font-size: 12px; text-align: center; padding: 5px 10px;
-            border-radius: 20px; margin: 12px 0; font-weight: bold; }
-        .state-original { background: #d5f5e3; color: #1e8449; }
-        .state-modified { background: #fdebd0; color: #d35400; }
+        .fy-forced { flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--orange); background: #fff1e0;
+            border-radius: 980px; padding: 2px 8px; }
+        .fy-sub { font-size: 12px; color: var(--sub); margin: 3px 0 10px 24px; line-height: 1.4; }
+        .fy-select { width: 100%; }
+        .fy-search { display: flex; gap: 6px; margin-top: 8px; }
+        .fy-search input { flex: 1; min-width: 0; height: 34px; padding: 0 12px; border: none; border-radius: 10px;
+            background: var(--soft); font-size: 13.5px; color: var(--text); outline: none; }
+        .fy-search input:focus { box-shadow: 0 0 0 3px rgba(0,113,227,.25); }
+        .fy-search button { flex-shrink: 0; height: 34px; padding: 0 14px; border: none; border-radius: 980px;
+            background: var(--soft); color: var(--blue); font-size: 13.5px; font-weight: 500; cursor: pointer; }
+        .fy-search button:hover { background: #dedee3; }
+        .fy-status { font-size: 12px; color: var(--sub); margin-top: 6px; line-height: 1.4; }
+        .fy-status.err { color: var(--red); }
 
         /* ── Étapes ── */
-        #wp-container { margin-top: 14px; background: #f8f9fa; padding: 13px;
-            border-radius: 8px; border: 1px solid #e9ecef; }
-        h4 { margin: 0 0 10px 0; font-size: 12.5px; color: #7f8c8d;
-            text-transform: uppercase; letter-spacing: 0.5px; }
-        .wp-item { display: flex; justify-content: space-between; align-items: center;
-            background: white; padding: 8px; margin-bottom: 7px; border-radius: 6px;
-            border-left: 4px solid #3498db; font-size: 13px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .wp-remove { color: #e74c3c; cursor: pointer; font-size: 15px; padding: 0 4px; }
-        .wp-remove:hover { color: #c0392b; }
-        .wp-empty { font-size: 12.5px; color: #95a5a6; font-style: italic; margin: 0; text-align: center; }
+        #wp-container { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--hair); }
+        #wp-list { margin-bottom: 4px; }
+        .wp-empty { margin: 0; padding: 14px; border-radius: 12px; background: var(--bg);
+            color: var(--sub); font-size: 13px; text-align: center; }
+        .wp-item { display: flex; align-items: center; background: #fff; padding: 8px 8px 8px 10px; margin-bottom: 8px;
+            border-radius: 12px; border-left: 3px solid var(--blue); box-shadow: var(--tile); }
+        .wp-item > div:first-child { box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,.2); }
+        .wp-item > div:nth-child(2) { font-size: 13px !important; color: var(--text); }
+        .wp-item button { width: 24px; height: 17px; padding: 0 !important; border: none !important; border-radius: 6px !important;
+            background: var(--soft) !important; color: var(--sub); font-size: 8px !important; line-height: 17px; cursor: pointer; }
+        .wp-item button:hover:not(:disabled) { background: #dedee3 !important; color: var(--text); }
+        .wp-item button:disabled { opacity: .35; cursor: default; }
+        .wp-remove { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--soft); color: var(--sub);
+            display: flex; align-items: center; justify-content: center; font-size: 11px; cursor: pointer;
+            transition: background .15s, color .15s; }
+        .wp-remove:hover { background: #fdecea; color: var(--red); }
 
-        /* ── Recherche (bas du panneau) ── */
-        #search-box { margin-top: 16px; border-top: 1px solid #e1e8ed; padding-top: 14px; }
-        #search-input { width: 100%; padding: 9px 10px; border: 1px solid #dce1e7;
-            border-radius: 6px; font-size: 14px; box-sizing: border-box; outline: none; }
-        #search-input:focus { border-color: #3498db; }
-        #search-btn { margin-top: 8px; padding: 9px; width: 100%; background: #3498db;
-            color: white; border: none; border-radius: 6px; font-size: 14px;
-            font-weight: bold; cursor: pointer; }
-        #search-btn:hover { background: #2980b9; }
-        #search-btn:disabled { background: #bdc3c7; cursor: not-allowed; }
-        #search-error { font-size: 12px; color: #e74c3c; margin-top: 6px; display: none; }
-        #search-hint { font-size: 11.5px; color: #95a5a6; margin-top: 6px; }
-        #search-results { margin-top: 8px; display: none; max-height: 260px; overflow-y: auto; }
+        /* ── Recherche d'étape ── */
+        .sec { margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--hair); }
+        .search { position: relative; }
+        .search .ico { position: absolute; left: 14px; top: 15px; color: #86868b; pointer-events: none; }
+        #search-input { width: 100%; height: 46px; border: 1px solid var(--line); border-radius: 12px; background: #fff;
+            padding: 0 14px 0 40px; font-size: 15px; color: var(--text); outline: none;
+            transition: border-color .15s, box-shadow .15s; }
+        #search-input::placeholder { color: #86868b; }
+        #search-input:focus { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(0,113,227,.16); }
+        #search-btn { display: block; width: 100%; height: 40px; margin-top: 10px; border: none; border-radius: 980px;
+            background: var(--soft); color: var(--blue); font-size: 14px; font-weight: 500; cursor: pointer;
+            transition: background .15s, opacity .15s; }
+        #search-btn:hover:not(:disabled) { background: #dedee3; }
+        #search-btn:disabled { opacity: .4; cursor: default; }
+        #search-error { display: none; font-size: 12.5px; color: var(--red); margin-top: 8px; }
+        #search-hint { font-size: 12px; color: var(--sub); margin-top: 8px; line-height: 1.45; }
+        #search-results { display: none; margin-top: 10px; max-height: 260px; overflow-y: auto; }
         #search-results.show { display: block; }
-        .sr-item { padding: 8px 9px; border: 1px solid #e9ecef; border-radius: 6px;
-            margin-bottom: 5px; cursor: pointer; background: white;
-            display: flex; align-items: center; gap: 7px; }
-        .sr-item:hover { background: #eaf4fb; border-color: #3498db; }
-        .sr-cc { font-size: 11px; font-weight: bold; color: #5d6d7e; background: #ecf0f1;
-            border-radius: 4px; padding: 3px 6px; flex-shrink: 0; }
-        .sr-type { font-size: 10.5px; color: #7f8c8d; background: #f4f6f8;
-            border: 1px solid #e9ecef; border-radius: 10px; padding: 1px 7px; flex-shrink: 0; }
+        .sr-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; margin-bottom: 6px; border-radius: 12px;
+            background: #fff; box-shadow: var(--tile); cursor: pointer; transition: background .15s; }
+        .sr-item:hover { background: var(--bg); }
 
-        .instructions { font-size: 12.5px; color: #7f8c8d; margin-top: 16px; line-height: 1.5; }
+        /* ── Raccourcis ── */
+        .hint { font-size: 13px; color: var(--sub); line-height: 1.5; }
+        .hint p { margin: 0; display: flex; gap: 10px; }
+        .hint p + p { margin-top: 7px; }
+        .hint b { color: var(--text); font-weight: 600; }
+        .hint .kbd { flex: none; width: 18px; text-align: center; color: var(--text); }
 
-        /* ── Popups ── */
-        .search-popup .maplibregl-popup-content { padding: 12px; border-radius: 8px;
-            font-family: 'Segoe UI', Arial, sans-serif; box-shadow: 0 4px 12px rgba(0,0,0,0.2); min-width: 190px; }
-        .popup-label { font-size: 13px; font-weight: bold; color: #2c3e50;
+        /* ── Popups carte ── */
+        .maplibregl-ctrl-top-right { margin: var(--gap) var(--gap) 0 0; }
+        .maplibregl-ctrl-top-right .maplibregl-ctrl { margin: 0; }
+        .maplibregl-ctrl-group { border-radius: 12px !important; overflow: hidden; background: rgba(255,255,255,.9) !important;
+            backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+            box-shadow: 0 4px 16px rgba(0,0,0,.14), 0 0 0 .5px rgba(0,0,0,.08) !important; }
+        .maplibregl-ctrl-group button { width: 36px; height: 36px; }
+        .maplibregl-ctrl-group button + button { border-top: .5px solid rgba(0,0,0,.1) !important; }
+        .maplibregl-popup-content { border-radius: 14px; padding: 12px 14px; font: 13px/1.5 var(--font); color: var(--text);
+            box-shadow: 0 10px 34px rgba(0,0,0,.18), 0 0 0 .5px rgba(0,0,0,.06); }
+        .maplibregl-ctrl-attrib { font: 10px var(--font); background: rgba(255,255,255,.72) !important; }
+        .maplibregl-ctrl-attrib a { color: var(--sub); }
+
+        .search-popup .maplibregl-popup-content { padding: 14px; min-width: 210px; }
+        .popup-label { font-size: 14px; font-weight: 600; letter-spacing: -.01em; line-height: 1.35;
             margin-bottom: 10px; word-break: break-word; }
-        .popup-btn { display: block; width: 100%; padding: 8px; margin-bottom: 6px;
-            border: none; border-radius: 5px; font-size: 13px; font-weight: bold; cursor: pointer; }
-        .popup-btn-origin { background: #2ecc71; color: white; }
-        .popup-btn-origin:hover { background: #27ae60; }
-        .popup-btn-dest { background: #e74c3c; color: white; }
-        .popup-btn-dest:hover { background: #c0392b; }
-        .popup-btn-waypoint { background: #3498db; color: white; }
-        .popup-btn-waypoint:hover { background: #2980b9; }
-        .popup-btn-cancel { background: #ecf0f1; color: #7f8c8d; }
-        .popup-btn-cancel:hover { background: #dce1e7; }
+        .popup-btn { display: block; width: 100%; height: 34px; margin-bottom: 6px; border: none; border-radius: 980px;
+            font-size: 13px; font-weight: 500; cursor: pointer; transition: background .15s, transform .1s; }
+        .popup-btn:last-child { margin-bottom: 0; }
+        .popup-btn:active { transform: scale(.98); }
+        .popup-btn-origin   { background: #e3f6ea; color: #00753a; }
+        .popup-btn-origin:hover { background: #d2efdc; }
+        .popup-btn-dest     { background: #fdecea; color: #c62828; }
+        .popup-btn-dest:hover { background: #fadcd9; }
+        .popup-btn-waypoint { background: #e8f1fc; color: #0057A8; }
+        .popup-btn-waypoint:hover { background: #d9e8fa; }
+        .popup-btn-cancel   { background: var(--soft); color: var(--sub); }
+        .popup-btn-cancel:hover { background: #dedee3; }
 
-        /* ── Modal ── */
-        #save-modal-overlay { display: none; position: fixed; inset: 0;
-            background: rgba(0,0,0,0.55); z-index: 200; align-items: center; justify-content: center; }
+        /* ── Fenêtre d'enregistrement ── */
+        #save-modal-overlay { display: none; position: fixed; inset: 0; z-index: 200; align-items: center; justify-content: center;
+            background: rgba(0,0,0,.28); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
         #save-modal-overlay.open { display: flex; }
-        #save-modal { background: white; border-radius: 14px; padding: 28px; width: 340px;
-            box-shadow: 0 12px 32px rgba(0,0,0,0.25); }
-        #save-modal h3 { margin: 0 0 18px 0; font-size: 17px; color: #2c3e50;
-            border-bottom: 2px solid #27ae60; padding-bottom: 10px; }
-        #save-modal label { font-size: 13px; color: #7f8c8d; text-transform: uppercase;
-            letter-spacing: 0.4px; display: block; margin: 12px 0 4px 0; }
-        #save-modal input { width: 100%; padding: 9px 10px; border: 1px solid #dce1e7;
-            border-radius: 6px; font-size: 14px; box-sizing: border-box; outline: none; }
-        #save-modal input:focus { border-color: #27ae60; }
-        #save-modal-wp-count { font-size: 13px; color: #7f8c8d; margin: 10px 0 0 0; font-style: italic; }
+        #save-modal { width: 380px; max-width: calc(100vw - 32px); background: #fff; border-radius: 20px; padding: 24px;
+            box-shadow: 0 24px 60px rgba(0,0,0,.25), 0 0 0 .5px rgba(0,0,0,.08); animation: monte .3s var(--ease); }
+        #save-modal h3 { margin: 0 0 6px; font-size: 20px; font-weight: 600; letter-spacing: -.015em; }
+        #save-modal label { display: block; font-size: 13px; font-weight: 500; color: var(--sub); margin: 14px 0 6px; }
+        #save-modal input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 12px;
+            font-size: 15px; color: var(--text); outline: none; transition: border-color .15s, box-shadow .15s; }
+        #save-modal input:focus { border-color: var(--blue); box-shadow: 0 0 0 4px rgba(0,113,227,.16); }
+        #save-modal-wp-count { font-size: 13px; color: var(--sub); margin: 12px 0 0; }
         #save-modal-actions { display: flex; gap: 10px; margin-top: 20px; }
-        #save-modal-actions button { flex: 1; padding: 10px; border: none; border-radius: 6px;
-            font-size: 14px; font-weight: bold; cursor: pointer; }
-        #btn-modal-confirm { background: #27ae60; color: white; }
-        #btn-modal-cancel { background: #ecf0f1; color: #7f8c8d; }
-        #save-modal-status { margin-top: 14px; font-size: 13px; text-align: center;
-            padding: 8px; border-radius: 6px; display: none; }
-        .status-ok  { background: #d5f5e3; color: #1e8449; }
-        .status-err { background: #fadbd8; color: #c0392b; }
+        #save-modal-actions button { flex: 1; height: 44px; border: none; border-radius: 980px; font-size: 15px;
+            font-weight: 500; cursor: pointer; transition: background .15s, opacity .15s; }
+        #btn-modal-confirm { background: var(--blue); color: #fff; }
+        #btn-modal-confirm:hover:not(:disabled) { background: var(--blue-h); }
+        #btn-modal-confirm:disabled { opacity: .4; cursor: default; }
+        #btn-modal-cancel { background: var(--soft); color: var(--blue); }
+        #btn-modal-cancel:hover { background: #dedee3; }
+        #save-modal-status { display: none; margin-top: 14px; padding: 9px 12px; border-radius: 12px;
+            font-size: 13px; text-align: center; line-height: 1.4; }
+        .status-ok  { background: #e3f6ea; color: #00753a; }
+        .status-err { background: #fdecea; color: #c62828; }
 
-        /* ── Divers ── */
-        #loading-indicator { display: none; position: absolute; top: 50%; left: 50%;
-            transform: translate(-50%, -50%); background: rgba(0,0,0,0.72); color: white;
-            padding: 15px 25px; border-radius: 8px; z-index: 100; font-size: 15px; font-weight: bold; }
-        #toast { display: none; position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-            z-index: 150; background: #c0392b; color: white; padding: 11px 18px; border-radius: 8px;
-            font-size: 13.5px; font-weight: bold; max-width: 620px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); }
-        #toast.info { background: #2c3e50; }
-        #toast.show { display: block; }
+        /* ── Chargement et messages ── */
+        #loading-indicator {
+            display: none; position: absolute; z-index: 100; top: 50%;
+            left: calc(var(--map-left) + (100vw - var(--map-left)) / 2); transform: translate(-50%, -50%);
+            padding: 12px 20px 12px 46px; border-radius: 980px; font-size: 14px; font-weight: 500;
+            background: rgba(255,255,255,.88); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+            box-shadow: 0 10px 34px rgba(0,0,0,.16), 0 0 0 .5px rgba(0,0,0,.08);
+        }
+        #loading-indicator::before {
+            content: ""; position: absolute; left: 18px; top: 50%; width: 16px; height: 16px; margin-top: -8px;
+            border-radius: 50%; border: 2px solid var(--soft); border-top-color: var(--blue); animation: tourne .8s linear infinite;
+        }
+        #toast {
+            display: none; position: absolute; z-index: 150; top: var(--gap);
+            left: calc(var(--map-left) + (100vw - var(--map-left)) / 2); transform: translateX(-50%);
+            width: max-content; max-width: min(620px, calc(100vw - var(--map-left) - 120px));
+            padding: 11px 18px; border-radius: 14px; font-size: 13.5px; font-weight: 500; line-height: 1.4; color: #fff;
+            background: rgba(214,48,49,.94); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 10px 34px rgba(0,0,0,.22);
+        }
+        #toast.info { background: rgba(29,29,31,.86); }
+        #toast.show { display: block; animation: descend .3s var(--ease); }
+        @keyframes tourne { to { transform: rotate(360deg); } }
+        @keyframes monte { from { transform: translateY(12px) scale(.98); opacity: 0; } }
+        @keyframes descend { from { transform: translate(-50%, -8px); opacity: 0; } }
 
-        #layer-panel { position: absolute; bottom: 26px; left: 50%; transform: translateX(-50%);
-            z-index: 20; display: flex; gap: 12px; background: rgba(255,255,255,0.95);
-            backdrop-filter: blur(10px); padding: 11px 16px; border-radius: 40px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.18); border: 1px solid #e1e8ed; }
-        .toggle-btn { display: flex; align-items: center; gap: 8px; padding: 8px 16px;
-            border-radius: 30px; border: 2px solid transparent; cursor: pointer; font-size: 13px;
-            font-weight: bold; transition: all 0.22s ease; user-select: none;
-            background: #f0f3f5; color: #5d6d7e; }
-        .toggle-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-        .toggle-btn.active-road { background: #eaf4fb; color: #1a6ea8; border-color: #3498db; }
-        .toggle-btn.active-pl { background: #fdf2ec; color: #c0392b; border-color: #e74c3c; }
-        .toggle-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
-        .dot-road { background: #3498db; }
-        .dot-pl   { background: #e74c3c; }
-        .toggle-btn .badge-loading { font-size: 11px; opacity: 0.7; }
+        /* ── Barre des couches ── */
+        #layer-panel {
+            position: absolute; z-index: 20; bottom: 22px;
+            left: calc(var(--map-left) + (100vw - var(--map-left)) / 2); transform: translateX(-50%);
+            display: flex; gap: 4px; padding: 5px; border-radius: 980px;
+        }
+        .toggle-btn { display: flex; align-items: center; gap: 8px; padding: 9px 16px; border: none; border-radius: 980px;
+            background: transparent; color: var(--text); font-size: 14px; font-weight: 500; cursor: pointer;
+            white-space: nowrap; user-select: none; transition: background .15s, color .15s, box-shadow .15s; }
+        .toggle-btn:hover:not(:disabled) { background: rgba(0,0,0,.05); }
+        .toggle-btn:disabled { opacity: .4; cursor: default; }
+        .toggle-btn.active-road { background: #e8f1fc; color: #0057A8; box-shadow: inset 0 0 0 1.5px rgba(0,113,227,.35); }
+        .toggle-btn.active-pl   { background: #fdecea; color: #c62828; box-shadow: inset 0 0 0 1.5px rgba(229,56,59,.35); }
+        .toggle-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 0 2px #fff, 0 0 0 2.5px rgba(0,0,0,.1); }
+        .dot-road { background: var(--blue); }
+        .dot-pl   { background: var(--red); }
+        .toggle-btn .badge-loading { font-size: 12px; color: var(--sub); font-variant-numeric: tabular-nums; }
+
+        :focus-visible { outline: 3px solid rgba(0,113,227,.45); outline-offset: 2px; }
+        .ep-input:focus-visible, #search-input:focus-visible, .fy-search input:focus-visible { outline: none; }
+
+        @media (max-width: 760px) {
+            :root { --pw: calc(100vw - 24px); --map-left: 0px; }
+            body:not(:has(#info-box.collapsed)) #layer-panel { opacity: 0; pointer-events: none; }
+            .toggle-btn { padding: 8px 12px; font-size: 13px; }
+        }
+        @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
     </style>
 </head>
 <body>
 
-    <div id="info-box">
+    <div id="info-box" class="glass">
         <div id="panel-head">
             <div id="panel-title">Nouvel itinéraire</div>
-            <button id="btn-collapse" onclick="togglePanel()" title="Réduire le panneau">◀</button>
+            <button id="btn-collapse" onclick="togglePanel()" title="Réduire le panneau" aria-label="Réduire ou afficher le panneau">◀</button>
         </div>
 
         <div class="hide-when-collapsed">
@@ -311,7 +402,7 @@
                         <div class="ep-input-wrap">
                             <input id="in-origin" class="ep-input" type="text"
                                    autocomplete="off" spellcheck="false"
-                                   placeholder="Choisir le point de départ" />
+                                   placeholder="Choisir le point de départ" aria-label="Départ" />
                             <span class="ep-clear off" id="clr-origin"
                                   onclick="clearPoint('origin', true)" title="Effacer le départ">✕</span>
                         </div>
@@ -322,14 +413,14 @@
                         <div class="ep-input-wrap">
                             <input id="in-dest" class="ep-input" type="text"
                                    autocomplete="off" spellcheck="false"
-                                   placeholder="Choisir la destination" />
+                                   placeholder="Choisir la destination" aria-label="Arrivée" />
                             <span class="ep-clear off" id="clr-dest"
                                   onclick="clearPoint('dest', true)" title="Effacer l'arrivée">✕</span>
                         </div>
                     </div>
                 </div>
                 <button id="btn-swap" onclick="swapEndpoints()" disabled
-                        title="Inverser départ et arrivée">⇅</button>
+                        title="Inverser départ et arrivée" aria-label="Inverser départ et arrivée">⇅</button>
             </div>
 
             <div id="ep-suggest"></div>
@@ -365,27 +456,34 @@
                 </select>
             </div>
 
-            <div class="opts">
-                <label><input type="checkbox" id="opt-tolls" onchange="onOptionChange()"> Éviter les péages</label>
-                <label><input type="checkbox" id="opt-hw" onchange="onOptionChange()"> Éviter les autoroutes</label>
+            <div class="rows">
+                <label class="row">Éviter les péages
+                    <span class="sw"><input type="checkbox" id="opt-tolls" onchange="onOptionChange()"><span></span></span>
+                </label>
+                <label class="row">Éviter les autoroutes
+                    <span class="sw"><input type="checkbox" id="opt-hw" onchange="onOptionChange()"><span></span></span>
+                </label>
             </div>
 
-            <button class="btn btn-primary" id="btn-calc" onclick="calculateRoute()" disabled>
-                Calculer l'itinéraire
-            </button>
+            <button class="btn btn-primary" id="btn-calc" onclick="calculateRoute()" disabled>Calculer l'itinéraire</button>
 
             <div id="stats-box">
                 <div id="route-state" class="state-original">Itinéraire calculé</div>
-                <div class="stat-row clickable" onclick="toggleKmDetail()" title="Kilomètres par pays">
-                    <span>Distance <span class="caret" id="km-caret">▶</span></span>
-                    <span class="badge badge-blue" id="dist">—</span>
+                <div class="stats">
+                    <div class="stat clickable" onclick="toggleKmDetail()" title="Kilomètres par pays">
+                        <div class="n accent" id="dist">—</div>
+                        <div class="l">Distance <span class="caret" id="km-caret">▶</span></div>
+                    </div>
+                    <div class="stat">
+                        <div class="n" id="dur">—</div>
+                        <div class="l">Durée</div>
+                    </div>
+                    <div class="stat clickable" onclick="toggleTollDetail()" title="Détail par pays">
+                        <div class="n" id="toll">—</div>
+                        <div class="l">Péage <span class="caret" id="toll-caret">▶</span></div>
+                    </div>
                 </div>
                 <div id="km-detail"></div>
-                <div class="stat-row">Durée    <span class="badge"            id="dur">—</span></div>
-                <div class="stat-row clickable" onclick="toggleTollDetail()" title="Détail par pays">
-                    <span>Péage <span class="caret" id="toll-caret">▶</span></span>
-                    <span class="badge" id="toll">—</span>
-                </div>
                 <div id="toll-detail"></div>
 
                 <div id="ferry-box"></div>
@@ -393,42 +491,45 @@
                 <div id="wp-container">
                     <h4>Étapes du trajet</h4>
                     <div id="wp-list"><p class="wp-empty">Aucune étape ajoutée.</p></div>
-                    <button class="btn btn-danger" onclick="clearWaypoints()">Effacer les étapes</button>
-                    <button class="btn btn-reset" id="btn-reset" onclick="resetToOriginal()" disabled>
-                        Revenir au tracé calculé
-                    </button>
-                    <button class="btn btn-save" id="btn-save" onclick="openSaveModal()" disabled>
-                        Enregistrer comme référence
-                    </button>
+                    <button class="btn btn-save" id="btn-save" onclick="openSaveModal()" disabled>Enregistrer comme référence</button>
+                    <div class="btn-row">
+                        <button class="btn btn-reset" id="btn-reset" onclick="resetToOriginal()" disabled>Revenir au tracé</button>
+                        <button class="btn btn-danger" onclick="clearWaypoints()">Effacer les étapes</button>
+                    </div>
                 </div>
             </div>
 
-            <button class="btn btn-danger" onclick="newRoute()">Nouvel itinéraire</button>
+            <button class="btn btn-danger" id="btn-new" onclick="newRoute()">Nouvel itinéraire</button>
 
-            <div id="search-box">
+            <div id="search-box" class="sec">
                 <h4>Rechercher une adresse</h4>
-                <input id="search-input" type="text" autocomplete="off"
-                       placeholder="Adresse à ajouter comme étape" />
+                <div class="search">
+                    <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                    <input id="search-input" type="text" autocomplete="off"
+                           placeholder="Adresse à ajouter comme étape" aria-label="Rechercher une adresse" />
+                </div>
                 <button id="search-btn" onclick="searchAddress()">Rechercher</button>
                 <div id="search-error"></div>
                 <div id="search-results"></div>
                 <div id="search-hint">Pratique pour ajouter une étape. Le départ et l'arrivée se tapent directement en haut.</div>
             </div>
 
-            <div class="instructions">
-                <b>Raccourcis :</b><br>
-                Clic dans Départ / Arrivée : taper une adresse ou des coordonnées.<br>
-                ⇅ : inverser départ et arrivée.<br>
-                Clic sur la carte : pose le départ, puis l'arrivée.<br>
-                Clic droit : ajoute une étape.<br>
-                Glisser un point : recalcule le trajet.<br>
-                Double-clic sur une étape : la supprime.<br>
-                Traversée sur le trajet : choisir la ligne dans le bloc « Traversées ».
+            <div class="sec instructions">
+                <h4>Raccourcis</h4>
+                <div class="hint">
+                    <p><span class="kbd">⌨</span><span><b>Départ / Arrivée</b> : tapez une adresse ou des coordonnées.</span></p>
+                    <p><span class="kbd">⇅</span><span><b>Inverser</b> le départ et l'arrivée.</span></p>
+                    <p><span class="kbd">●</span><span><b>Clic sur la carte</b> : pose le départ, puis l'arrivée.</span></p>
+                    <p><span class="kbd">＋</span><span><b>Clic droit</b> : ajoute une étape.</span></p>
+                    <p><span class="kbd">↔</span><span><b>Glisser un point</b> : recalcule le trajet.</span></p>
+                    <p><span class="kbd">✕</span><span><b>Double-clic sur une étape</b> : la supprime.</span></p>
+                    <p><span class="kbd">⛴</span><span><b>Traversée</b> sur le trajet : choisissez la ligne dans le bloc « Traversées ».</span></p>
+                </div>
             </div>
         </div>
     </div>
 
-    <div id="layer-panel">
+    <div id="layer-panel" class="glass">
         <button class="toggle-btn" id="toggle-road" onclick="toggleLayer('road')"
                 title="Colorier autoroutes / nationales / départementales">
             <span class="toggle-dot dot-road"></span>
@@ -442,15 +543,15 @@
         </button>
     </div>
 
-    <div id="loading-indicator">Calcul en cours...</div>
+    <div id="loading-indicator">Calcul de l'itinéraire…</div>
     <div id="toast"></div>
 
     <div id="save-modal-overlay">
         <div id="save-modal">
             <h3>Enregistrer comme référence</h3>
-            <label>Départ</label>
+            <label for="save-origin">Départ</label>
             <input id="save-origin" type="text" />
-            <label>Arrivée</label>
+            <label for="save-dest">Arrivée</label>
             <input id="save-dest" type="text" />
             <p id="save-modal-wp-count"></p>
             <div id="save-modal-actions">
