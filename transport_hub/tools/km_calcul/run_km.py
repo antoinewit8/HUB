@@ -87,6 +87,15 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         from modules.routes_preferentielles import get_waypoints
         from modules.map_server_client import create_route_url, warm_up_server
 
+        # [CARTE PAYS] Nouvelle carte (si indisponible -> ancienne carte conservée)
+        try:
+            from modules.carte_pays import construire_url_carte, APP_BASE_URL
+            nouvelle_carte_active = bool(APP_BASE_URL)
+        except Exception as e:
+            print(f"!!! carte_pays indisponible, ancienne carte utilisée : {e}", flush=True)
+            construire_url_carte = None
+            nouvelle_carte_active = False
+
         CACHE_FILE = os.path.join(KM_DIR, "cache_trajets.json")
         GEOCODE_CACHE_FILE = os.path.join(KM_DIR, "cache_geocode.json")
         MAX_WORKERS = 2
@@ -121,14 +130,15 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             data = {k: v for k, v in gc.items() if isinstance(k, str) and isinstance(v, (str, int, float, dict, list))}
             with open(GEOCODE_CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
+
         # === Geocoding avec cache ===
         def geocode_cached(address, gc):
-            print(f"\n--- TEST GEOCODE: {address} ---", flush=True) # DOIT APPARAITRE
+            print(f"\n--- TEST GEOCODE: {address} ---", flush=True)
             with geocode_lock:
                 if address in gc:
                     print(f"Trouvé dans le cache: {gc[address]}", flush=True)
                     return gc[address]
-            
+
             try:
                 coords = geocode_address(address)
                 print(f"Résultat API pour {address} : {coords}", flush=True)
@@ -140,11 +150,25 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                 print(f"!!! CRASH API GEOCODE pour {address} : {e}", flush=True)
                 return None
 
-        # === Warm-up serveur carte ===
-        try:
-            warm_up_server()
-        except Exception:
-            pass
+        # [CARTE PAYS] Lien vers la nouvelle carte
+        def url_nouvelle_carte(origin, dest, coords_origin, coords_dest):
+            if not nouvelle_carte_active or not construire_url_carte:
+                return ""
+            try:
+                return construire_url_carte(
+                    origin, dest, coords_origin, coords_dest,
+                    peage=calculer_peage, super_pref=super_pref,
+                )
+            except Exception as e:
+                print(f"!!! CRASH construire_url_carte: {e}", flush=True)
+                return ""
+
+        # === Warm-up serveur carte (uniquement si l'ancienne carte est utilisée) ===
+        if not nouvelle_carte_active:
+            try:
+                warm_up_server()
+            except Exception:
+                pass
 
         # === Lecture Excel ===
         if progress_callback:
@@ -174,22 +198,30 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
         def traiter_trajet(route, cache, geocode_cache):
             origin = route["origin"]
             dest = route["dest"]
-            
-            # --- DEBUG ---
+
             print(f"DEBUG GEO: Tentative sur {origin}")
-            
+
             if not origin or not dest:
                 return {"row": route["row"], "data": None, "from_cache": False}
 
             cache_key = f"{origin}|{dest}|peage={calculer_peage}"
 
             if cache_key in cache:
-                return {"row": route["row"], "data": cache[cache_key], "from_cache": True}
+                data_cache = cache[cache_key]
+                # [CARTE PAYS] Les trajets en cache gardent leurs km/péages,
+                # seul le lien carte est régénéré (copie -> le cache n'est pas modifié)
+                if nouvelle_carte_active and isinstance(data_cache, dict):
+                    co = geocode_cached(origin, geocode_cache)
+                    cd = geocode_cached(dest, geocode_cache)
+                    nouvelle_url = url_nouvelle_carte(origin, dest, co, cd)
+                    if nouvelle_url:
+                        data_cache = dict(data_cache)
+                        data_cache["map_url"] = nouvelle_url
+                return {"row": route["row"], "data": data_cache, "from_cache": True}
 
             coords_origin = geocode_cached(origin, geocode_cache)
             coords_dest = geocode_cached(dest, geocode_cache)
 
-            # AJOUTE CECI ICI :
             if not coords_origin: print(f"DEBUG: Géocodage échoué pour l'origine: {origin}")
             if not coords_dest: print(f"DEBUG: Géocodage échoué pour la destination: {dest}")
 
@@ -226,19 +258,21 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
             if not data:
                 return {"row": route["row"], "data": None, "from_cache": False}
 
-            # URL carte
-            try:
-                data["map_url"] = create_route_url(
-                    origin_name = origin,
-                    dest_name   = dest,
-                    km          = data.get("km", 0),
-                    duration_h  = data.get("travel_time_h", 0),
-                    polyline    = data.get("polyline_coords", []),
-                    prix_peage  = data.get("prix_peage", 0.0),
-                )
-            except Exception as e:
-                print(f"!!! CRASH create_route_url: {e}", flush=True)
-                data["map_url"] = ""
+            # [CARTE PAYS] URL carte : nouvelle carte, sinon ancienne en secours
+            data["map_url"] = url_nouvelle_carte(origin, dest, coords_origin, coords_dest)
+            if not data["map_url"]:
+                try:
+                    data["map_url"] = create_route_url(
+                        origin_name = origin,
+                        dest_name   = dest,
+                        km          = data.get("km", 0),
+                        duration_h  = data.get("travel_time_h", 0),
+                        polyline    = data.get("polyline_coords", []),
+                        prix_peage  = data.get("prix_peage", 0.0),
+                    )
+                except Exception as e:
+                    print(f"!!! CRASH create_route_url: {e}", flush=True)
+                    data["map_url"] = ""
 
             # Stocker en cache
             with cache_lock:
@@ -311,7 +345,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
                         except Exception as e:
                             import traceback
                             print("!!! ERREUR CRITIQUE SAUVEGARDE !!!", flush=True)
-                            traceback.print_exc() # <--- CA VA ENFIN DIRE POURQUOI
+                            traceback.print_exc()
                             msg += f" ⚠️ Erreur sauvegarde: {e}"
 
                     if progress_callback:
@@ -319,7 +353,7 @@ def run_calcul_km(filepath: str, calculer_peage: bool = False, super_pref: bool 
 
             if progress_callback:
                 progress_callback(current_global, total_global, f"💾 Écriture des résultats ({sheet_name})...")
-            write_km_results(ws,list(results.values()), calculer_peage)
+            write_km_results(ws, list(results.values()), calculer_peage)
 
         stats["erreurs_detail"] = erreurs_list
 
