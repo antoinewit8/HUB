@@ -639,7 +639,7 @@
         // et le premier calcul ne subissent plus ce démarrage à froid.
         // Requête sur la racine en no-cors : aucun appel PTV, aucun coût.
         (function wakeServer() {
-            if (!serverUrl || serverUrl.includes('{{')) return;
+            if (!/^https?:\/\//.test(serverUrl)) return;   // URL non injectée : rien à réveiller
             fetch(serverUrl + '/', { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
         })();
 
