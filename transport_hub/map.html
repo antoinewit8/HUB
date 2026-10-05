@@ -113,7 +113,9 @@
         #ep-suggest.show { display: block; }
         .sg-item { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 9px; cursor: pointer; }
         .sg-item.active, .sg-item:hover { background: var(--bg); }
-        .sg-status { padding: 10px; font-size: 13px; color: var(--sub); }
+        .sg-status { padding: 10px; font-size: 13px; color: var(--sub); line-height: 1.45; }
+        .sg-status.err { color: var(--red); }
+        .sg-detail { display: block; margin-top: 3px; font-size: 11.5px; color: var(--sub); }
         .sg-foot { margin-top: 4px; padding: 8px 10px 5px; font-size: 12px; color: var(--sub); border-top: .5px solid var(--hair); }
         .sg-more { color: var(--blue); cursor: pointer; font-weight: 500; }
         .sg-more:hover { text-decoration: underline; }
@@ -630,6 +632,18 @@
         const layerState = { road: false, pl: false, plLoaded: false };
 
         // ═══════════════════════════════════════════════════════
+        //  RÉVEIL DU SERVEUR
+        // ═══════════════════════════════════════════════════════
+        // Un service Render en veille met jusqu'à une minute à redémarrer.
+        // On le réveille dès l'ouverture de la carte : le repli des suggestions
+        // et le premier calcul ne subissent plus ce démarrage à froid.
+        // Requête sur la racine en no-cors : aucun appel PTV, aucun coût.
+        (function wakeServer() {
+            if (!serverUrl || serverUrl.includes('{{')) return;
+            fetch(serverUrl + '/', { mode: 'no-cors', cache: 'no-store' }).catch(() => {});
+        })();
+
+        // ═══════════════════════════════════════════════════════
         //  CARTE
         // ═══════════════════════════════════════════════════════
 
@@ -958,9 +972,7 @@
                 sg.active = hits.length ? 0 : -1;
 
                 if (!hits.length) {
-                    _suggestStatus(full
-                        ? `Rien trouvé pour « ${esc(q)} »${_countryFilter() ? ' dans ce pays' : ''}`
-                        : 'Aucune suggestion. <span class="sg-more">Recherche élargie (OSM)</span>');
+                    _suggestEmpty(q, full);
                     return;
                 }
                 _renderSuggest();
@@ -970,19 +982,42 @@
             } catch (e) {
                 if (signal.aborted || seq !== sg.seq) return;
                 console.warn('Suggestions:', e);
-                _suggestStatus('Recherche indisponible');
+                _suggestStatus('Recherche indisponible — ' + esc(e.message), true);
+            }
+        }
+
+        // Liste vide : on distingue "aucun lieu ne correspond" de "les géocodeurs
+        // n'ont pas répondu", sinon une panne passe pour une faute de frappe.
+        function _suggestEmpty(q, full) {
+            const pays = _countryFilter() ? ' dans ce pays' : '';
+            const detail = `<span class="sg-detail">${esc(lastGeoSource)}</span>`;
+            const more = '<span class="sg-more">Recherche élargie (OSM)</span>';
+
+            if (full) {
+                _suggestStatus(lastGeoFailed
+                    ? `Recherche impossible pour « ${esc(q)} »${detail}`
+                    : `Rien trouvé pour « ${esc(q)} »${pays}`, lastGeoFailed);
+            } else if (lastGeoFailed) {
+                _suggestStatus(`Suggestions indisponibles. ${more}${detail}`, true);
+            } else {
+                _suggestStatus(`Aucune suggestion${pays}. ${more}`);
             }
         }
 
         function _renderSuggest() {
             const box = document.getElementById('ep-suggest');
+            let foot;
+            if (sg.full) {
+                foot = 'Source : ' + esc(lastGeoSource);
+            } else {
+                const viaServeur = lastGeoSource === 'Serveur'
+                    ? 'Photon ne répond pas, suggestions du serveur. ' : '';
+                foot = viaServeur + 'Pas le bon lieu ? <span class="sg-more">Recherche élargie (OSM)</span>';
+            }
             box.innerHTML = sg.hits.map((h, i) =>
                 `<div class="sg-item${i === sg.active ? ' active' : ''}" data-i="${i}"
                       title="${esc(hitLabel(h).full)}">${hitHTML(h)}</div>`
-            ).join('')
-            + `<div class="sg-foot">${sg.full
-                ? 'Source : ' + esc(lastGeoSource)
-                : 'Pas le bon lieu ? <span class="sg-more">Recherche élargie (OSM)</span>'}</div>`;
+            ).join('') + `<div class="sg-foot">${foot}</div>`;
             box.classList.add('show');
         }
 
@@ -992,9 +1027,9 @@
             if (items[sg.active]) items[sg.active].scrollIntoView({ block: 'nearest' });
         }
 
-        function _suggestStatus(html) {
+        function _suggestStatus(html, isError) {
             const box = document.getElementById('ep-suggest');
-            box.innerHTML = `<div class="sg-status">${html}</div>`;
+            box.innerHTML = `<div class="sg-status${isError ? ' err' : ''}">${html}</div>`;
             box.classList.add('show');
         }
 
@@ -1609,7 +1644,7 @@
                             truncated: !!body.truncated };
                     ferryState.cache.set(key, res);
                 } catch (e) {
-                    res = { options: [], error: e.name === 'AbortError' ? 'délai dépassé' : e.message };
+                    res = { options: [], error: e.message };
                 }
             }
             if (seq !== ferryState.seq) return;   // le panneau a été redessiné entre-temps
@@ -1822,6 +1857,9 @@
         // ═══════════════════════════════════════════════════════
 
         let searchMarker = null, searchPopup = null, searchHits = [], lastGeoSource = '';
+        // true quand au moins un géocodeur a planté (délai, HTTP, réseau) :
+        // la liste vide ne veut alors pas dire "aucun lieu".
+        let lastGeoFailed = false;
 
         function _norm(s) {
             return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -1840,9 +1878,12 @@
         }
 
         // fetch avec délai maximal, qui respecte aussi l'annulation extérieure.
+        // Délai dépassé → TimeoutError avec un message lisible.
+        // Annulation extérieure (frappe suivante, liste fermée) → AbortError d'origine.
         async function _fetchT(url, { ms = 6000, signal, headers } = {}) {
             const ctrl = new AbortController();
-            const t = setTimeout(() => ctrl.abort(), ms);
+            let timedOut = false;
+            const t = setTimeout(() => { timedOut = true; ctrl.abort(); }, ms);
             const onAbort = () => ctrl.abort();
             if (signal) {
                 if (signal.aborted) ctrl.abort();
@@ -1850,9 +1891,56 @@
             }
             try {
                 return await fetch(url, { signal: ctrl.signal, headers });
+            } catch (e) {
+                if (timedOut && !(signal && signal.aborted)) {
+                    const err = new Error(`délai dépassé (${Math.round(ms / 1000)} s)`);
+                    err.name = 'TimeoutError';
+                    throw err;
+                }
+                throw e;
             } finally {
                 clearTimeout(t);
                 if (signal) signal.removeEventListener('abort', onAbort);
+            }
+        }
+
+        // ── Coupe-circuit Photon ──
+        // photon.komoot.io est une instance publique gratuite : elle tombe ou
+        // bride parfois. Après 2 échecs de suite (délai, 429, 5xx, réseau), on
+        // ne l'interroge plus pendant 2 minutes. Les suggestions passent alors
+        // directement par le serveur, sans attendre le délai à chaque lettre.
+        const PHOTON_MAX_FAILS = 2;
+        const PHOTON_PAUSE_MS  = 2 * 60 * 1000;
+        const photonState = { fails: 0, downUntil: 0, lastErr: '' };
+
+        function photonPaused() { return Date.now() < photonState.downUntil; }
+
+        async function _photonFetch(url, { ms = 4000, signal } = {}) {
+            if (photonPaused()) {
+                const left = Math.ceil((photonState.downUntil - Date.now()) / 1000);
+                throw new Error(`en pause encore ${left} s (dernier échec : ${photonState.lastErr})`);
+            }
+            try {
+                const r = await _fetchT(url, { ms, signal });
+                if (r.status === 429 || r.status >= 500) throw new Error('HTTP ' + r.status);
+                if (!r.ok) {
+                    // 4xx : la requête est en cause, pas le service.
+                    const err = new Error('HTTP ' + r.status);
+                    err.soft = true;
+                    throw err;
+                }
+                const data = await r.json();
+                photonState.fails = 0;
+                return data;
+            } catch (e) {
+                if (e.name === 'AbortError' || e.soft) throw e;
+                photonState.lastErr = e.message;
+                if (++photonState.fails >= PHOTON_MAX_FAILS) {
+                    photonState.fails = 0;
+                    photonState.downUntil = Date.now() + PHOTON_PAUSE_MS;
+                    console.warn(`Photon mis en pause ${PHOTON_PAUSE_MS / 60000} min :`, e.message);
+                }
+                throw e;
             }
         }
 
@@ -1961,7 +2049,7 @@
             if (cc) url += '&countrycodes=' + cc.toLowerCase();
             await _nominatimSlot(signal);
             const r = await _fetchT(url, { signal, headers: { 'Accept': 'application/json' } });
-            if (!r.ok) throw new Error('Nominatim HTTP ' + r.status);
+            if (!r.ok) throw new Error('HTTP ' + r.status);
             return ((await r.json()) || []).map(_nomHit);
         }
 
@@ -1971,14 +2059,15 @@
             const url = 'https://photon.komoot.io/api/?lang=fr&limit=20'
                       + `&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`
                       + '&q=' + encodeURIComponent(q);
-            const r = await _fetchT(url, { signal });
-            if (!r.ok) throw new Error('Photon HTTP ' + r.status);
-            return ((await r.json()).features || []).map(_photonHit);
+            const d = await _photonFetch(url, { ms: 4000, signal });
+            return (d.features || []).map(_photonHit);
         }
 
+        // Délai long : le serveur peut sortir de veille.
         async function _serverGeocode(q, signal) {
-            const r = await _fetchT(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`, { signal });
-            if (!r.ok) throw new Error('Serveur HTTP ' + r.status);
+            const r = await _fetchT(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`,
+                                    { ms: 15000, signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
             const d = await r.json();
             const items = Array.isArray(d) ? d : (d.results || (d.lat != null ? [d] : []));
             return items
@@ -1992,22 +2081,30 @@
                 }));
         }
 
-        // typing = true : suggestions pendant la frappe. On n'interroge que Photon,
-        // prévu pour l'autocomplétion ; Nominatim l'interdit sur ses serveurs
-        // publics (1 requête/seconde max). La recherche complète (Entrée,
-        // "Recherche élargie", bouton Rechercher) garde l'ordre OSM → Photon → Serveur.
+        // typing = true : suggestions pendant la frappe. Photon d'abord, prévu
+        // pour l'autocomplétion ; Nominatim l'interdit sur ses serveurs publics
+        // (1 requête/seconde max). Le serveur ne sert que de secours, quand
+        // Photon plante ou est en pause : un simple "0 résultat" sur un début de
+        // mot ne doit pas déclencher un appel serveur à chaque lettre.
+        // La recherche complète (Entrée, "Recherche élargie", bouton Rechercher)
+        // garde l'ordre OSM → Photon → Serveur.
         async function geocodeQuery(q, cc, { typing = false, signal } = {}) {
             let hits = [];
             const notes = [];
+            let failed = false;
             lastGeoSource = '';
+            lastGeoFailed = false;
 
+            // [nom, appel, seulement si une source précédente a planté]
             const sources = typing
-                ? [['Photon', () => _photon(q, signal)]]
-                : [['OSM',     () => _nominatim(q, cc, signal)],
-                   ['Photon',  () => _photon(q, signal)],
-                   ['Serveur', () => _serverGeocode(q, signal)]];
+                ? [['Photon',  () => _photon(q, signal),          false],
+                   ['Serveur', () => _serverGeocode(q, signal),   true]]
+                : [['OSM',     () => _nominatim(q, cc, signal),   false],
+                   ['Photon',  () => _photon(q, signal),          false],
+                   ['Serveur', () => _serverGeocode(q, signal),   false]];
 
-            for (const [name, fn] of sources) {
+            for (const [name, fn, onlyAfterError] of sources) {
+                if (onlyAfterError && !failed) continue;
                 try {
                     let res = await fn();
                     if (cc) res = (res || []).filter(h => !h.cc || h.cc === cc);
@@ -2015,12 +2112,17 @@
                     notes.push(name + ' : 0 résultat');
                 } catch (e) {
                     if (signal && signal.aborted) throw e;
+                    failed = true;
                     notes.push(name + ' : ' + e.message);
                     console.warn('Géocodeur', name, e);
                 }
             }
 
-            if (!hits.length) { lastGeoSource = notes.join(', '); return []; }
+            if (!hits.length) {
+                lastGeoSource = notes.join(', ');
+                lastGeoFailed = failed;
+                return [];
+            }
 
             const nq = _norm(q.split(',')[0]);
             hits.sort((a, b) => {
@@ -2058,11 +2160,10 @@
         // plus lointain ; limit > 1 permet d'aller chercher un code postal chez
         // un voisin quand l'objet le plus proche n'en a pas.
         async function _photonReverse(lat, lng, { limit = 1, signal, ms = 4000 } = {}) {
-            const r = await _fetchT(
+            const d = await _photonFetch(
                 `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&lang=fr&limit=${limit}&radius=2`,
                 { ms, signal });
-            if (!r.ok) throw new Error('Photon reverse HTTP ' + r.status);
-            return ((await r.json()).features || []).map(_photonHit);
+            return (d.features || []).map(_photonHit);
         }
 
         // Nominatim : 1 requête par seconde maximum sur le serveur public.
@@ -2095,6 +2196,7 @@
         // villages : dans OSM, le nœud du lieu n'a pas d'adresse).
         //   1) Photon inverse, 10 voisins : premier code postal du même pays.
         //   2) Ce qui manque encore : Nominatim inverse, 4 au plus, espacés d'1 s.
+        // Si Photon est en pause, la passe 1 échoue tout de suite et la passe 2 prend le relais.
         // onUpdate() est appelé à chaque résultat complété pour réafficher la liste.
         const _pcCache = new Map();
         const NO_PC_TYPES = new Set(['country', 'state', 'county']);
@@ -2167,7 +2269,7 @@
                     if (h.street) h.name = h.street;   // l'adresse plutôt qu'un nom de bâtiment
                     return h;
                 }
-            } catch (e) { console.warn('Reverse Photon:', e); }
+            } catch (e) { console.warn('Reverse Photon:', e.message); }
 
             try {
                 const h = await _nominatimReverse(lat, lng);
@@ -2211,8 +2313,9 @@
                 searchHits = hits;
 
                 if (!searchHits.length) {
-                    errEl.textContent = cc ? `Rien trouvé pour « ${q} » dans ce pays`
-                                           : `Rien trouvé pour « ${q} »`;
+                    errEl.textContent = lastGeoFailed
+                        ? `Recherche impossible pour « ${q} »`
+                        : (cc ? `Rien trouvé pour « ${q} » dans ce pays` : `Rien trouvé pour « ${q} »`);
                     errEl.style.display = 'block';
                     hintEl.textContent = 'Géocodeurs : ' + (lastGeoSource || 'aucune réponse');
                     return;
@@ -2225,7 +2328,7 @@
 
             } catch (e) {
                 console.error('Recherche:', e);
-                errEl.textContent = 'Recherche indisponible';
+                errEl.textContent = 'Recherche indisponible — ' + e.message;
                 errEl.style.display = 'block';
             } finally {
                 btn.disabled = false; btn.textContent = 'Rechercher';
