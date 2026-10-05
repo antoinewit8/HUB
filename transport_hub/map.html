@@ -180,7 +180,8 @@
         .state-original { background: #e3f6ea; color: #00753a; }
         .state-modified { background: #fff1e0; color: var(--orange); }
 
-        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+        /* Distance sur toute la largeur et en grand ; durée et péage côte à côte dessous. */
+        .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         .stat { background: #fff; border-radius: 14px; padding: 12px 12px 10px; box-shadow: var(--tile); min-width: 0;
             transition: background .15s, box-shadow .15s; }
         .stat.clickable { cursor: pointer; user-select: none; }
@@ -188,6 +189,10 @@
         .stat .n { font-size: 18px; font-weight: 600; letter-spacing: -.02em; line-height: 1.15; white-space: nowrap;
             overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
         .stat .n.accent { color: var(--blue); }
+        .stats .stat:first-child { grid-column: 1 / -1; padding: 14px 16px 12px; }
+        .stats .stat:first-child .n { font-size: 34px; font-weight: 700; letter-spacing: -.03em; line-height: 1.1; }
+        .stats .stat:first-child .l { font-size: 13px; }
+        .stats .stat:not(:first-child) .n { font-size: 21px; }
         .stat .l { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--sub); margin-top: 3px; }
         .caret { display: inline-block; font-size: 8px; color: #86868b; transition: transform .2s var(--ease); }
         .caret.open { transform: rotate(90deg); color: var(--blue); }
