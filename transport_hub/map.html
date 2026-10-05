@@ -529,7 +529,7 @@
             <div class="sec instructions">
                 <h4>Raccourcis</h4>
                 <div class="hint">
-                    <p><span class="kbd">⌨</span><span><b>Départ / Arrivée</b> : tapez une adresse ou des coordonnées.</span></p>
+                    <p><span class="kbd">⌨</span><span><b>Départ / Arrivée</b> : tapez une adresse puis Entrée, ou des coordonnées.</span></p>
                     <p><span class="kbd">⇅</span><span><b>Inverser</b> le départ et l'arrivée.</span></p>
                     <p><span class="kbd">●</span><span><b>Clic sur la carte</b> : pose le départ, puis l'arrivée.</span></p>
                     <p><span class="kbd">＋</span><span><b>Clic droit</b> : ajoute une étape.</span></p>
@@ -936,88 +936,73 @@
             }
         }
 
+        // Recherche OSM (Nominatim) uniquement. Nominatim interdit l'autocomplétion
+        // sur ses serveurs publics : la recherche part sur Entrée ou sur le lien
+        // "Chercher", jamais à chaque lettre. Des coordonnées tapées sont
+        // reconnues tout de suite, sans appel réseau.
         function _scheduleSuggest(raw, immediate, full) {
             clearTimeout(sg.timer);
             const q = (raw || '').trim();
             if (q.length < 3) { closeSuggest(); return; }
-            sg.timer = setTimeout(() => _runSuggest(q, full), immediate ? 0 : 200);
+            if (full || _parseCoords(q)) {
+                sg.timer = setTimeout(() => _runSuggest(q), immediate ? 0 : 150);
+                return;
+            }
+            if (sg.ctrl) { sg.ctrl.abort(); sg.ctrl = null; }
+            sg.seq++;
+            sg.hits = []; sg.active = -1; sg.query = '';
+            _suggestStatus('Entrée pour chercher · <span class="sg-more">Chercher</span>');
         }
 
-        async function _runSuggest(q, full) {
+        async function _runSuggest(q) {
             const seq = ++sg.seq;
             if (sg.ctrl) sg.ctrl.abort();
             sg.ctrl = new AbortController();
             const signal = sg.ctrl.signal;
 
-            // Coordonnées tapées à la main : pas de géocodage.
             const c = _parseCoords(q);
             if (c) {
                 sg.hits = [{ lat: c.lat, lng: c.lng, name: 'Coordonnées GPS', street: '',
                              housenumber: '', postcode: '', city: '', region: '', country: '',
                              cc: '', type: 'other', src: 'coords' }];
-                sg.query = q; sg.full = true; sg.active = 0;
+                sg.query = q; sg.active = 0;
                 _renderSuggest();
                 return;
             }
 
-            if (!sg.hits.length || sg.query !== q) {
-                _suggestStatus(full ? 'Recherche complète…' : 'Recherche…');
-            }
+            _suggestStatus('Recherche…');
 
             try {
-                const hits = await geocodeQuery(q, _countryFilter(), { typing: !full, signal });
+                const hits = await geocodeQuery(q, _countryFilter(), { signal });
                 if (seq !== sg.seq) return;
 
-                sg.hits = hits; sg.query = q; sg.full = full;
+                sg.hits = hits; sg.query = q;
                 sg.active = hits.length ? 0 : -1;
 
                 if (!hits.length) {
-                    _suggestEmpty(q, full);
+                    _suggestStatus(lastGeoFailed
+                        ? `OpenStreetMap ne répond pas (${esc(lastGeoSource)}). <span class="sg-more">Réessayer</span>`
+                        : `Rien trouvé pour « ${esc(q)} »${_countryFilter() ? ' dans ce pays' : ''}`,
+                        lastGeoFailed);
                     return;
                 }
                 _renderSuggest();
 
-                // Deuxième passe : compléter les codes postaux manquants, puis réafficher.
+                // Codes postaux manquants : complétés en arrière-plan, puis réaffichés.
                 enrichPostcodes(hits, signal, () => { if (seq === sg.seq) _renderSuggest(); });
             } catch (e) {
                 if (signal.aborted || seq !== sg.seq) return;
-                console.warn('Suggestions:', e);
+                console.warn('Recherche:', e);
                 _suggestStatus('Recherche indisponible — ' + esc(e.message), true);
-            }
-        }
-
-        // Liste vide : on distingue "aucun lieu ne correspond" de "les géocodeurs
-        // n'ont pas répondu", sinon une panne passe pour une faute de frappe.
-        function _suggestEmpty(q, full) {
-            const pays = _countryFilter() ? ' dans ce pays' : '';
-            const detail = `<span class="sg-detail">${esc(lastGeoSource)}</span>`;
-            const more = '<span class="sg-more">Recherche complète</span>';
-
-            if (full) {
-                _suggestStatus(lastGeoFailed
-                    ? `Recherche impossible pour « ${esc(q)} »${detail}`
-                    : `Rien trouvé pour « ${esc(q)} »${pays}`, lastGeoFailed);
-            } else if (lastGeoFailed) {
-                _suggestStatus(`Suggestions indisponibles. ${more}${detail}`, true);
-            } else {
-                _suggestStatus(`Aucune suggestion${pays}. ${more}`);
             }
         }
 
         function _renderSuggest() {
             const box = document.getElementById('ep-suggest');
-            let foot;
-            if (sg.full) {
-                foot = 'Source : ' + esc(lastGeoSource);
-            } else {
-                const secours = lastGeoSource === 'Photon'
-                    ? 'PTV ne répond pas, suggestions Photon. ' : '';
-                foot = secours + 'Pas le bon lieu ? <span class="sg-more">Recherche complète</span>';
-            }
             box.innerHTML = sg.hits.map((h, i) =>
                 `<div class="sg-item${i === sg.active ? ' active' : ''}" data-i="${i}"
                       title="${esc(hitLabel(h).full)}">${hitHTML(h)}</div>`
-            ).join('') + `<div class="sg-foot">${foot}</div>`;
+            ).join('');
             box.classList.add('show');
         }
 
@@ -1043,20 +1028,7 @@
             box.innerHTML = '';
         }
 
-        // Les suggestions PTV n'ont pas de coordonnées : on localise la
-        // suggestion choisie (2e appel PTV), comme le prévoit PTV.
-        async function _chooseEndpoint(role, hit) {
-            if (hit.lat == null) {
-                const seq = ++sg.seq;
-                _suggestStatus('Localisation…');
-                try {
-                    hit = await _resolveSuggestion(hit);
-                } catch (e) {
-                    if (seq === sg.seq) _suggestStatus('Localisation impossible — ' + esc(e.message), true);
-                    return;
-                }
-                if (seq !== sg.seq) return;   // l'utilisateur a retapé entre-temps
-            }
+        function _chooseEndpoint(role, hit) {
             closeSuggest();
             const inp = _epInput(role);
             inp.blur();
@@ -1870,8 +1842,8 @@
         // ═══════════════════════════════════════════════════════
 
         let searchMarker = null, searchPopup = null, searchHits = [], lastGeoSource = '';
-        // true quand au moins un géocodeur a planté (délai, HTTP, réseau) :
-        // la liste vide ne veut alors pas dire "aucun lieu".
+        // true quand OSM n'a pas répondu (délai, HTTP, réseau) : la liste vide
+        // ne veut alors pas dire "aucun lieu".
         let lastGeoFailed = false;
 
         function _norm(s) {
@@ -1884,16 +1856,14 @@
             }[c]));
         }
 
-        // Certains géocodeurs renvoient "4000;4020;4030" pour une ville à
-        // plusieurs codes : on garde le premier.
+        // Certains objets OSM portent "4000;4020;4030" : on garde le premier code.
         function _pc(v) {
             return String(v || '').split(/[;,]/)[0].trim();
         }
 
         // fetch avec délai maximal, qui respecte aussi l'annulation extérieure.
         // Délai dépassé → TimeoutError avec un message lisible.
-        // Annulation extérieure (frappe suivante, liste fermée) → AbortError d'origine.
-        async function _fetchT(url, { ms = 6000, signal, headers } = {}) {
+        async function _fetchT(url, { ms = 8000, signal, headers } = {}) {
             const ctrl = new AbortController();
             let timedOut = false;
             const t = setTimeout(() => { timedOut = true; ctrl.abort(); }, ms);
@@ -1914,46 +1884,6 @@
             } finally {
                 clearTimeout(t);
                 if (signal) signal.removeEventListener('abort', onAbort);
-            }
-        }
-
-        // ── Coupe-circuit Photon ──
-        // photon.komoot.io est une instance publique gratuite : elle tombe ou
-        // bride parfois. Après 2 échecs de suite (délai, 429, 5xx, réseau), on
-        // ne l'interroge plus pendant 2 minutes. Les suggestions passent alors
-        // directement par le serveur, sans attendre le délai à chaque lettre.
-        const PHOTON_MAX_FAILS = 2;
-        const PHOTON_PAUSE_MS  = 2 * 60 * 1000;
-        const photonState = { fails: 0, downUntil: 0, lastErr: '' };
-
-        function photonPaused() { return Date.now() < photonState.downUntil; }
-
-        async function _photonFetch(url, { ms = 4000, signal } = {}) {
-            if (photonPaused()) {
-                const left = Math.ceil((photonState.downUntil - Date.now()) / 1000);
-                throw new Error(`en pause encore ${left} s (dernier échec : ${photonState.lastErr})`);
-            }
-            try {
-                const r = await _fetchT(url, { ms, signal });
-                if (r.status === 429 || r.status >= 500) throw new Error('HTTP ' + r.status);
-                if (!r.ok) {
-                    // 4xx : la requête est en cause, pas le service.
-                    const err = new Error('HTTP ' + r.status);
-                    err.soft = true;
-                    throw err;
-                }
-                const data = await r.json();
-                photonState.fails = 0;
-                return data;
-            } catch (e) {
-                if (e.name === 'AbortError' || e.soft) throw e;
-                photonState.lastErr = e.message;
-                if (++photonState.fails >= PHOTON_MAX_FAILS) {
-                    photonState.fails = 0;
-                    photonState.downUntil = Date.now() + PHOTON_PAUSE_MS;
-                    console.warn(`Photon mis en pause ${PHOTON_PAUSE_MS / 60000} min :`, e.message);
-                }
-                throw e;
             }
         }
 
@@ -1997,7 +1927,7 @@
             const pc = h.postcode ? `<span class="pc">${esc(h.postcode)}</span>` : '';
             const sub = L.subParts.length
                 ? L.subParts.map(esc).join(', ')
-                : (h.lat != null ? `${h.lat.toFixed(5)}, ${h.lng.toFixed(5)}` : '');
+                : `${h.lat.toFixed(5)}, ${h.lng.toFixed(5)}`;
             return `
                 <div class="hit-main">
                     <div class="hit-head">${esc(L.head)}</div>
@@ -2037,213 +1967,6 @@
             };
         }
 
-        function _photonType(p) {
-            if (p.osm_key === 'place' && TYPE_RANK[p.osm_value] !== undefined) return p.osm_value;
-            return TYPE_RANK[p.type] !== undefined ? p.type : 'other';
-        }
-
-        function _photonHit(f) {
-            const p = f.properties || {};
-            return {
-                lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0],
-                name: p.name || p.street || '', street: p.street || '',
-                housenumber: p.housenumber || '', postcode: _pc(p.postcode),
-                city: p.city || '',
-                region: p.county || p.state || '',
-                country: p.country || '', cc: (p.countrycode || '').toUpperCase(),
-                type: _photonType(p), src: 'Photon'
-            };
-        }
-
-        async function _nominatim(q, cc, signal) {
-            let url = 'https://nominatim.openstreetmap.org/search'
-                    + '?format=jsonv2&addressdetails=1&extratags=1&limit=10&accept-language=fr'
-                    + '&q=' + encodeURIComponent(q);
-            if (cc) url += '&countrycodes=' + cc.toLowerCase();
-            await _nominatimSlot(signal);
-            const r = await _fetchT(url, { signal, headers: { 'Accept': 'application/json' } });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return ((await r.json()) || []).map(_nomHit);
-        }
-
-        async function _photon(q, signal) {
-            // Biais léger vers la zone affichée : à nom égal, le lieu proche passe devant.
-            const c = map.getCenter();
-            const url = 'https://photon.komoot.io/api/?lang=fr&limit=20'
-                      + `&lat=${c.lat.toFixed(3)}&lon=${c.lng.toFixed(3)}`
-                      + '&q=' + encodeURIComponent(q);
-            const d = await _photonFetch(url, { ms: 4000, signal });
-            return (d.features || []).map(_photonHit);
-        }
-
-        // ── PTV via le serveur (la clé reste côté Render) ──
-        //   /api/ptv/suggest : autocomplétion, sans coordonnées, très rapide
-        //   /api/ptv/locate  : géocodage complet, avec coordonnées
-        //   /api/ptv/reverse : adresse la plus proche d'un point
-        // Le serveur met les réponses en cache 24 h ; le navigateur aussi (10 min).
-        const PTV_TYPES = new Set(Object.keys(TYPE_RANK));
-
-        async function _ptvGet(path, params, { ms = 8000, signal } = {}) {
-            const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null));
-            const r = await _fetchT(`${serverUrl}/api/ptv/${path}?${qs}`, { ms, signal });
-            if (!r.ok) {
-                const body = await r.json().catch(() => ({}));
-                throw new Error('HTTP ' + r.status + (body.detail ? ' — ' + String(body.detail).slice(0, 120) : ''));
-            }
-            return r.json();
-        }
-
-        function _ptvHit(it, q) {
-            return {
-                lat: it.lat != null ? +it.lat : null, lng: it.lng != null ? +it.lng : null,
-                name: it.name || it.label || q || '',
-                street: it.street || '', housenumber: it.housenumber || '',
-                postcode: _pc(it.postcode), city: it.city || '', region: it.region || '',
-                country: it.country || '', cc: (it.cc || '').toUpperCase(),
-                type: PTV_TYPES.has(it.type) ? it.type : 'other',
-                src: 'PTV', query: it.query || it.label || it.name || q
-            };
-        }
-
-        async function _ptvSuggest(q, cc, signal) {
-            const d = await _ptvGet('suggest', { q, cc }, { ms: 6000, signal });
-            return (d.results || []).map(it => _ptvHit(it, q));
-        }
-
-        async function _ptvLocate(q, cc, signal) {
-            const d = await _ptvGet('locate', { q, cc }, { ms: 15000, signal });
-            return (d.results || []).filter(it => it.lat != null).map(it => _ptvHit(it, q));
-        }
-
-        async function _ptvReverse(lat, lng) {
-            const d = await _ptvGet('reverse', { lat: lat.toFixed(6), lng: lng.toFixed(6) }, { ms: 8000 });
-            const it = (d.results || []).find(x => x.lat != null);
-            return it ? _ptvHit(it) : null;
-        }
-
-        // Suggestion choisie → coordonnées. PTV d'abord, Nominatim en secours.
-        async function _resolveSuggestion(hit) {
-            const cc = hit.cc || _countryFilter();
-            const pick = list => {
-                const n = _norm(hit.name);
-                return list.find(h => _norm(h.name) === n) || list[0];
-            };
-            try {
-                const res = await _ptvLocate(hit.query, cc);
-                if (res.length) return pick(res);
-            } catch (e) { console.warn('Localisation PTV:', e.message); }
-            const res = await _nominatim(hit.query, cc);
-            if (res.length) return pick(res);
-            throw new Error('adresse introuvable');
-        }
-
-        // Cache navigateur : retaper ou effacer une lettre ne relance aucun appel.
-        const GEO_CACHE_MS = 10 * 60 * 1000;
-        const _geoCache = new Map();
-        const _clone = hits => hits.map(h => Object.assign({}, h));
-        function _geoCacheGet(k) {
-            const e = _geoCache.get(k);
-            if (!e) return null;
-            if (Date.now() - e.t > GEO_CACHE_MS) { _geoCache.delete(k); return null; }
-            return { hits: _clone(e.hits), source: e.source };
-        }
-        function _geoCacheSet(k, hits, source) {
-            _geoCache.set(k, { t: Date.now(), hits: _clone(hits), source });
-            if (_geoCache.size > 300) _geoCache.delete(_geoCache.keys().next().value);
-        }
-
-        // Même lieu : même nom et même pays, à moins de 5 km (ou même libellé
-        // de pays quand l'un des deux n'a pas encore de coordonnées).
-        function _sameSpot(a, b) {
-            if (a.cc !== b.cc || _norm(a.name) !== _norm(b.name)) return false;
-            if (a.lat == null || b.lat == null) return _norm(a.country) === _norm(b.country);
-            return _distKm(a, b) < 5;
-        }
-
-        // typing = true : suggestions pendant la frappe → PTV suggestions/by-text.
-        // Photon ne sert que de secours quand PTV plante (serveur endormi, quota) :
-        // un simple "0 résultat" sur un début de mot ne relance rien d'autre.
-        // Recherche complète (Entrée, "Recherche complète", bouton Rechercher) :
-        // PTV locations/by-text → OSM → Photon.
-        async function geocodeQuery(q, cc, { typing = false, signal } = {}) {
-            let hits = [];
-            const notes = [];
-            let failed = false;
-            lastGeoSource = '';
-            lastGeoFailed = false;
-
-            const cacheKey = `${typing ? 't' : 'f'}|${cc || ''}|${_norm(q)}`;
-            const cached = _geoCacheGet(cacheKey);
-            if (cached) { lastGeoSource = cached.source; return cached.hits; }
-
-            // [nom, appel, seulement si une source précédente a planté]
-            const sources = typing
-                ? [['PTV',    () => _ptvSuggest(q, cc, signal),  false],
-                   ['Photon', () => _photon(q, signal),          true]]
-                : [['PTV',    () => _ptvLocate(q, cc, signal),   false],
-                   ['OSM',    () => _nominatim(q, cc, signal),   false],
-                   ['Photon', () => _photon(q, signal),          false]];
-
-            for (const [name, fn, onlyAfterError] of sources) {
-                if (onlyAfterError && !failed) continue;
-                try {
-                    let res = await fn();
-                    if (cc) res = (res || []).filter(h => !h.cc || h.cc === cc);
-                    if (res && res.length) { hits = res; lastGeoSource = name; break; }
-                    notes.push(name + ' : 0 résultat');
-                } catch (e) {
-                    if (signal && signal.aborted) throw e;
-                    failed = true;
-                    notes.push(name + ' : ' + e.message);
-                    console.warn('Géocodeur', name, e);
-                }
-            }
-
-            if (!hits.length) {
-                lastGeoSource = notes.join(', ');
-                lastGeoFailed = failed;
-                return [];
-            }
-
-            const nq = _norm(q.split(',')[0]);
-            hits.sort((a, b) => {
-                const ea = _norm(a.name) === nq ? 0 : 1, eb = _norm(b.name) === nq ? 0 : 1;
-                if (ea !== eb) return ea - eb;
-                const ra = TYPE_RANK[a.type] ?? 10, rb = TYPE_RANK[b.type] ?? 10;
-                if (ra !== rb) return ra - rb;
-                return (_norm(a.name).startsWith(nq) ? 0 : 1) - (_norm(b.name).startsWith(nq) ? 0 : 1);
-            });
-
-            // Doublons : le même lieu arrive souvent deux fois (le nœud de la
-            // ville et le contour de la commune, à quelques km l'un de l'autre).
-            // Même nom + même pays à moins de 5 km = même lieu : on garde le
-            // premier, déjà le mieux classé.
-            const kept = [];
-            for (const h of hits) {
-                const twin = kept.find(k => _sameSpot(k, h)
-                                         && _norm(k.housenumber) === _norm(h.housenumber));
-                if (!twin) {
-                    kept.push(h);
-                } else if (!twin.postcode && h.postcode) {
-                    // Le doublon écarté avait peut-être le code postal qui manque à l'autre.
-                    twin.postcode = h.postcode;
-                }
-                if (kept.length >= 8) break;
-            }
-            _geoCacheSet(cacheKey, kept, lastGeoSource);
-            return kept;
-        }
-
-        // Géocodage inverse Photon. Les résultats sont triés du plus proche au
-        // plus lointain ; limit > 1 permet d'aller chercher un code postal chez
-        // un voisin quand l'objet le plus proche n'en a pas.
-        async function _photonReverse(lat, lng, { limit = 1, signal, ms = 4000 } = {}) {
-            const d = await _photonFetch(
-                `https://photon.komoot.io/reverse?lat=${lat}&lon=${lng}&lang=fr&limit=${limit}&radius=2`,
-                { ms, signal });
-            return (d.features || []).map(_photonHit);
-        }
-
         // Nominatim : 1 requête par seconde maximum sur le serveur public.
         // Toutes les requêtes passent par cette file, qui les espace.
         let _nomQueue = Promise.resolve();
@@ -2259,106 +1982,121 @@
             return slot;
         }
 
+        async function _nominatim(q, cc, signal) {
+            let url = 'https://nominatim.openstreetmap.org/search'
+                    + '?format=jsonv2&addressdetails=1&extratags=1&limit=10&accept-language=fr'
+                    + '&q=' + encodeURIComponent(q);
+            if (cc) url += '&countrycodes=' + cc.toLowerCase();
+            await _nominatimSlot(signal);
+            const r = await _fetchT(url, { signal, headers: { 'Accept': 'application/json' } });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return ((await r.json()) || []).map(_nomHit);
+        }
+
         async function _nominatimReverse(lat, lng, signal) {
             await _nominatimSlot(signal);
             const r = await _fetchT(
                 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1'
                 + `&zoom=18&accept-language=fr&lat=${lat}&lon=${lng}`,
-                { ms: 5000, signal, headers: { 'Accept': 'application/json' } });
-            if (!r.ok) throw new Error('Nominatim reverse HTTP ' + r.status);
+                { ms: 6000, signal, headers: { 'Accept': 'application/json' } });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
             const it = await r.json();
             return it && it.lat != null ? _nomHit(it) : null;
         }
 
-        // Complète les codes postaux absents (fréquent pour les villes et
-        // villages : dans OSM, le nœud du lieu n'a pas d'adresse).
-        //   1) Photon inverse, 10 voisins : premier code postal du même pays.
-        //   2) Ce qui manque encore : Nominatim inverse, 4 au plus, espacés d'1 s.
-        // Si Photon est en pause, la passe 1 échoue tout de suite et la passe 2 prend le relais.
-        // onUpdate() est appelé à chaque résultat complété pour réafficher la liste.
+        // Cache : relancer la même recherche ne refait pas d'appel.
+        const GEO_CACHE_MS = 30 * 60 * 1000;
+        const _geoCache = new Map();
+        const _clone = hits => hits.map(h => Object.assign({}, h));
+
+        async function geocodeQuery(q, cc, { signal } = {}) {
+            lastGeoSource = '';
+            lastGeoFailed = false;
+
+            const key = `${cc || ''}|${_norm(q)}`;
+            const c = _geoCache.get(key);
+            if (c && Date.now() - c.t < GEO_CACHE_MS) { lastGeoSource = 'OSM'; return _clone(c.hits); }
+
+            let hits;
+            try {
+                hits = await _nominatim(q, cc, signal);
+            } catch (e) {
+                if (signal && signal.aborted) throw e;
+                console.warn('Nominatim:', e);
+                lastGeoFailed = true;
+                lastGeoSource = e.message;
+                return [];
+            }
+            if (cc) hits = hits.filter(h => !h.cc || h.cc === cc);
+            if (!hits.length) { lastGeoSource = 'OSM : 0 résultat'; return []; }
+            lastGeoSource = 'OSM';
+
+            const nq = _norm(q.split(',')[0]);
+            hits.sort((a, b) => {
+                const ea = _norm(a.name) === nq ? 0 : 1, eb = _norm(b.name) === nq ? 0 : 1;
+                if (ea !== eb) return ea - eb;
+                const ra = TYPE_RANK[a.type] ?? 10, rb = TYPE_RANK[b.type] ?? 10;
+                if (ra !== rb) return ra - rb;
+                return (_norm(a.name).startsWith(nq) ? 0 : 1) - (_norm(b.name).startsWith(nq) ? 0 : 1);
+            });
+
+            // Doublons : le nœud de la ville et le contour de la commune arrivent
+            // souvent tous les deux. Même nom + même pays à moins de 5 km = même lieu.
+            const kept = [];
+            for (const h of hits) {
+                const twin = kept.find(k => k.cc === h.cc && _norm(k.name) === _norm(h.name)
+                                         && _norm(k.housenumber) === _norm(h.housenumber)
+                                         && _distKm(k, h) < 5);
+                if (!twin) kept.push(h);
+                else if (!twin.postcode && h.postcode) twin.postcode = h.postcode;
+                if (kept.length >= 8) break;
+            }
+
+            _geoCache.set(key, { t: Date.now(), hits: _clone(kept) });
+            if (_geoCache.size > 200) _geoCache.delete(_geoCache.keys().next().value);
+            return kept;
+        }
+
+        // Codes postaux absents (fréquent pour les villes : dans OSM, le nœud du
+        // lieu n'a pas d'adresse). Nominatim inverse, 4 au plus, espacés d'1 s.
         const _pcCache = new Map();
         const NO_PC_TYPES = new Set(['country', 'state', 'county']);
         const NOM_PC_MAX = 4;
 
-        function _applyInfo(h, info) {
-            let changed = false;
-            if (!h.postcode && info.postcode) { h.postcode = info.postcode; changed = true; }
-            if (!h.region  && info.region)    { h.region   = info.region;   changed = true; }
-            if (!h.country && info.country)   { h.country  = info.country;  changed = true; }
-            if (!h.cc && info.cc) h.cc = info.cc;
-            return changed;
-        }
-
         async function enrichPostcodes(hits, signal, onUpdate) {
-            const todo = hits.filter(h => h.lat != null && !h.postcode && !h._pcTried
-                                          && !NO_PC_TYPES.has(h.type) && h.src !== 'coords');
-            if (!todo.length) return false;
+            const todo = hits.filter(h => !h.postcode && !h._pcTried
+                                          && !NO_PC_TYPES.has(h.type) && h.src !== 'coords')
+                             .slice(0, NOM_PC_MAX);
             todo.forEach(h => { h._pcTried = true; });
 
-            let changed = false;
-            const key = h => `${h.lat.toFixed(4)},${h.lng.toFixed(4)}`;
-
-            // Passe 1 : cache puis Photon, en parallèle.
-            await Promise.all(todo.map(async h => {
-                const cached = _pcCache.get(key(h));
-                if (cached) { if (_applyInfo(h, cached)) changed = true; return; }
-                try {
-                    const near = await _photonReverse(h.lat, h.lng, { limit: 10, signal, ms: 3500 });
-                    const withPc = near.find(n => n.postcode && (!h.cc || !n.cc || n.cc === h.cc));
-                    const info = Object.assign({}, near[0] || {}, withPc ? { postcode: withPc.postcode } : {});
-                    if (withPc) _pcCache.set(key(h), info);
-                    if (_applyInfo(h, info)) changed = true;
-                } catch (e) { /* on tente Nominatim ensuite */ }
-            }));
-            if (changed && onUpdate) onUpdate();
-            if (signal && signal.aborted) return changed;
-
-            // Passe 2 : Nominatim pour les derniers manquants, un par un.
-            const rest = todo.filter(h => !h.postcode).slice(0, NOM_PC_MAX);
-            for (const h of rest) {
+            for (const h of todo) {
                 if (signal && signal.aborted) break;
+                const key = `${h.lat.toFixed(4)},${h.lng.toFixed(4)}`;
                 try {
-                    const info = await _nominatimReverse(h.lat, h.lng, signal);
-                    if (!info || !info.postcode) continue;
-                    if (h.cc && info.cc && info.cc !== h.cc) continue;
-                    _pcCache.set(key(h), info);
-                    if (_applyInfo(h, info)) { changed = true; if (onUpdate) onUpdate(); }
+                    let pc = _pcCache.get(key);
+                    if (pc === undefined) {
+                        const info = await _nominatimReverse(h.lat, h.lng, signal);
+                        pc = info && info.postcode && (!h.cc || !info.cc || info.cc === h.cc)
+                             ? info.postcode : '';
+                        _pcCache.set(key, pc);
+                    }
+                    if (pc && !h.postcode) { h.postcode = pc; if (onUpdate) onUpdate(); }
                 } catch (e) {
                     if (signal && signal.aborted) break;
                 }
             }
-            return changed;
         }
 
-        // Adresse la plus proche d'un point : PTV, puis Photon, puis Nominatim.
+        // Adresse la plus proche d'un point (clic carte, point glissé).
         async function reverseHit(lat, lng) {
             try {
-                const h = await _ptvReverse(lat, lng);
-                if (h) { if (h.street) h.name = h.street; return h; }
-            } catch (e) { console.warn('Reverse PTV:', e.message); }
-
-            try {
-                const near = await _photonReverse(lat, lng, { limit: 5 });
-                if (near.length) {
-                    const h = near[0];
-                    if (!h.postcode) {
-                        const withPc = near.find(n => n.postcode && (!h.cc || n.cc === h.cc));
-                        if (withPc) h.postcode = withPc.postcode;
-                    }
-                    if (!h.city) {
-                        const withCity = near.find(n => n.city);
-                        if (withCity) h.city = withCity.city;
-                    }
-                    if (h.street) h.name = h.street;   // l'adresse plutôt qu'un nom de bâtiment
-                    return h;
-                }
-            } catch (e) { console.warn('Reverse Photon:', e.message); }
-
-            try {
                 const h = await _nominatimReverse(lat, lng);
-                if (h) { if (h.street) h.name = h.street; return h; }
-            } catch (e) { console.warn('Reverse Nominatim:', e); }
-            return null;
+                if (h && h.street) h.name = h.street;   // l'adresse plutôt qu'un nom de bâtiment
+                return h;
+            } catch (e) {
+                console.warn('Reverse Nominatim:', e);
+                return null;
+            }
         }
 
         // ═══════════════════════════════════════════════════════
