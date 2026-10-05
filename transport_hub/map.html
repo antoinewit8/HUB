@@ -529,7 +529,7 @@
             <div class="sec instructions">
                 <h4>Raccourcis</h4>
                 <div class="hint">
-                    <p><span class="kbd">⌨</span><span><b>Départ / Arrivée</b> : tapez une adresse puis Entrée, ou des coordonnées.</span></p>
+                    <p><span class="kbd">⌨</span><span><b>Départ / Arrivée</b> : tapez une adresse ou des coordonnées, les suggestions s'affichent.</span></p>
                     <p><span class="kbd">⇅</span><span><b>Inverser</b> le départ et l'arrivée.</span></p>
                     <p><span class="kbd">●</span><span><b>Clic sur la carte</b> : pose le départ, puis l'arrivée.</span></p>
                     <p><span class="kbd">＋</span><span><b>Clic droit</b> : ajoute une étape.</span></p>
@@ -599,6 +599,11 @@
         const MAP_STYLE  = 'https://tiles.openfreemap.org/styles/liberty';
         const HOME_VIEW  = [4.87, 50.50];
         const HOME_ZOOM  = 6;
+
+        // Clé Geoapify (autocomplétion pendant la frappe). Collez-la entre les guillemets.
+        // Sans clé, la carte revient à la recherche OSM sur Entrée.
+        const GEOAPIFY_KEY = 'c6786d37405f464fb536b8c154520669';
+        const HAS_GEOAPIFY = !!GEOAPIFY_KEY && !GEOAPIFY_KEY.includes('COLLEZ');
 
         // ═══════════════════════════════════════════════════════
         //  ÉTAT
@@ -936,16 +941,17 @@
             }
         }
 
-        // Recherche OSM (Nominatim) uniquement. Nominatim interdit l'autocomplétion
-        // sur ses serveurs publics : la recherche part sur Entrée ou sur le lien
-        // "Chercher", jamais à chaque lettre. Des coordonnées tapées sont
-        // reconnues tout de suite, sans appel réseau.
+        // Pendant la frappe : Geoapify (autocomplétion OSM), 250 ms après la
+        // dernière lettre. Entrée ou "Recherche OSM" : Geoapify puis Nominatim
+        // si Geoapify ne trouve rien ou ne répond pas.
+        // Sans clé Geoapify : recherche Nominatim sur Entrée seulement, car
+        // Nominatim interdit l'autocomplétion sur ses serveurs publics.
         function _scheduleSuggest(raw, immediate, full) {
             clearTimeout(sg.timer);
             const q = (raw || '').trim();
             if (q.length < 3) { closeSuggest(); return; }
-            if (full || _parseCoords(q)) {
-                sg.timer = setTimeout(() => _runSuggest(q), immediate ? 0 : 150);
+            if (full || _parseCoords(q) || HAS_GEOAPIFY) {
+                sg.timer = setTimeout(() => _runSuggest(q, full), immediate ? 0 : 250);
                 return;
             }
             if (sg.ctrl) { sg.ctrl.abort(); sg.ctrl = null; }
@@ -954,7 +960,7 @@
             _suggestStatus('Entrée pour chercher · <span class="sg-more">Chercher</span>');
         }
 
-        async function _runSuggest(q) {
+        async function _runSuggest(q, full) {
             const seq = ++sg.seq;
             if (sg.ctrl) sg.ctrl.abort();
             sg.ctrl = new AbortController();
@@ -970,20 +976,28 @@
                 return;
             }
 
-            _suggestStatus('Recherche…');
+            // Pendant la frappe, on garde l'ancienne liste affichée au lieu de la faire clignoter.
+            if (!sg.hits.length) _suggestStatus('Recherche…');
 
             try {
-                const hits = await geocodeQuery(q, _countryFilter(), { signal });
+                const hits = await geocodeQuery(q, _countryFilter(), { signal, full });
                 if (seq !== sg.seq) return;
 
                 sg.hits = hits; sg.query = q;
                 sg.active = hits.length ? 0 : -1;
 
                 if (!hits.length) {
-                    _suggestStatus(lastGeoFailed
-                        ? `OpenStreetMap ne répond pas (${esc(lastGeoSource)}). <span class="sg-more">Réessayer</span>`
-                        : `Rien trouvé pour « ${esc(q)} »${_countryFilter() ? ' dans ce pays' : ''}`,
-                        lastGeoFailed);
+                    const pays = _countryFilter() ? ' dans ce pays' : '';
+                    const osm = '<span class="sg-more">Recherche OSM</span>';
+                    if (full) {
+                        _suggestStatus(lastGeoFailed
+                            ? `Recherche impossible (${esc(lastGeoSource)}). <span class="sg-more">Réessayer</span>`
+                            : `Rien trouvé pour « ${esc(q)} »${pays}`, lastGeoFailed);
+                    } else {
+                        _suggestStatus(lastGeoFailed
+                            ? `Suggestions indisponibles (${esc(lastGeoSource)}). ${osm}`
+                            : `Aucune suggestion${pays}. ${osm}`, lastGeoFailed);
+                    }
                     return;
                 }
                 _renderSuggest();
@@ -1002,7 +1016,10 @@
             box.innerHTML = sg.hits.map((h, i) =>
                 `<div class="sg-item${i === sg.active ? ' active' : ''}" data-i="${i}"
                       title="${esc(hitLabel(h).full)}">${hitHTML(h)}</div>`
-            ).join('');
+            ).join('')
+            + `<div class="sg-foot">${lastGeoSource === 'Geoapify'
+                ? 'Powered by Geoapify · © OpenStreetMap · <span class="sg-more">Recherche OSM</span>'
+                : '© OpenStreetMap'}</div>`;
             box.classList.add('show');
         }
 
@@ -2004,32 +2021,90 @@
             return it && it.lat != null ? _nomHit(it) : null;
         }
 
+        // ── Geoapify (données OpenStreetMap, autocomplétion autorisée) ──
+        const GEOAPIFY_TYPES = {
+            city: 'city', postcode: 'locality', suburb: 'district', district: 'district',
+            county: 'county', state: 'state', country: 'country',
+            street: 'street', building: 'house', amenity: 'other', unknown: 'other'
+        };
+
+        function _geoapifyHit(r) {
+            const type = GEOAPIFY_TYPES[r.result_type] || 'other';
+            return {
+                lat: +r.lat, lng: +r.lon,
+                name: r.name || (type === 'city' ? r.city : '') || r.street || r.city
+                      || r.address_line1 || '',
+                street: r.street || '', housenumber: r.housenumber || '',
+                postcode: _pc(r.postcode), city: r.city || '',
+                region: r.county || r.state || '',
+                country: r.country || '', cc: (r.country_code || '').toUpperCase(),
+                type, src: 'Geoapify'
+            };
+        }
+
+        async function _geoapify(q, cc, signal) {
+            const c = map.getCenter();
+            let url = 'https://api.geoapify.com/v1/geocode/autocomplete?format=json&lang=fr&limit=10'
+                    + '&text=' + encodeURIComponent(q)
+                    + `&bias=proximity:${c.lng.toFixed(4)},${c.lat.toFixed(4)}`
+                    + '&apiKey=' + encodeURIComponent(GEOAPIFY_KEY);
+            if (cc) url += '&filter=countrycode:' + cc.toLowerCase();
+            const r = await _fetchT(url, { ms: 5000, signal });
+            if (!r.ok) {
+                const body = await r.json().catch(() => ({}));
+                throw new Error('HTTP ' + r.status + (body.message ? ' — ' + body.message : ''));
+            }
+            return ((await r.json()).results || []).filter(x => x.lat != null).map(_geoapifyHit);
+        }
+
+        async function _geoapifyReverse(lat, lng) {
+            const r = await _fetchT('https://api.geoapify.com/v1/geocode/reverse?format=json&lang=fr'
+                + `&lat=${lat}&lon=${lng}&apiKey=${encodeURIComponent(GEOAPIFY_KEY)}`, { ms: 5000 });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const it = ((await r.json()).results || [])[0];
+            return it ? _geoapifyHit(it) : null;
+        }
+
         // Cache : relancer la même recherche ne refait pas d'appel.
         const GEO_CACHE_MS = 30 * 60 * 1000;
         const _geoCache = new Map();
         const _clone = hits => hits.map(h => Object.assign({}, h));
 
-        async function geocodeQuery(q, cc, { signal } = {}) {
+        // full = false : Geoapify seul (pendant la frappe).
+        // full = true  : Geoapify, puis Nominatim s'il ne trouve rien ou plante.
+        async function geocodeQuery(q, cc, { signal, full = true } = {}) {
             lastGeoSource = '';
             lastGeoFailed = false;
 
-            const key = `${cc || ''}|${_norm(q)}`;
+            const key = `${full ? 'f' : 't'}|${cc || ''}|${_norm(q)}`;
             const c = _geoCache.get(key);
-            if (c && Date.now() - c.t < GEO_CACHE_MS) { lastGeoSource = 'OSM'; return _clone(c.hits); }
+            if (c && Date.now() - c.t < GEO_CACHE_MS) { lastGeoSource = c.source; return _clone(c.hits); }
 
-            let hits;
-            try {
-                hits = await _nominatim(q, cc, signal);
-            } catch (e) {
-                if (signal && signal.aborted) throw e;
-                console.warn('Nominatim:', e);
-                lastGeoFailed = true;
-                lastGeoSource = e.message;
+            const sources = [];
+            if (HAS_GEOAPIFY) sources.push(['Geoapify', () => _geoapify(q, cc, signal)]);
+            if (full || !HAS_GEOAPIFY) sources.push(['OSM', () => _nominatim(q, cc, signal)]);
+
+            let hits = [];
+            const notes = [];
+            let failed = false;
+            for (const [name, fn] of sources) {
+                try {
+                    let res = await fn();
+                    if (cc) res = res.filter(h => !h.cc || h.cc === cc);
+                    if (res.length) { hits = res; lastGeoSource = name; break; }
+                    notes.push(name + ' : 0 résultat');
+                } catch (e) {
+                    if (signal && signal.aborted) throw e;
+                    console.warn('Géocodeur', name, e);
+                    failed = true;
+                    notes.push(name + ' : ' + e.message);
+                }
+            }
+            if (!hits.length) {
+                lastGeoSource = notes.join(', ');
+                lastGeoFailed = failed;
                 return [];
             }
-            if (cc) hits = hits.filter(h => !h.cc || h.cc === cc);
-            if (!hits.length) { lastGeoSource = 'OSM : 0 résultat'; return []; }
-            lastGeoSource = 'OSM';
 
             const nq = _norm(q.split(',')[0]);
             hits.sort((a, b) => {
@@ -2052,7 +2127,7 @@
                 if (kept.length >= 8) break;
             }
 
-            _geoCache.set(key, { t: Date.now(), hits: _clone(kept) });
+            _geoCache.set(key, { t: Date.now(), hits: _clone(kept), source: lastGeoSource });
             if (_geoCache.size > 200) _geoCache.delete(_geoCache.keys().next().value);
             return kept;
         }
@@ -2088,7 +2163,14 @@
         }
 
         // Adresse la plus proche d'un point (clic carte, point glissé).
+        // Geoapify d'abord (rapide), Nominatim en secours.
         async function reverseHit(lat, lng) {
+            if (HAS_GEOAPIFY) {
+                try {
+                    const h = await _geoapifyReverse(lat, lng);
+                    if (h) { if (h.street) h.name = h.street; return h; }
+                } catch (e) { console.warn('Reverse Geoapify:', e.message); }
+            }
             try {
                 const h = await _nominatimReverse(lat, lng);
                 if (h && h.street) h.name = h.street;   // l'adresse plutôt qu'un nom de bâtiment
