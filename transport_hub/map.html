@@ -940,7 +940,7 @@
             clearTimeout(sg.timer);
             const q = (raw || '').trim();
             if (q.length < 3) { closeSuggest(); return; }
-            sg.timer = setTimeout(() => _runSuggest(q, full), immediate ? 0 : 300);
+            sg.timer = setTimeout(() => _runSuggest(q, full), immediate ? 0 : 200);
         }
 
         async function _runSuggest(q, full) {
@@ -961,7 +961,7 @@
             }
 
             if (!sg.hits.length || sg.query !== q) {
-                _suggestStatus(full ? 'Recherche élargie…' : 'Recherche…');
+                _suggestStatus(full ? 'Recherche complète…' : 'Recherche…');
             }
 
             try {
@@ -991,7 +991,7 @@
         function _suggestEmpty(q, full) {
             const pays = _countryFilter() ? ' dans ce pays' : '';
             const detail = `<span class="sg-detail">${esc(lastGeoSource)}</span>`;
-            const more = '<span class="sg-more">Recherche élargie (OSM)</span>';
+            const more = '<span class="sg-more">Recherche complète</span>';
 
             if (full) {
                 _suggestStatus(lastGeoFailed
@@ -1010,9 +1010,9 @@
             if (sg.full) {
                 foot = 'Source : ' + esc(lastGeoSource);
             } else {
-                const viaServeur = lastGeoSource === 'Serveur'
-                    ? 'Photon ne répond pas, suggestions du serveur. ' : '';
-                foot = viaServeur + 'Pas le bon lieu ? <span class="sg-more">Recherche élargie (OSM)</span>';
+                const secours = lastGeoSource === 'Photon'
+                    ? 'PTV ne répond pas, suggestions Photon. ' : '';
+                foot = secours + 'Pas le bon lieu ? <span class="sg-more">Recherche complète</span>';
             }
             box.innerHTML = sg.hits.map((h, i) =>
                 `<div class="sg-item${i === sg.active ? ' active' : ''}" data-i="${i}"
@@ -1043,7 +1043,20 @@
             box.innerHTML = '';
         }
 
-        function _chooseEndpoint(role, hit) {
+        // Les suggestions PTV n'ont pas de coordonnées : on localise la
+        // suggestion choisie (2e appel PTV), comme le prévoit PTV.
+        async function _chooseEndpoint(role, hit) {
+            if (hit.lat == null) {
+                const seq = ++sg.seq;
+                _suggestStatus('Localisation…');
+                try {
+                    hit = await _resolveSuggestion(hit);
+                } catch (e) {
+                    if (seq === sg.seq) _suggestStatus('Localisation impossible — ' + esc(e.message), true);
+                    return;
+                }
+                if (seq !== sg.seq) return;   // l'utilisateur a retapé entre-temps
+            }
             closeSuggest();
             const inp = _epInput(role);
             inp.blur();
@@ -1984,7 +1997,7 @@
             const pc = h.postcode ? `<span class="pc">${esc(h.postcode)}</span>` : '';
             const sub = L.subParts.length
                 ? L.subParts.map(esc).join(', ')
-                : `${h.lat.toFixed(5)}, ${h.lng.toFixed(5)}`;
+                : (h.lat != null ? `${h.lat.toFixed(5)}, ${h.lng.toFixed(5)}` : '');
             return `
                 <div class="hit-main">
                     <div class="hit-head">${esc(L.head)}</div>
@@ -2063,31 +2076,95 @@
             return (d.features || []).map(_photonHit);
         }
 
-        // Délai long : le serveur peut sortir de veille.
-        async function _serverGeocode(q, signal) {
-            const r = await _fetchT(`${serverUrl}/api/geocode?q=${encodeURIComponent(q)}`,
-                                    { ms: 15000, signal });
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            const d = await r.json();
-            const items = Array.isArray(d) ? d : (d.results || (d.lat != null ? [d] : []));
-            return items
-                .filter(it => it && it.lat != null && (it.lng != null || it.lon != null))
-                .map(it => ({
-                    lat: +it.lat, lng: +(it.lng ?? it.lon),
-                    name: it.label || it.name || q, street: '', housenumber: '',
-                    postcode: _pc(it.postcode || it.postalCode), city: '', region: '',
-                    country: it.country || '', cc: (it.countrycode || '').toUpperCase(),
-                    type: 'other', src: 'Serveur'
-                }));
+        // ── PTV via le serveur (la clé reste côté Render) ──
+        //   /api/ptv/suggest : autocomplétion, sans coordonnées, très rapide
+        //   /api/ptv/locate  : géocodage complet, avec coordonnées
+        //   /api/ptv/reverse : adresse la plus proche d'un point
+        // Le serveur met les réponses en cache 24 h ; le navigateur aussi (10 min).
+        const PTV_TYPES = new Set(Object.keys(TYPE_RANK));
+
+        async function _ptvGet(path, params, { ms = 8000, signal } = {}) {
+            const qs = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== '' && v != null));
+            const r = await _fetchT(`${serverUrl}/api/ptv/${path}?${qs}`, { ms, signal });
+            if (!r.ok) {
+                const body = await r.json().catch(() => ({}));
+                throw new Error('HTTP ' + r.status + (body.detail ? ' — ' + String(body.detail).slice(0, 120) : ''));
+            }
+            return r.json();
         }
 
-        // typing = true : suggestions pendant la frappe. Photon d'abord, prévu
-        // pour l'autocomplétion ; Nominatim l'interdit sur ses serveurs publics
-        // (1 requête/seconde max). Le serveur ne sert que de secours, quand
-        // Photon plante ou est en pause : un simple "0 résultat" sur un début de
-        // mot ne doit pas déclencher un appel serveur à chaque lettre.
-        // La recherche complète (Entrée, "Recherche élargie", bouton Rechercher)
-        // garde l'ordre OSM → Photon → Serveur.
+        function _ptvHit(it, q) {
+            return {
+                lat: it.lat != null ? +it.lat : null, lng: it.lng != null ? +it.lng : null,
+                name: it.name || it.label || q || '',
+                street: it.street || '', housenumber: it.housenumber || '',
+                postcode: _pc(it.postcode), city: it.city || '', region: it.region || '',
+                country: it.country || '', cc: (it.cc || '').toUpperCase(),
+                type: PTV_TYPES.has(it.type) ? it.type : 'other',
+                src: 'PTV', query: it.query || it.label || it.name || q
+            };
+        }
+
+        async function _ptvSuggest(q, cc, signal) {
+            const d = await _ptvGet('suggest', { q, cc }, { ms: 6000, signal });
+            return (d.results || []).map(it => _ptvHit(it, q));
+        }
+
+        async function _ptvLocate(q, cc, signal) {
+            const d = await _ptvGet('locate', { q, cc }, { ms: 15000, signal });
+            return (d.results || []).filter(it => it.lat != null).map(it => _ptvHit(it, q));
+        }
+
+        async function _ptvReverse(lat, lng) {
+            const d = await _ptvGet('reverse', { lat: lat.toFixed(6), lng: lng.toFixed(6) }, { ms: 8000 });
+            const it = (d.results || []).find(x => x.lat != null);
+            return it ? _ptvHit(it) : null;
+        }
+
+        // Suggestion choisie → coordonnées. PTV d'abord, Nominatim en secours.
+        async function _resolveSuggestion(hit) {
+            const cc = hit.cc || _countryFilter();
+            const pick = list => {
+                const n = _norm(hit.name);
+                return list.find(h => _norm(h.name) === n) || list[0];
+            };
+            try {
+                const res = await _ptvLocate(hit.query, cc);
+                if (res.length) return pick(res);
+            } catch (e) { console.warn('Localisation PTV:', e.message); }
+            const res = await _nominatim(hit.query, cc);
+            if (res.length) return pick(res);
+            throw new Error('adresse introuvable');
+        }
+
+        // Cache navigateur : retaper ou effacer une lettre ne relance aucun appel.
+        const GEO_CACHE_MS = 10 * 60 * 1000;
+        const _geoCache = new Map();
+        const _clone = hits => hits.map(h => Object.assign({}, h));
+        function _geoCacheGet(k) {
+            const e = _geoCache.get(k);
+            if (!e) return null;
+            if (Date.now() - e.t > GEO_CACHE_MS) { _geoCache.delete(k); return null; }
+            return { hits: _clone(e.hits), source: e.source };
+        }
+        function _geoCacheSet(k, hits, source) {
+            _geoCache.set(k, { t: Date.now(), hits: _clone(hits), source });
+            if (_geoCache.size > 300) _geoCache.delete(_geoCache.keys().next().value);
+        }
+
+        // Même lieu : même nom et même pays, à moins de 5 km (ou même libellé
+        // de pays quand l'un des deux n'a pas encore de coordonnées).
+        function _sameSpot(a, b) {
+            if (a.cc !== b.cc || _norm(a.name) !== _norm(b.name)) return false;
+            if (a.lat == null || b.lat == null) return _norm(a.country) === _norm(b.country);
+            return _distKm(a, b) < 5;
+        }
+
+        // typing = true : suggestions pendant la frappe → PTV suggestions/by-text.
+        // Photon ne sert que de secours quand PTV plante (serveur endormi, quota) :
+        // un simple "0 résultat" sur un début de mot ne relance rien d'autre.
+        // Recherche complète (Entrée, "Recherche complète", bouton Rechercher) :
+        // PTV locations/by-text → OSM → Photon.
         async function geocodeQuery(q, cc, { typing = false, signal } = {}) {
             let hits = [];
             const notes = [];
@@ -2095,13 +2172,17 @@
             lastGeoSource = '';
             lastGeoFailed = false;
 
+            const cacheKey = `${typing ? 't' : 'f'}|${cc || ''}|${_norm(q)}`;
+            const cached = _geoCacheGet(cacheKey);
+            if (cached) { lastGeoSource = cached.source; return cached.hits; }
+
             // [nom, appel, seulement si une source précédente a planté]
             const sources = typing
-                ? [['Photon',  () => _photon(q, signal),          false],
-                   ['Serveur', () => _serverGeocode(q, signal),   true]]
-                : [['OSM',     () => _nominatim(q, cc, signal),   false],
-                   ['Photon',  () => _photon(q, signal),          false],
-                   ['Serveur', () => _serverGeocode(q, signal),   false]];
+                ? [['PTV',    () => _ptvSuggest(q, cc, signal),  false],
+                   ['Photon', () => _photon(q, signal),          true]]
+                : [['PTV',    () => _ptvLocate(q, cc, signal),   false],
+                   ['OSM',    () => _nominatim(q, cc, signal),   false],
+                   ['Photon', () => _photon(q, signal),          false]];
 
             for (const [name, fn, onlyAfterError] of sources) {
                 if (onlyAfterError && !failed) continue;
@@ -2139,20 +2220,17 @@
             // premier, déjà le mieux classé.
             const kept = [];
             for (const h of hits) {
-                const dup = kept.some(k => k.cc === h.cc
-                                        && _norm(k.name) === _norm(h.name)
-                                        && _norm(k.housenumber) === _norm(h.housenumber)
-                                        && _distKm(k, h) < 5);
-                if (!dup) {
+                const twin = kept.find(k => _sameSpot(k, h)
+                                         && _norm(k.housenumber) === _norm(h.housenumber));
+                if (!twin) {
                     kept.push(h);
-                } else {
+                } else if (!twin.postcode && h.postcode) {
                     // Le doublon écarté avait peut-être le code postal qui manque à l'autre.
-                    const k = kept.find(k => k.cc === h.cc && _norm(k.name) === _norm(h.name)
-                                             && _distKm(k, h) < 5);
-                    if (k && !k.postcode && h.postcode) k.postcode = h.postcode;
+                    twin.postcode = h.postcode;
                 }
                 if (kept.length >= 8) break;
             }
+            _geoCacheSet(cacheKey, kept, lastGeoSource);
             return kept;
         }
 
@@ -2212,7 +2290,7 @@
         }
 
         async function enrichPostcodes(hits, signal, onUpdate) {
-            const todo = hits.filter(h => !h.postcode && !h._pcTried
+            const todo = hits.filter(h => h.lat != null && !h.postcode && !h._pcTried
                                           && !NO_PC_TYPES.has(h.type) && h.src !== 'coords');
             if (!todo.length) return false;
             todo.forEach(h => { h._pcTried = true; });
@@ -2252,8 +2330,13 @@
             return changed;
         }
 
-        // Adresse la plus proche d'un point : Photon, puis Nominatim en secours.
+        // Adresse la plus proche d'un point : PTV, puis Photon, puis Nominatim.
         async function reverseHit(lat, lng) {
+            try {
+                const h = await _ptvReverse(lat, lng);
+                if (h) { if (h.street) h.name = h.street; return h; }
+            } catch (e) { console.warn('Reverse PTV:', e.message); }
+
             try {
                 const near = await _photonReverse(lat, lng, { limit: 5 });
                 if (near.length) {
