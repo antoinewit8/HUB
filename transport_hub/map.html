@@ -241,14 +241,41 @@
         #wp-list { margin-bottom: 4px; }
         .wp-empty { margin: 0; padding: 14px; border-radius: 12px; background: var(--bg);
             color: var(--sub); font-size: 13px; text-align: center; }
-        .wp-item { display: flex; align-items: center; background: #fff; padding: 8px 8px 8px 10px; margin-bottom: 8px;
-            border-radius: 12px; border-left: 3px solid var(--blue); box-shadow: var(--tile); }
-        .wp-item > div:first-child { box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,.2); }
-        .wp-item > div:nth-child(2) { font-size: 13px !important; color: var(--text); }
+        .wp-item { --c: var(--blue); position: relative; display: flex; align-items: center; gap: 8px; background: #fff;
+            padding: 8px 8px 8px 6px; margin-bottom: 8px; border-radius: 12px; border-left: 3px solid var(--c);
+            box-shadow: var(--tile); transition: box-shadow .15s, background .15s; cursor: grab; user-select: none; }
+        .wp-item.hl { box-shadow: 0 0 0 2px var(--c), var(--tile); }
+        .wp-item.moved { animation: wpFlash 1s ease-out; }
+        .wp-item.dragging { opacity: .4; cursor: grabbing; }
+        .wp-item.drop-before::before, .wp-item.drop-after::after { content: ''; position: absolute; left: 6px; right: 6px;
+            height: 3px; border-radius: 2px; background: var(--blue); }
+        .wp-item.drop-before::before { top: -6px; }
+        .wp-item.drop-after::after { bottom: -6px; }
+        .wp-grip { flex: none; width: 10px; color: #c7c7cc; font-size: 12px; letter-spacing: -2px; line-height: 1; text-align: center; }
+        .wp-num { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--c); color: #fff;
+            display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+            box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,.25); font-variant-numeric: tabular-nums; }
+        .wp-num.bump { animation: wpBump .5s var(--ease); }
+        .wp-label { flex: 1; min-width: 0; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; cursor: pointer; }
+        .wp-arrows { display: flex; flex-direction: column; gap: 2px; }
         .wp-item button { width: 24px; height: 17px; padding: 0 !important; border: none !important; border-radius: 6px !important;
             background: var(--soft) !important; color: var(--sub); font-size: 8px !important; line-height: 17px; cursor: pointer; }
         .wp-item button:hover:not(:disabled) { background: #dedee3 !important; color: var(--text); }
         .wp-item button:disabled { opacity: .35; cursor: default; }
+
+        /* Repère étape sur la carte : couleur fixe, numéro = rang dans le trajet */
+        .wp-pin { cursor: grab; }
+        .wp-pin-in { position: relative; width: 30px; height: 40px; transform-origin: 50% 100%;
+            transition: transform .18s var(--ease); filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); }
+        .wp-pin-in svg { display: block; }
+        .wp-pin-in .n { position: absolute; top: 0; left: 0; width: 30px; height: 29px; display: flex; align-items: center;
+            justify-content: center; color: #fff; font: 700 13px/1 var(--font); font-variant-numeric: tabular-nums; }
+        .wp-pin-in.hl { transform: scale(1.25); }
+        .wp-pin-in.bump { animation: wpPinBump .6s var(--ease); }
+        @keyframes wpBump { 40% { transform: scale(1.35); } }
+        @keyframes wpPinBump { 30% { transform: translateY(-10px) scale(1.2); } 60% { transform: translateY(0) scale(.95); } }
+        @keyframes wpFlash { from { background: color-mix(in srgb, var(--c) 22%, #fff); } }
         .wp-remove { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--soft); color: var(--sub);
             display: flex; align-items: center; justify-content: center; font-size: 11px; cursor: pointer;
             transition: background .15s, color .15s; }
@@ -757,8 +784,7 @@
 
             // Les étapes se parcourent dans l'autre sens.
             waypoints.reverse();
-            _recolorWaypoints();
-            updateWaypointsList();
+            updateWaypointsList({ animate: true });
 
             syncMarkers();
             document.getElementById('btn-swap').classList.toggle('flipped');
@@ -1751,7 +1777,32 @@
         //  ÉTAPES
         // ═══════════════════════════════════════════════════════
 
-        const WP_COLORS = ['#3498db','#9b59b6','#1abc9c','#f39c12','#e67e22','#16a085'];
+        // Couleurs système (ni vert ni rouge : réservés au départ / à l'arrivée,
+        // ni bleu : couleur du tracé). Une étape garde sa couleur toute sa vie,
+        // seul son numéro change quand on la déplace.
+        const WP_COLORS = ['#5856d6','#ff9500','#af52de','#00a3a3','#ff2d55','#a2845e','#30b0c7','#8e8e93'];
+
+        function _pickWpColor() {
+            const used = waypoints.map(w => w.color);
+            const free = WP_COLORS.find(c => !used.includes(c));
+            return free || WP_COLORS[waypoints.length % WP_COLORS.length];
+        }
+
+        function _wpPinEl(color, id) {
+            const el = document.createElement('div');
+            el.className = 'wp-pin';
+            el.innerHTML = `
+                <div class="wp-pin-in">
+                    <svg width="30" height="40" viewBox="0 0 30 40">
+                        <path d="M15 1.5C7.5 1.5 1.5 7.4 1.5 14.8c0 9.6 11.9 22 12.9 23.1a.8.8 0 0 0 1.2 0c1-1.1 12.9-13.5 12.9-23.1C28.5 7.4 22.5 1.5 15 1.5z"
+                              fill="${color}" stroke="#fff" stroke-width="2"/>
+                    </svg>
+                    <span class="n"></span>
+                </div>`;
+            el.addEventListener('mouseenter', () => _hlWp(id, true));
+            el.addEventListener('mouseleave', () => _hlWp(id, false));
+            return el;
+        }
 
         function addWaypoint(lngLat, label) {
             if (!origin || !dest) {
@@ -1759,11 +1810,11 @@
                 return;
             }
             const id = Date.now() + Math.floor(Math.random() * 1000);
-            const color = WP_COLORS[waypoints.length % WP_COLORS.length];
-            const marker = new maplibregl.Marker({ color, draggable: true })
+            const color = _pickWpColor();
+            const marker = new maplibregl.Marker({ element: _wpPinEl(color, id), anchor: 'bottom', draggable: true })
                 .setLngLat(lngLat).addTo(map);
 
-            const wp = { id, marker, color, label: label || coordLabel(lngLat) };
+            const wp = { id, marker, color, rank: null, label: label || coordLabel(lngLat) };
             waypoints.push(wp);
 
             marker.on('dragend', () => {
@@ -1772,7 +1823,7 @@
                 autoCalculate();
                 _resolveWaypointLabel(wp);
             });
-            marker.getElement().addEventListener('dblclick', () => removeWaypoint(id));
+            marker.getElement().addEventListener('dblclick', e => { e.stopPropagation(); removeWaypoint(id); });
 
             updateWaypointsList();
             autoCalculate();
@@ -1794,8 +1845,7 @@
             if (i === -1) return;
             waypoints[i].marker.remove();
             waypoints.splice(i, 1);
-            _recolorWaypoints();
-            updateWaypointsList();
+            updateWaypointsList({ animate: true });
             autoCalculate();
         }
 
@@ -1809,55 +1859,143 @@
 
         function moveWaypoint(id, direction) {
             const i = waypoints.findIndex(w => w.id === id);
-            if (i === -1) return;
-            const j = i + direction;
-            if (j < 0 || j >= waypoints.length) return;
+            _moveWaypointTo(i, i + direction);
+        }
 
-            // On réordonne le tableau uniquement : déplacer aussi les marqueurs
-            // annulerait le changement d'ordre.
-            [waypoints[i], waypoints[j]] = [waypoints[j], waypoints[i]];
-            _recolorWaypoints();
-            updateWaypointsList();
+        // Déplace l'étape du rang i au rang j. On réordonne le tableau
+        // uniquement : les repères restent où ils sont sur la carte, seul
+        // leur numéro change.
+        function _moveWaypointTo(i, j) {
+            if (i < 0 || i >= waypoints.length) return;
+            j = Math.max(0, Math.min(waypoints.length - 1, j));
+            if (i === j) return;
+            const [wp] = waypoints.splice(i, 1);
+            waypoints.splice(j, 0, wp);
+            updateWaypointsList({ animate: true });
             autoCalculate();
         }
 
-        // La couleur suit le rang dans le trajet, pas l'ordre de création.
-        function _recolorWaypoints() {
-            waypoints.forEach((wp, idx) => {
-                const c = WP_COLORS[idx % WP_COLORS.length];
-                wp.color = c;
-                const g = wp.marker.getElement().querySelector('svg g[fill]');
-                if (g) g.setAttribute('fill', c);
-            });
+        // Survol croisé liste ↔ carte
+        function _hlWp(id, on) {
+            const wp = waypoints.find(w => w.id === id);
+            if (!wp) return;
+            const pin = wp.marker.getElement();
+            pin.querySelector('.wp-pin-in').classList.toggle('hl', on);
+            pin.style.zIndex = on ? 10 : '';
+            const row = document.querySelector(`.wp-item[data-id="${id}"]`);
+            if (row) row.classList.toggle('hl', on);
         }
 
-        function updateWaypointsList() {
+        function focusWaypoint(id) {
+            const wp = waypoints.find(w => w.id === id);
+            if (wp) map.easeTo({ center: wp.marker.getLngLat(), duration: 600 });
+        }
+
+        // Met à jour les numéros sur les repères ; "bump" ceux dont le rang a changé.
+        function _syncPinNumbers(animate) {
+            const changed = new Set();
+            waypoints.forEach((wp, idx) => {
+                const rank = idx + 1;
+                const pin = wp.marker.getElement().querySelector('.wp-pin-in');
+                pin.querySelector('.n').textContent = rank;
+                if (animate && wp.rank !== null && wp.rank !== rank) {
+                    changed.add(wp.id);
+                    pin.classList.remove('bump'); void pin.offsetWidth; pin.classList.add('bump');
+                }
+                wp.rank = rank;
+            });
+            return changed;
+        }
+
+        function updateWaypointsList(opts = {}) {
             const list = document.getElementById('wp-list');
+            const changed = _syncPinNumbers(!!opts.animate);
             if (!waypoints.length) {
                 list.innerHTML = '<p class="wp-empty">Aucune étape ajoutée.</p>';
                 return;
             }
-            list.innerHTML = waypoints.map((wp, i) => {
-                const color = WP_COLORS[i % WP_COLORS.length];
-                return `
-                <div class="wp-item" style="border-left-color:${color}">
-                    <div style="background:${color};color:white;border-radius:50%;width:22px;height:22px;
-                            display:flex;align-items:center;justify-content:center;
-                            font-size:11px;font-weight:bold;flex-shrink:0;">${i+1}</div>
-                    <div style="flex:1;font-size:12px;overflow:hidden;text-overflow:ellipsis;
-                            white-space:nowrap;margin:0 6px;" title="${esc(wp.label)}">${esc(wp.label)}</div>
-                    <div style="display:flex;flex-direction:column;gap:2px;margin-right:4px;">
-                        <button onclick="moveWaypoint(${wp.id},-1)" ${i===0?'disabled':''}
-                            style="background:none;border:1px solid #ddd;border-radius:3px;
-                            cursor:pointer;font-size:10px;padding:1px 4px;">▲</button>
-                        <button onclick="moveWaypoint(${wp.id}, 1)" ${i===waypoints.length-1?'disabled':''}
-                            style="background:none;border:1px solid #ddd;border-radius:3px;
-                            cursor:pointer;font-size:10px;padding:1px 4px;">▼</button>
+
+            // FLIP : on mémorise la position de chaque ligne avant de redessiner
+            const before = {};
+            list.querySelectorAll('.wp-item').forEach(el => { before[el.dataset.id] = el.getBoundingClientRect().top; });
+
+            list.innerHTML = waypoints.map((wp, i) => `
+                <div class="wp-item" draggable="true" data-id="${wp.id}" style="--c:${wp.color}"
+                     onmouseenter="_hlWp(${wp.id}, true)" onmouseleave="_hlWp(${wp.id}, false)">
+                    <span class="wp-grip" title="Glisser pour réordonner">⋮⋮</span>
+                    <div class="wp-num">${i + 1}</div>
+                    <div class="wp-label" title="${esc(wp.label)} — cliquer pour centrer la carte"
+                         onclick="focusWaypoint(${wp.id})">${esc(wp.label)}</div>
+                    <div class="wp-arrows">
+                        <button onclick="moveWaypoint(${wp.id},-1)" ${i === 0 ? 'disabled' : ''} title="Monter">▲</button>
+                        <button onclick="moveWaypoint(${wp.id}, 1)" ${i === waypoints.length - 1 ? 'disabled' : ''} title="Descendre">▼</button>
                     </div>
-                    <span class="wp-remove" onclick="removeWaypoint(${wp.id})">✕</span>
-                </div>`;
-            }).join('');
+                    <span class="wp-remove" onclick="removeWaypoint(${wp.id})" title="Supprimer">✕</span>
+                </div>`).join('');
+
+            list.querySelectorAll('.wp-item').forEach(el => {
+                const id = +el.dataset.id;
+                if (changed.has(id)) {
+                    el.classList.add('moved');
+                    el.querySelector('.wp-num').classList.add('bump');
+                }
+                if (!opts.animate) return;
+                const b = before[el.dataset.id];
+                if (b == null) return;
+                const dy = b - el.getBoundingClientRect().top;
+                if (!dy) return;
+                el.style.transition = 'none';
+                el.style.transform = `translateY(${dy}px)`;
+                requestAnimationFrame(() => requestAnimationFrame(() => {
+                    el.style.transition = 'transform .35s var(--ease), box-shadow .15s, background .15s';
+                    el.style.transform = '';
+                }));
+            });
         }
+
+        // Glisser-déposer dans la liste
+        (function initWpDrag() {
+            const list = document.getElementById('wp-list');
+            if (!list) return;
+            let dragId = null;
+            const clearMarks = () => list.querySelectorAll('.drop-before,.drop-after')
+                .forEach(el => el.classList.remove('drop-before', 'drop-after'));
+
+            list.addEventListener('dragstart', e => {
+                const item = e.target.closest('.wp-item');
+                if (!item) return;
+                dragId = +item.dataset.id;
+                item.classList.add('dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', String(dragId));
+            });
+            list.addEventListener('dragover', e => {
+                if (dragId === null) return;
+                const item = e.target.closest('.wp-item');
+                e.preventDefault();
+                clearMarks();
+                if (!item || +item.dataset.id === dragId) return;
+                const r = item.getBoundingClientRect();
+                item.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+            });
+            list.addEventListener('drop', e => {
+                e.preventDefault();
+                const item = list.querySelector('.drop-before, .drop-after');
+                const from = waypoints.findIndex(w => w.id === dragId);
+                if (item && from !== -1) {
+                    let to = waypoints.findIndex(w => w.id === +item.dataset.id);
+                    if (item.classList.contains('drop-after')) to++;
+                    if (to > from) to--;
+                    _moveWaypointTo(from, to);
+                }
+                clearMarks();
+            });
+            list.addEventListener('dragend', () => {
+                dragId = null;
+                clearMarks();
+                list.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+            });
+        })();
 
         // ═══════════════════════════════════════════════════════
         //  GÉOCODAGE
