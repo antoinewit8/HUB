@@ -272,6 +272,8 @@
         .wp-pin-in .n { position: absolute; top: 0; left: 0; width: 30px; height: 29px; display: flex; align-items: center;
             justify-content: center; color: #fff; font: 700 13px/1 var(--font); font-variant-numeric: tabular-nums; }
         .wp-pin-in.hl { transform: scale(1.25); }
+        .wp-pin-in .n svg { display: block; }
+        .pin-origin, .pin-dest { z-index: 2; }
         .wp-pin-in.bump { animation: wpPinBump .6s var(--ease); }
         @keyframes wpBump { 40% { transform: scale(1.35); } }
         @keyframes wpPinBump { 30% { transform: translateY(-10px) scale(1.2); } 60% { transform: translateY(0) scale(.95); } }
@@ -801,7 +803,11 @@
         function _syncOne(marker, pt, color, role) {
             if (!pt) { if (marker) marker.remove(); return null; }
             if (!marker) {
-                marker = new maplibregl.Marker({ color, draggable: true }).setLngLat([pt.lng, pt.lat]).addTo(map);
+                const el = _pinEl(color, PIN_ICON[role], 'pin-' + role);
+                el.addEventListener('mouseenter', () => el.firstElementChild.classList.add('hl'));
+                el.addEventListener('mouseleave', () => el.firstElementChild.classList.remove('hl'));
+                marker = new maplibregl.Marker({ element: el, anchor: 'bottom', draggable: true })
+                    .setLngLat([pt.lng, pt.lat]).addTo(map);
                 marker.on('dragend', () => {
                     const ll = marker.getLngLat();
                     const target = role === 'origin' ? origin : dest;
@@ -1788,17 +1794,30 @@
             return free || WP_COLORS[waypoints.length % WP_COLORS.length];
         }
 
-        function _wpPinEl(color, id) {
+        // Épingle commune aux étapes, au départ et à l'arrivée.
+        // inner = contenu blanc dans la tête de l'épingle (numéro ou icône).
+        function _pinEl(color, inner, cls = '') {
             const el = document.createElement('div');
-            el.className = 'wp-pin';
+            el.className = 'wp-pin ' + cls;
             el.innerHTML = `
                 <div class="wp-pin-in">
                     <svg width="30" height="40" viewBox="0 0 30 40">
                         <path d="M15 1.5C7.5 1.5 1.5 7.4 1.5 14.8c0 9.6 11.9 22 12.9 23.1a.8.8 0 0 0 1.2 0c1-1.1 12.9-13.5 12.9-23.1C28.5 7.4 22.5 1.5 15 1.5z"
                               fill="${color}" stroke="#fff" stroke-width="2"/>
                     </svg>
-                    <span class="n"></span>
+                    <span class="n">${inner}</span>
                 </div>`;
+            return el;
+        }
+
+        // Départ : rond blanc (comme dans le champ "départ") ; arrivée : drapeau.
+        const PIN_ICON = {
+            origin: '<svg width="12" height="12" viewBox="0 0 12 12"><circle cx="6" cy="6" r="4" fill="none" stroke="#fff" stroke-width="2.6"/></svg>',
+            dest:   '<svg width="13" height="14" viewBox="0 0 13 14"><path d="M2 13V1.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/><path d="M2.6 1.6h8.2l-2 3 2 3H2.6z" fill="#fff"/></svg>'
+        };
+
+        function _wpPinEl(color, id) {
+            const el = _pinEl(color, '');
             el.addEventListener('mouseenter', () => _hlWp(id, true));
             el.addEventListener('mouseleave', () => _hlWp(id, false));
             return el;
